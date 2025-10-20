@@ -47,6 +47,7 @@ const resolveConfig = (env = {}) => {
     ipv4Only: parseBoolean(env.IPV4_ONLY, false),
     signSecret: env.SIGN_SECRET && env.SIGN_SECRET.trim() !== '' ? env.SIGN_SECRET : env.TOKEN,
     underAttack,
+    fastRedirect: parseBoolean(env.FAST_REDIRECT, false),
     turnstileSiteKey,
     turnstileSecretKey,
   };
@@ -245,7 +246,8 @@ const handleInfo = async (request, config) => {
   const base64Path = uint8ToBase64(pathBytes);
   const hashSign = await hmacSha256Sign(config.signSecret, base64Path, expire);
 
-  const ipSign = await hmacSha256Sign(config.signSecret, clientIP, expire);
+  const ipSignData = JSON.stringify({ path: decodedPath, ip: clientIP });
+  const ipSign = await hmacSha256Sign(config.signSecret, ipSignData, expire);
 
   const workerBaseURL = selectRandomWorker(config.workerAddresses);
   const downloadURL = `${workerBaseURL}${decodedPath}?sign=${encodeURIComponent(sign)}&hashSign=${encodeURIComponent(hashSign)}&ipSign=${encodeURIComponent(ipSign)}`;
@@ -280,7 +282,50 @@ const handleFileRequest = async (request, config) => {
       },
     });
   }
+
   const url = new URL(request.url);
+
+  // Fast redirect logic: when FAST_REDIRECT=true and UNDER_ATTACK=false
+  if (config.fastRedirect && !config.underAttack) {
+    const sign = url.searchParams.get('sign') || '';
+    let decodedPath;
+    try {
+      decodedPath = decodeURIComponent(url.pathname);
+    } catch (error) {
+      return respondJson(request.headers.get('origin') || '*', { code: 400, message: 'invalid path encoding' }, 400);
+    }
+
+    // Verify signature
+    const verifyResult = await verifySignature(config.signSecret, decodedPath, sign);
+    if (verifyResult) {
+      return respondJson(request.headers.get('origin') || '*', { code: 401, message: verifyResult }, 401);
+    }
+
+    // Generate download URL (same logic as handleInfo)
+    const clientIP = extractClientIP(request);
+    const expire = extractExpireFromSign(sign);
+
+    const pathBytes = new TextEncoder().encode(decodedPath);
+    const base64Path = uint8ToBase64(pathBytes);
+    const hashSign = await hmacSha256Sign(config.signSecret, base64Path, expire);
+
+    const ipSignData = JSON.stringify({ path: decodedPath, ip: clientIP });
+    const ipSign = await hmacSha256Sign(config.signSecret, ipSignData, expire);
+
+    const workerBaseURL = selectRandomWorker(config.workerAddresses);
+    const downloadURL = `${workerBaseURL}${decodedPath}?sign=${encodeURIComponent(sign)}&hashSign=${encodeURIComponent(hashSign)}&ipSign=${encodeURIComponent(ipSign)}`;
+
+    // Return 302 redirect
+    return new Response(null, {
+      status: 302,
+      headers: {
+        'Location': downloadURL,
+        'Cache-Control': 'no-store',
+      },
+    });
+  }
+
+  // Default: render landing page
   return renderLandingPage(url.pathname, {
     underAttack: config.underAttack,
     turnstileSiteKey: config.turnstileSiteKey,
