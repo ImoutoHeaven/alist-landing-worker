@@ -311,6 +311,17 @@ const pageScript = String.raw`
     state.downloadURL = downloadURL;
     state.infoReady = true;
 
+    // Update page title to filename after verification
+    try {
+      const pathSegments = path.split('/').filter(Boolean);
+      if (pathSegments.length > 0) {
+        const fileName = decodeURIComponent(pathSegments[pathSegments.length - 1]);
+        document.title = fileName;
+      }
+    } catch (e) {
+      // Ignore title update errors
+    }
+
     if (shouldEnforceTurnstile()) {
       consumeTurnstileToken({ hide: true });
     }
@@ -436,7 +447,17 @@ const pageScript = String.raw`
 const renderLandingPageHtml = (path, options = {}) => {
   const normalizedOptions =
     options && typeof options === 'object' && !Array.isArray(options) ? options : {};
-  const display = path && path !== '/' ? decodeURIComponent(path) : '文件下载';
+  // Extract filename from path (last segment after /)
+  let display = '文件下载';
+  if (path && path !== '/') {
+    try {
+      const decodedPath = decodeURIComponent(path);
+      const segments = decodedPath.split('/').filter(Boolean);
+      display = segments.length > 0 ? segments[segments.length - 1] : '文件下载';
+    } catch (error) {
+      display = '文件下载';
+    }
+  }
   const title = escapeHtml(display);
   const script = pageScript.replace(/<\/script>/g, '<\\/script>');
   const securityConfig = {

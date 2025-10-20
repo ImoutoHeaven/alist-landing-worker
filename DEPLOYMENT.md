@@ -27,6 +27,12 @@ TOKEN=your-actual-hmac-secret
 WORKER_ADDRESS_DOWNLOAD=https://download1.example.com,https://download2.example.com
 UNDER_ATTACK=false
 FAST_REDIRECT=false
+
+# Optional: Path blacklist/whitelist
+BLACKLIST_PREFIX=/private,/admin
+BLACKLIST_ACTION=block
+WHITELIST_PREFIX=/public,/shared
+WHITELIST_ACTION=pass-asis
 ```
 
 #### For Production
@@ -39,6 +45,10 @@ Set environment variables in Cloudflare Dashboard:
    - `FAST_REDIRECT` (plain) - `true` or `false` (enables direct 302 redirect)
    - `TURNSTILE_SITE_KEY` (plain) - If using Turnstile
    - `TURNSTILE_SECRET_KEY` (secret) - If using Turnstile
+   - `BLACKLIST_PREFIX` (plain) - Optional: Comma-separated path prefixes to blacklist
+   - `BLACKLIST_ACTION` (plain) - Optional: Action for blacklisted paths (block/verify/pass-web/pass-server/pass-asis)
+   - `WHITELIST_PREFIX` (plain) - Optional: Comma-separated path prefixes to whitelist
+   - `WHITELIST_ACTION` (plain) - Optional: Action for whitelisted paths
 
 ### 4. Build the Project
 ```bash
@@ -87,6 +97,10 @@ wrangler deploy
 | `IPV4_ONLY` | Plain | ❌ No | Block IPv6 access (`true`/`false`) |
 | `VERIFY_HEADER` | Plain | ❌ No | Custom verification header name |
 | `VERIFY_SECRET` | Secret | ❌ No | Custom verification header value |
+| `BLACKLIST_PREFIX` | Plain | ❌ No | Comma-separated path prefixes to blacklist. Requires `BLACKLIST_ACTION` to be set |
+| `BLACKLIST_ACTION` | Plain | ❌ No | Action for blacklisted paths: `block`/`verify`/`pass-web`/`pass-server`/`pass-asis` |
+| `WHITELIST_PREFIX` | Plain | ❌ No | Comma-separated path prefixes to whitelist. Requires `WHITELIST_ACTION` to be set |
+| `WHITELIST_ACTION` | Plain | ❌ No | Action for whitelisted paths: `block`/`verify`/`pass-web`/`pass-server`/`pass-asis` |
 
 ## Testing
 
@@ -149,6 +163,74 @@ When `FAST_REDIRECT=false` (default):
 - User clicks "Download" button to start download
 
 **Note:** Fast redirect is automatically disabled when `UNDER_ATTACK=true` to ensure Turnstile verification.
+
+### Path Blacklist/Whitelist
+
+Control access to specific paths using blacklist and whitelist prefixes:
+
+#### Configuration
+
+**Blacklist Example:**
+```env
+BLACKLIST_PREFIX=/private,/admin,/internal
+BLACKLIST_ACTION=block
+```
+
+**Whitelist Example:**
+```env
+WHITELIST_PREFIX=/public,/shared,/downloads
+WHITELIST_ACTION=pass-asis
+```
+
+#### Available Actions
+
+| Action | Behavior |
+|--------|----------|
+| `block` | Return 403 Forbidden, deny all access |
+| `verify` | Force Turnstile verification regardless of `UNDER_ATTACK` setting |
+| `pass-web` | Bypass Turnstile verification, force render landing page (ignore `FAST_REDIRECT`) |
+| `pass-server` | Bypass Turnstile verification, force 302 redirect (ignore `UNDER_ATTACK`) |
+| `pass-asis` | Bypass Turnstile verification, respect `FAST_REDIRECT` setting |
+
+#### Priority Rules
+
+1. **Blacklist** takes highest priority
+2. **Whitelist** takes second priority
+3. **Default behavior** (based on `UNDER_ATTACK` and `FAST_REDIRECT`)
+
+When a path matches both blacklist and whitelist prefixes, only the blacklist action is executed.
+
+#### Activation Requirements
+
+- Blacklist is **only active** when both `BLACKLIST_PREFIX` and `BLACKLIST_ACTION` are set
+- Whitelist is **only active** when both `WHITELIST_PREFIX` and `WHITELIST_ACTION` are set
+- If either variable is empty/unset, that list is disabled
+
+#### Use Cases
+
+**Block sensitive paths:**
+```env
+BLACKLIST_PREFIX=/admin,/api/internal
+BLACKLIST_ACTION=block
+```
+
+**Require verification for valuable content:**
+```env
+BLACKLIST_PREFIX=/premium,/exclusive
+BLACKLIST_ACTION=verify
+```
+
+**Fast-track public downloads:**
+```env
+WHITELIST_PREFIX=/public
+WHITELIST_ACTION=pass-server
+```
+
+**Force landing page for documentation:**
+```env
+WHITELIST_PREFIX=/docs,/guides
+WHITELIST_ACTION=pass-web
+```
 
 ## Troubleshooting
 

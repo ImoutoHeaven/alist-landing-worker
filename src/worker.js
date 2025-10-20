@@ -10,6 +10,8 @@ const REQUIRED_ENV = ['TOKEN', 'WORKER_ADDRESS_DOWNLOAD'];
 const TURNSTILE_VERIFY_ENDPOINT = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
 const TURNSTILE_HEADER = 'cf-turnstile-response';
 
+const VALID_ACTIONS = new Set(['block', 'verify', 'pass-web', 'pass-server', 'pass-asis']);
+
 const hopByHopHeaders = new Set([
   'connection',
   'keep-alive',
@@ -39,6 +41,28 @@ const resolveConfig = (env = {}) => {
   if (underAttack && (!turnstileSiteKey || !turnstileSecretKey)) {
     throw new Error('environment variables TURNSTILE_SITE_KEY and TURNSTILE_SECRET_KEY are required when UNDER_ATTACK is true');
   }
+
+  // Parse prefix lists (comma-separated)
+  const parsePrefixList = (value) => {
+    if (!value || typeof value !== 'string') return [];
+    return value.split(',').map(p => p.trim()).filter(p => p.length > 0);
+  };
+
+  // Validate action value
+  const validateAction = (action, paramName) => {
+    if (!action) return '';
+    const normalizedAction = String(action).trim().toLowerCase();
+    if (!VALID_ACTIONS.has(normalizedAction)) {
+      throw new Error(`${paramName} must be one of: ${Array.from(VALID_ACTIONS).join(', ')}`);
+    }
+    return normalizedAction;
+  };
+
+  const blacklistPrefixes = parsePrefixList(env.BLACKLIST_PREFIX);
+  const whitelistPrefixes = parsePrefixList(env.WHITELIST_PREFIX);
+  const blacklistAction = validateAction(env.BLACKLIST_ACTION, 'BLACKLIST_ACTION');
+  const whitelistAction = validateAction(env.WHITELIST_ACTION, 'WHITELIST_ACTION');
+
   return {
     token: env.TOKEN,
     workerAddresses: env.WORKER_ADDRESS_DOWNLOAD,
@@ -50,6 +74,10 @@ const resolveConfig = (env = {}) => {
     fastRedirect: parseBoolean(env.FAST_REDIRECT, false),
     turnstileSiteKey,
     turnstileSecretKey,
+    blacklistPrefixes,
+    whitelistPrefixes,
+    blacklistAction,
+    whitelistAction,
   };
 };
 
@@ -190,6 +218,37 @@ const selectRandomWorker = (workerAddresses) => {
   return selected.replace(/\/$/, '');
 };
 
+const checkPathListAction = (path, config) => {
+  let decodedPath;
+  try {
+    decodedPath = decodeURIComponent(path);
+  } catch (error) {
+    // If path cannot be decoded, use as-is
+    decodedPath = path;
+  }
+
+  // Check blacklist first (higher priority)
+  if (config.blacklistPrefixes.length > 0 && config.blacklistAction) {
+    for (const prefix of config.blacklistPrefixes) {
+      if (decodedPath.startsWith(prefix)) {
+        return config.blacklistAction;
+      }
+    }
+  }
+
+  // Check whitelist second
+  if (config.whitelistPrefixes.length > 0 && config.whitelistAction) {
+    for (const prefix of config.whitelistPrefixes) {
+      if (decodedPath.startsWith(prefix)) {
+        return config.whitelistAction;
+      }
+    }
+  }
+
+  // No match
+  return null;
+};
+
 const handleOptions = (request) => new Response(null, { headers: safeHeaders(request.headers.get('Origin')) });
 
 const handleInfo = async (request, config) => {
@@ -202,9 +261,22 @@ const handleInfo = async (request, config) => {
     return respondJson(origin, { code: 400, message: 'path is required' }, 400);
   }
 
+  // Check blacklist/whitelist
+  const action = checkPathListAction(path, config);
+
+  // Handle block action
+  if (action === 'block') {
+    return respondJson(origin, { code: 403, message: 'access denied' }, 403);
+  }
+
+  // Determine if we need verification
+  const forceVerify = action === 'verify';
+  const skipVerify = action === 'pass-web' || action === 'pass-server' || action === 'pass-asis';
+  const needVerify = forceVerify || (config.underAttack && !skipVerify);
+
   const clientIP = extractClientIP(request);
 
-  if (config.underAttack) {
+  if (needVerify) {
     const token =
       request.headers.get(TURNSTILE_HEADER) ||
       request.headers.get('x-turnstile-token') ||
@@ -250,7 +322,11 @@ const handleInfo = async (request, config) => {
   const ipSign = await hmacSha256Sign(config.signSecret, ipSignData, expire);
 
   const workerBaseURL = selectRandomWorker(config.workerAddresses);
-  const downloadURL = `${workerBaseURL}${decodedPath}?sign=${encodeURIComponent(sign)}&hashSign=${encodeURIComponent(hashSign)}&ipSign=${encodeURIComponent(ipSign)}`;
+  const downloadURLObj = new URL(decodedPath, workerBaseURL);
+  downloadURLObj.searchParams.set('sign', sign);
+  downloadURLObj.searchParams.set('hashSign', hashSign);
+  downloadURLObj.searchParams.set('ipSign', ipSign);
+  const downloadURL = downloadURLObj.toString();
 
   const responsePayload = {
     code: 200,
@@ -262,7 +338,7 @@ const handleInfo = async (request, config) => {
         path: decodedPath,
       },
       settings: {
-        underAttack: config.underAttack,
+        underAttack: needVerify,
       },
     },
   };
@@ -285,8 +361,28 @@ const handleFileRequest = async (request, config) => {
 
   const url = new URL(request.url);
 
-  // Fast redirect logic: when FAST_REDIRECT=true and UNDER_ATTACK=false
-  if (config.fastRedirect && !config.underAttack) {
+  // Check blacklist/whitelist
+  const action = checkPathListAction(url.pathname, config);
+
+  // Handle block action
+  if (action === 'block') {
+    return respondJson(request.headers.get('origin') || '*', { code: 403, message: 'access denied' }, 403);
+  }
+
+  // Determine behavior based on action
+  const forceVerify = action === 'verify';
+  const skipVerify = action === 'pass-web' || action === 'pass-server' || action === 'pass-asis';
+  const forceWeb = action === 'pass-web';
+  const forceRedirect = action === 'pass-server';
+
+  // Determine if we need verification
+  const needVerify = forceVerify || (config.underAttack && !skipVerify);
+
+  // Determine if we should do fast redirect
+  const shouldRedirect = forceRedirect || (config.fastRedirect && !forceWeb && !needVerify);
+
+  // Fast redirect logic
+  if (shouldRedirect) {
     const sign = url.searchParams.get('sign') || '';
     let decodedPath;
     try {
@@ -301,7 +397,7 @@ const handleFileRequest = async (request, config) => {
       return respondJson(request.headers.get('origin') || '*', { code: 401, message: verifyResult }, 401);
     }
 
-    // Generate download URL (same logic as handleInfo)
+    // Generate download URL using URL object for proper encoding
     const clientIP = extractClientIP(request);
     const expire = extractExpireFromSign(sign);
 
@@ -313,7 +409,11 @@ const handleFileRequest = async (request, config) => {
     const ipSign = await hmacSha256Sign(config.signSecret, ipSignData, expire);
 
     const workerBaseURL = selectRandomWorker(config.workerAddresses);
-    const downloadURL = `${workerBaseURL}${decodedPath}?sign=${encodeURIComponent(sign)}&hashSign=${encodeURIComponent(hashSign)}&ipSign=${encodeURIComponent(ipSign)}`;
+    const downloadURLObj = new URL(decodedPath, workerBaseURL);
+    downloadURLObj.searchParams.set('sign', sign);
+    downloadURLObj.searchParams.set('hashSign', hashSign);
+    downloadURLObj.searchParams.set('ipSign', ipSign);
+    const downloadURL = downloadURLObj.toString();
 
     // Return 302 redirect
     return new Response(null, {
@@ -327,7 +427,7 @@ const handleFileRequest = async (request, config) => {
 
   // Default: render landing page
   return renderLandingPage(url.pathname, {
-    underAttack: config.underAttack,
+    underAttack: needVerify,
     turnstileSiteKey: config.turnstileSiteKey,
   });
 };
