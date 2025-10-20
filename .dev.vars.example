@@ -1,0 +1,16 @@
+# Copy this file to .dev.vars and fill in your values
+
+# Required
+TOKEN=your-secret-hmac-token-here
+WORKER_ADDRESS_DOWNLOAD=https://download-worker1.example.com,https://download-worker2.example.com
+
+# Optional - Turnstile Protection
+UNDER_ATTACK=false
+TURNSTILE_SITE_KEY=
+TURNSTILE_SECRET_KEY=
+
+# Optional - Other Settings
+SIGN_SECRET=
+IPV4_ONLY=false
+VERIFY_HEADER=
+VERIFY_SECRET=
