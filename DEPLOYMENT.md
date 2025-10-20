@@ -26,6 +26,7 @@ Edit `.dev.vars` with your values:
 TOKEN=your-actual-hmac-secret
 WORKER_ADDRESS_DOWNLOAD=https://download1.example.com,https://download2.example.com
 UNDER_ATTACK=false
+FAST_REDIRECT=false
 ```
 
 #### For Production
@@ -35,6 +36,7 @@ Set environment variables in Cloudflare Dashboard:
    - `TOKEN` (secret) - Your HMAC signing key
    - `WORKER_ADDRESS_DOWNLOAD` (plain) - Comma-separated worker URLs
    - `UNDER_ATTACK` (plain) - `true` or `false`
+   - `FAST_REDIRECT` (plain) - `true` or `false` (enables direct 302 redirect)
    - `TURNSTILE_SITE_KEY` (plain) - If using Turnstile
    - `TURNSTILE_SECRET_KEY` (secret) - If using Turnstile
 
@@ -79,6 +81,7 @@ wrangler deploy
 | `WORKER_ADDRESS_DOWNLOAD` | Plain | ✅ Yes | Download worker URLs (comma-separated for load balancing) |
 | `SIGN_SECRET` | Secret | ❌ No | Separate signing key (defaults to TOKEN) |
 | `UNDER_ATTACK` | Plain | ❌ No | Enable Turnstile protection (`true`/`false`) |
+| `FAST_REDIRECT` | Plain | ❌ No | Enable direct 302 redirect mode (`true`/`false`, default: `false`). Only works when `UNDER_ATTACK=false` |
 | `TURNSTILE_SITE_KEY` | Plain | ❌ No | Cloudflare Turnstile site key (required if UNDER_ATTACK=true) |
 | `TURNSTILE_SECRET_KEY` | Secret | ❌ No | Cloudflare Turnstile secret key (required if UNDER_ATTACK=true) |
 | `IPV4_ONLY` | Plain | ❌ No | Block IPv6 access (`true`/`false`) |
@@ -123,10 +126,29 @@ Should return JSON:
 This landing worker generates three signatures for the download worker:
 
 1. **sign**: Original signature from URL (already verified)
-2. **hashSign**: `HMAC-SHA256(base64(path), expire)`
-3. **ipSign**: `HMAC-SHA256(clientIP, expire)`
+   - Format: `HMAC-SHA256(path, expire)`
+2. **hashSign**: Base64-encoded path signature
+   - Format: `HMAC-SHA256(base64(path), expire)`
+3. **ipSign**: Path and IP binding signature
+   - Format: `HMAC-SHA256(JSON.stringify({path: "/file", ip: "1.2.3.4"}), expire)`
+   - This prevents signature reuse across different files by the same IP
 
 Your download worker (e.g., `simple-alist-cf-proxy`) should verify all three signatures.
+
+### Fast Redirect Mode
+
+When `FAST_REDIRECT=true` and `UNDER_ATTACK=false`:
+- Users are **immediately redirected** (HTTP 302) to the download URL
+- No landing page is shown
+- Signature verification happens server-side before redirect
+- Users experience faster downloads without clicking
+
+When `FAST_REDIRECT=false` (default):
+- Users see a landing page
+- Client-side JavaScript calls `/info` endpoint
+- User clicks "Download" button to start download
+
+**Note:** Fast redirect is automatically disabled when `UNDER_ATTACK=true` to ensure Turnstile verification.
 
 ## Troubleshooting
 
