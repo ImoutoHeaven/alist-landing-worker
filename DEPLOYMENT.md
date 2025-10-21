@@ -28,11 +28,13 @@ WORKER_ADDRESS_DOWNLOAD=https://download1.example.com,https://download2.example.
 UNDER_ATTACK=false
 FAST_REDIRECT=false
 
-# Optional: Path blacklist/whitelist
+# Optional: Path blacklist/whitelist/except
 BLACKLIST_PREFIX=/private,/admin
 BLACKLIST_ACTION=block
 WHITELIST_PREFIX=/public,/shared
 WHITELIST_ACTION=pass-asis
+EXCEPT_PREFIX=/guest,/public
+EXCEPT_ACTION=block-except
 ```
 
 #### For Production
@@ -49,6 +51,8 @@ Set environment variables in Cloudflare Dashboard:
    - `BLACKLIST_ACTION` (plain) - Optional: Action for blacklisted paths (block/verify/pass-web/pass-server/pass-asis)
    - `WHITELIST_PREFIX` (plain) - Optional: Comma-separated path prefixes to whitelist
    - `WHITELIST_ACTION` (plain) - Optional: Action for whitelisted paths
+   - `EXCEPT_PREFIX` (plain) - Optional: Comma-separated path prefixes for inverse matching
+   - `EXCEPT_ACTION` (plain) - Optional: Action format {action}-except (e.g., block-except)
 
 ### 4. Build the Project
 ```bash
@@ -101,6 +105,8 @@ wrangler deploy
 | `BLACKLIST_ACTION` | Plain | ❌ No | Action for blacklisted paths: `block`/`verify`/`pass-web`/`pass-server`/`pass-asis` |
 | `WHITELIST_PREFIX` | Plain | ❌ No | Comma-separated path prefixes to whitelist. Requires `WHITELIST_ACTION` to be set |
 | `WHITELIST_ACTION` | Plain | ❌ No | Action for whitelisted paths: `block`/`verify`/`pass-web`/`pass-server`/`pass-asis` |
+| `EXCEPT_PREFIX` | Plain | ❌ No | Comma-separated path prefixes for inverse matching. Requires `EXCEPT_ACTION` to be set |
+| `EXCEPT_ACTION` | Plain | ❌ No | Inverse action format `{action}-except` (e.g., `block-except`). Paths NOT matching EXCEPT_PREFIX will trigger the action |
 
 ## Testing
 
@@ -164,9 +170,9 @@ When `FAST_REDIRECT=false` (default):
 
 **Note:** Fast redirect is automatically disabled when `UNDER_ATTACK=true` to ensure Turnstile verification.
 
-### Path Blacklist/Whitelist
+### Path Blacklist/Whitelist/Except
 
-Control access to specific paths using blacklist and whitelist prefixes:
+Control access to specific paths using blacklist, whitelist, and except prefixes:
 
 #### Configuration
 
@@ -182,6 +188,13 @@ WHITELIST_PREFIX=/public,/shared,/downloads
 WHITELIST_ACTION=pass-asis
 ```
 
+**Except Example (Inverse Matching):**
+```env
+EXCEPT_PREFIX=/guest,/public
+EXCEPT_ACTION=block-except
+```
+This configuration blocks all paths **except** those matching `/guest` or `/public`. Paths matching the except prefixes are allowed, while all others are blocked.
+
 #### Available Actions
 
 | Action | Behavior |
@@ -196,14 +209,25 @@ WHITELIST_ACTION=pass-asis
 
 1. **Blacklist** takes highest priority
 2. **Whitelist** takes second priority
-3. **Default behavior** (based on `UNDER_ATTACK` and `FAST_REDIRECT`)
+3. **Except** takes third priority (inverse matching logic)
+4. **Default behavior** (based on `UNDER_ATTACK` and `FAST_REDIRECT`)
 
-When a path matches both blacklist and whitelist prefixes, only the blacklist action is executed.
+When a path matches multiple lists, the action from the highest priority list is executed.
+
+**Except Inverse Logic:**
+- If path **matches** any `EXCEPT_PREFIX` → action is **NOT** applied (path is excepted)
+- If path **does NOT match** any `EXCEPT_PREFIX` → action **IS** applied
+
+Example with `EXCEPT_ACTION=block-except` and `EXCEPT_PREFIX=/guest`:
+- `/guest/file.txt` → Allowed (matches except prefix, block is NOT applied)
+- `/admin/file.txt` → Blocked (doesn't match except prefix, block IS applied)
 
 #### Activation Requirements
 
 - Blacklist is **only active** when both `BLACKLIST_PREFIX` and `BLACKLIST_ACTION` are set
 - Whitelist is **only active** when both `WHITELIST_PREFIX` and `WHITELIST_ACTION` are set
+- Except is **only active** when both `EXCEPT_PREFIX` and `EXCEPT_ACTION` are set
+- `EXCEPT_ACTION` must be in format `{action}-except` (e.g., `block-except`, `verify-except`)
 - If either variable is empty/unset, that list is disabled
 
 #### Use Cases
@@ -230,6 +254,18 @@ WHITELIST_ACTION=pass-server
 ```env
 WHITELIST_PREFIX=/docs,/guides
 WHITELIST_ACTION=pass-web
+```
+
+**Block all paths except guest/public (inverse matching):**
+```env
+EXCEPT_PREFIX=/guest,/public
+EXCEPT_ACTION=block-except
+```
+
+**Require verification for all except free content:**
+```env
+EXCEPT_PREFIX=/free,/trial
+EXCEPT_ACTION=verify-except
 ```
 
 ## Troubleshooting

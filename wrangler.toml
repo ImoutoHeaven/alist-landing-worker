@@ -18,6 +18,8 @@ compatibility_date = "2024-01-01"
 # BLACKLIST_ACTION = "block"
 # WHITELIST_PREFIX = "/public,/shared"
 # WHITELIST_ACTION = "pass-asis"
+# EXCEPT_PREFIX = "/guest,/public"
+# EXCEPT_ACTION = "block-except"
 
 # For local development, create a .dev.vars file with:
 # TOKEN=your-token
