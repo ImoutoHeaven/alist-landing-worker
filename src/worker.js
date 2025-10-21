@@ -63,6 +63,28 @@ const resolveConfig = (env = {}) => {
   const blacklistAction = validateAction(env.BLACKLIST_ACTION, 'BLACKLIST_ACTION');
   const whitelistAction = validateAction(env.WHITELIST_ACTION, 'WHITELIST_ACTION');
 
+  // Parse except action (format: {action}-except)
+  const exceptPrefixes = parsePrefixList(env.EXCEPT_PREFIX);
+  let exceptAction = '';
+  if (env.EXCEPT_ACTION && typeof env.EXCEPT_ACTION === 'string') {
+    const rawExceptAction = env.EXCEPT_ACTION.trim().toLowerCase();
+    if (rawExceptAction && exceptPrefixes.length > 0) {
+      // Validate format: must end with '-except'
+      if (!rawExceptAction.endsWith('-except')) {
+        throw new Error('EXCEPT_ACTION must be in format "{action}-except" (e.g., "block-except")');
+      }
+      // Extract the actual action part
+      const actionPart = rawExceptAction.slice(0, -7); // Remove '-except'
+      if (!actionPart) {
+        throw new Error('EXCEPT_ACTION must specify an action (e.g., "block-except")');
+      }
+      if (!VALID_ACTIONS.has(actionPart)) {
+        throw new Error(`EXCEPT_ACTION action part must be one of: ${Array.from(VALID_ACTIONS).join(', ')}`);
+      }
+      exceptAction = actionPart;
+    }
+  }
+
   return {
     token: env.TOKEN,
     workerAddresses: env.WORKER_ADDRESS_DOWNLOAD,
@@ -78,6 +100,8 @@ const resolveConfig = (env = {}) => {
     whitelistPrefixes,
     blacklistAction,
     whitelistAction,
+    exceptPrefixes,
+    exceptAction,
   };
 };
 
@@ -245,7 +269,23 @@ const checkPathListAction = (path, config) => {
     }
   }
 
-  // No match
+  // Check except third (inverse logic)
+  if (config.exceptPrefixes.length > 0 && config.exceptAction) {
+    // Check if path matches any except prefix
+    let matchesExceptPrefix = false;
+    for (const prefix of config.exceptPrefixes) {
+      if (decodedPath.startsWith(prefix)) {
+        matchesExceptPrefix = true;
+        break;
+      }
+    }
+    // If path does NOT match any except prefix, apply the except action
+    if (!matchesExceptPrefix) {
+      return config.exceptAction;
+    }
+  }
+
+  // No match - undefined action
   return null;
 };
 
