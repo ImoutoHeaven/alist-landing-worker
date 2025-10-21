@@ -318,13 +318,17 @@ const handleInfo = async (request, config) => {
   const base64Path = uint8ToBase64(pathBytes);
   const hashSign = await hmacSha256Sign(config.signSecret, base64Path, expire);
 
+  const workerBaseURL = selectRandomWorker(config.workerAddresses);
+  const workerSignData = JSON.stringify({ path: decodedPath, worker_addr: workerBaseURL });
+  const workerSign = await hmacSha256Sign(config.signSecret, workerSignData, expire);
+
   const ipSignData = JSON.stringify({ path: decodedPath, ip: clientIP });
   const ipSign = await hmacSha256Sign(config.signSecret, ipSignData, expire);
 
-  const workerBaseURL = selectRandomWorker(config.workerAddresses);
   const downloadURLObj = new URL(decodedPath, workerBaseURL);
   downloadURLObj.searchParams.set('sign', sign);
   downloadURLObj.searchParams.set('hashSign', hashSign);
+  downloadURLObj.searchParams.set('workerSign', workerSign);
   downloadURLObj.searchParams.set('ipSign', ipSign);
   const downloadURL = downloadURLObj.toString();
 
@@ -405,13 +409,17 @@ const handleFileRequest = async (request, config) => {
     const base64Path = uint8ToBase64(pathBytes);
     const hashSign = await hmacSha256Sign(config.signSecret, base64Path, expire);
 
+    const workerBaseURL = selectRandomWorker(config.workerAddresses);
+    const workerSignData = JSON.stringify({ path: decodedPath, worker_addr: workerBaseURL });
+    const workerSign = await hmacSha256Sign(config.signSecret, workerSignData, expire);
+
     const ipSignData = JSON.stringify({ path: decodedPath, ip: clientIP });
     const ipSign = await hmacSha256Sign(config.signSecret, ipSignData, expire);
 
-    const workerBaseURL = selectRandomWorker(config.workerAddresses);
     const downloadURLObj = new URL(decodedPath, workerBaseURL);
     downloadURLObj.searchParams.set('sign', sign);
     downloadURLObj.searchParams.set('hashSign', hashSign);
+    downloadURLObj.searchParams.set('workerSign', workerSign);
     downloadURLObj.searchParams.set('ipSign', ipSign);
     const downloadURL = downloadURLObj.toString();
 
