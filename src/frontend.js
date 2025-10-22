@@ -37,9 +37,65 @@ const pageScript = String.raw`
     log(text);
   };
 
+  const createLinkSnippet = (url) => {
+    const snippet = document.createElement('div');
+    snippet.className = 'log-link-snippet';
+    snippet.title = '点击复制链接';
+
+    const label = document.createElement('div');
+    label.className = 'log-link-snippet-label';
+    label.textContent = '下载链接（点击复制）';
+
+    const urlText = document.createElement('div');
+    urlText.className = 'log-link-snippet-url';
+    urlText.textContent = url;
+
+    snippet.appendChild(label);
+    snippet.appendChild(urlText);
+
+    snippet.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(url);
+        const originalText = label.textContent;
+        label.textContent = '✓ 已复制到剪贴板';
+        setTimeout(() => {
+          label.textContent = originalText;
+        }, 1500);
+      } catch (error) {
+        console.error('复制失败', error);
+        label.textContent = '复制失败，请手动复制';
+        setTimeout(() => {
+          label.textContent = '下载链接（点击复制）';
+        }, 2000);
+      }
+    });
+
+    return snippet;
+  };
+
+  const copyToClipboard = async (text, button) => {
+    if (!text || !button) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      const originalText = button.textContent;
+      button.textContent = '已复制✓';
+      setTimeout(() => {
+        button.textContent = originalText;
+      }, 1500);
+    } catch (error) {
+      console.error('复制失败', error);
+      const originalText = button.textContent;
+      button.textContent = '复制失败';
+      setTimeout(() => {
+        button.textContent = originalText;
+      }, 2000);
+    }
+  };
+
   const state = {
     downloadURL: '',
     infoReady: false,
+    downloadBtnMode: 'download', // 'download' or 'copy'
     security: {
       underAttack: false,
       siteKey: '',
@@ -328,6 +384,7 @@ const pageScript = String.raw`
 
     downloadBtn.disabled = false;
     downloadBtn.textContent = '跳转下载';
+    state.downloadBtnMode = 'download';
     retryBtn.disabled = false;
     clearCacheBtn.disabled = false;
     setStatus('就绪，点击按钮跳转下载');
@@ -338,16 +395,24 @@ const pageScript = String.raw`
       setStatus('缺少下载地址，无法跳转。');
       return;
     }
-    log('正在跳转至下载链接：' + state.downloadURL);
+
+    // Add clickable link snippet to log
+    const snippet = createLinkSnippet(state.downloadURL);
+    logEl.appendChild(snippet);
+    logEl.scrollTop = logEl.scrollHeight;
+
     setStatus('正在跳转下载...');
-    downloadBtn.disabled = true;
     retryBtn.disabled = true;
     clearCacheBtn.disabled = true;
     try {
       window.location.href = state.downloadURL;
+      // Change button to copy mode after redirect attempt
+      state.downloadBtnMode = 'copy';
+      downloadBtn.textContent = '复制链接';
     } catch (error) {
       console.error('跳转下载失败', error);
       setStatus('跳转下载失败：' + (error && error.message ? error.message : '未知错误'));
+      state.downloadBtnMode = 'download';
       downloadBtn.disabled = false;
       downloadBtn.textContent = '跳转下载';
       retryBtn.disabled = false;
@@ -357,7 +422,14 @@ const pageScript = String.raw`
 
   downloadBtn.addEventListener('click', () => {
     if (!state.infoReady) return;
-    redirectToDownload();
+
+    if (state.downloadBtnMode === 'copy') {
+      // Copy mode: copy the download URL to clipboard
+      copyToClipboard(state.downloadURL, downloadBtn);
+    } else {
+      // Download mode: redirect to download
+      redirectToDownload();
+    }
   });
 
   retryBtn.addEventListener('click', async () => {
@@ -371,6 +443,7 @@ const pageScript = String.raw`
       console.error(error);
       setStatus('重新获取信息失败：' + error.message);
       // Keep download button disabled when fetch fails (no valid URL)
+      state.downloadBtnMode = 'download';
       downloadBtn.disabled = true;
       downloadBtn.textContent = '获取失败';
       retryBtn.disabled = false;
@@ -394,6 +467,8 @@ const pageScript = String.raw`
     } catch (error) {
       console.error(error);
       setStatus('清理缓存失败：' + (error && error.message ? error.message : '未知错误'));
+      state.downloadBtnMode = 'download';
+      downloadBtn.textContent = '跳转下载';
       clearCacheBtn.disabled = false;
       downloadBtn.disabled = false;
       retryBtn.disabled = false;
@@ -640,6 +715,35 @@ const renderLandingPageHtml = (path, options = {}) => {
         overflow-y: auto;
         font-size: 0.85rem;
         line-height: 1.5;
+      }
+      .log-link-snippet {
+        background: rgba(56,189,248,0.12);
+        border: 1px solid rgba(56,189,248,0.3);
+        border-radius: 0.5rem;
+        padding: 0.75rem;
+        margin: 0.5rem 0;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        word-break: break-all;
+        display: inline-block;
+        width: calc(100% - 6rem);
+      }
+      .log-link-snippet:hover {
+        background: rgba(56,189,248,0.18);
+        border-color: rgba(56,189,248,0.5);
+        transform: translateY(-1px);
+      }
+      .log-link-snippet-label {
+        font-size: 0.75rem;
+        color: #9ca3af;
+        margin-bottom: 0.35rem;
+        font-weight: 600;
+      }
+      .log-link-snippet-url {
+        color: #38bdf8;
+        font-family: monospace;
+        font-size: 0.8rem;
+        line-height: 1.4;
       }
       @media (max-width: 600px) {
         main {
