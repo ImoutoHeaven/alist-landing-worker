@@ -370,8 +370,9 @@ const pageScript = String.raw`
     } catch (error) {
       console.error(error);
       setStatus('重新获取信息失败：' + error.message);
-      downloadBtn.disabled = false;
-      downloadBtn.textContent = '跳转下载';
+      // Keep download button disabled when fetch fails (no valid URL)
+      downloadBtn.disabled = true;
+      downloadBtn.textContent = '获取失败';
       retryBtn.disabled = false;
       clearCacheBtn.disabled = false;
     }
@@ -434,9 +435,11 @@ const pageScript = String.raw`
     } catch (error) {
       console.error(error);
       setStatus('初始化失败：' + error.message);
-      downloadBtn.disabled = false;
-      downloadBtn.textContent = '跳转下载';
+      // Keep download button disabled when fetch fails (no valid URL)
+      downloadBtn.disabled = true;
+      downloadBtn.textContent = '获取失败';
       retryBtn.disabled = false;
+      clearCacheBtn.disabled = false;
     }
   };
 
