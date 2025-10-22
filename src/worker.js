@@ -99,6 +99,13 @@ const resolveConfig = (env = {}) => {
     ? env.PG_ERROR_HANDLE.trim().toLowerCase()
     : 'fail-closed';
 
+  // Parse cleanup percentage (default 1%)
+  const cleanupPercentage = parseInteger(env.CLEANUP_PERCENTAGE, 1);
+  // Clamp between 0 and 100
+  const validCleanupPercentage = Math.max(0, Math.min(100, cleanupPercentage));
+  // Convert to probability (0.0 to 1.0)
+  const cleanupProbability = validCleanupPercentage / 100;
+
   // Validate PG_ERROR_HANDLE value
   const validPgErrorHandle = pgErrorHandle === 'fail-open' ? 'fail-open' : 'fail-closed';
 
@@ -131,6 +138,7 @@ const resolveConfig = (env = {}) => {
     ipv4Suffix,
     ipv6Suffix,
     pgErrorHandle: validPgErrorHandle,
+    cleanupProbability,
   };
 };
 

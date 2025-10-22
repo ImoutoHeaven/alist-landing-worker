@@ -27,6 +27,7 @@ const ensureTable = async (sql) => {
  * @param {string} config.ipv4Suffix - IPv4 subnet suffix
  * @param {string} config.ipv6Suffix - IPv6 subnet suffix
  * @param {string} config.pgErrorHandle - Error handling strategy ('fail-open' or 'fail-closed')
+ * @param {number} config.cleanupProbability - Probability of triggering cleanup (0.0 to 1.0)
  * @returns {Promise<{allowed: boolean, ipSubnet?: string, retryAfter?: number, error?: string}>}
  */
 export const checkRateLimit = async (ip, config) => {
@@ -68,12 +69,24 @@ export const checkRateLimit = async (ip, config) => {
       WHERE IP_HASH = ${ipHash}
     `;
 
+    // Probabilistic cleanup helper
+    const triggerCleanup = () => {
+      // Use configured cleanup probability (default 1% = 0.01)
+      const probability = config.cleanupProbability || 0.01;
+      if (Math.random() < probability) {
+        cleanupExpiredRecords(sql, config.windowTimeSeconds).catch(() => {
+          // Silent catch - already logged in cleanupExpiredRecords
+        });
+      }
+    };
+
     // If no record exists, create a new one
     if (!records || records.length === 0) {
       await sql`
         INSERT INTO IP_LIMIT_TABLE (IP_HASH, IP_RANGE, ACCESS_COUNT, LAST_WINDOW_TIME)
         VALUES (${ipHash}, ${ipSubnet}, 1, ${now})
       `;
+      triggerCleanup();
       return { allowed: true };
     }
 
@@ -90,6 +103,7 @@ export const checkRateLimit = async (ip, config) => {
         SET ACCESS_COUNT = 1, LAST_WINDOW_TIME = ${now}
         WHERE IP_HASH = ${ipHash}
       `;
+      triggerCleanup();
       return { allowed: true };
     }
 
@@ -112,6 +126,7 @@ export const checkRateLimit = async (ip, config) => {
       WHERE IP_HASH = ${ipHash}
     `;
 
+    triggerCleanup();
     return { allowed: true };
   } catch (error) {
     // Handle errors based on PG_ERROR_HANDLE strategy
@@ -128,6 +143,37 @@ export const checkRateLimit = async (ip, config) => {
         error: `Rate limit check failed: ${errorMessage}`,
       };
     }
+  }
+};
+
+/**
+ * Clean up expired records from the database
+ * Removes records older than windowTimeSeconds * 2 (double buffer)
+ * @param {Function} sql - Neon SQL function
+ * @param {number} windowTimeSeconds - Time window in seconds
+ * @returns {Promise<number>} - Number of deleted records
+ */
+const cleanupExpiredRecords = async (sql, windowTimeSeconds) => {
+  try {
+    // Calculate cutoff time: 2x the window time for safety buffer
+    const now = Math.floor(Date.now() / 1000);
+    const cutoffTime = now - (windowTimeSeconds * 2);
+
+    const result = await sql`
+      DELETE FROM IP_LIMIT_TABLE
+      WHERE LAST_WINDOW_TIME < ${cutoffTime}
+    `;
+
+    const deletedCount = result.count || 0;
+    if (deletedCount > 0) {
+      console.log(`Cleaned up ${deletedCount} expired rate limit records (older than ${windowTimeSeconds * 2}s)`);
+    }
+
+    return deletedCount;
+  } catch (error) {
+    // Log error but don't propagate (cleanup failure shouldn't block requests)
+    console.error('Rate limit cleanup failed:', error instanceof Error ? error.message : String(error));
+    return 0;
   }
 };
 

@@ -59,6 +59,7 @@ Set environment variables in Cloudflare Dashboard:
    - `IPV4_SUFFIX` (plain) - Optional: IPv4 subnet mask (default: /32)
    - `IPV6_SUFFIX` (plain) - Optional: IPv6 subnet mask (default: /60)
    - `PG_ERROR_HANDLE` (plain) - Optional: fail-closed or fail-open (default: fail-closed)
+   - `CLEANUP_PERCENTAGE` (plain) - Optional: Cleanup probability 0-100 (default: 1)
 
 ### 4. Build the Project
 ```bash
@@ -119,6 +120,7 @@ wrangler deploy
 | `IPV4_SUFFIX` | Plain | ❌ No | IPv4 subnet mask (default: `/32`). Examples: `/24`, `/32` |
 | `IPV6_SUFFIX` | Plain | ❌ No | IPv6 subnet mask (default: `/60`). Examples: `/56`, `/60`, `/64` |
 | `PG_ERROR_HANDLE` | Plain | ❌ No | Error handling strategy: `fail-closed` (default, reject on DB errors) or `fail-open` (allow on DB errors) |
+| `CLEANUP_PERCENTAGE` | Plain | ❌ No | Cleanup probability in percentage (default: `1`). Range: 0-100. Removes records older than `WINDOW_TIME × 2` |
 
 ## Testing
 
@@ -307,6 +309,7 @@ WINDOW_TIME=24h
 IPV4_SUFFIX=/24        # Default: /32 (single IP)
 IPV6_SUFFIX=/60        # Default: /60
 PG_ERROR_HANDLE=fail-closed  # Default: fail-closed
+CLEANUP_PERCENTAGE=1   # Default: 1 (1% probability)
 ```
 
 ### Time Window Format
@@ -415,6 +418,7 @@ WINDOW_TIME=24h
 IPV4_SUFFIX=/32
 IPV6_SUFFIX=/64
 PG_ERROR_HANDLE=fail-closed
+CLEANUP_PERCENTAGE=1
 ```
 
 **Subnet-based limiting (4 hours):**
@@ -425,6 +429,7 @@ WINDOW_TIME=4h
 IPV4_SUFFIX=/24
 IPV6_SUFFIX=/60
 PG_ERROR_HANDLE=fail-open
+CLEANUP_PERCENTAGE=2
 ```
 
 **Short burst protection (30 minutes):**
@@ -435,11 +440,52 @@ WINDOW_TIME=30m
 IPV4_SUFFIX=/32
 IPV6_SUFFIX=/64
 PG_ERROR_HANDLE=fail-closed
+CLEANUP_PERCENTAGE=5
 ```
+
+### Automatic Data Cleanup
+
+The worker automatically cleans up expired records to prevent database bloat.
+
+**How it works:**
+- **Cleanup Threshold**: Records older than `WINDOW_TIME × 2` are deleted
+- **Cleanup Probability**: Controlled by `CLEANUP_PERCENTAGE` (default: 1%)
+- **Trigger**: On each successful rate limit check
+- **Execution**: Asynchronous (doesn't block user requests)
+
+**Configuration:**
+
+```env
+CLEANUP_PERCENTAGE=1   # 1% probability (default)
+```
+
+**Probability Examples:**
+- `0` - Never cleanup (not recommended, database will grow indefinitely)
+- `1` - 1% probability (default, ~1 cleanup per 100 requests)
+- `5` - 5% probability (aggressive, ~1 cleanup per 20 requests)
+- `10` - 10% probability (very aggressive, high database load)
+- `100` - Always cleanup (extreme load, not recommended)
+
+**Choosing the right value:**
+- **Low traffic (< 1000 req/day)**: `1` or lower
+- **Medium traffic (1000-10000 req/day)**: `1-2`
+- **High traffic (> 10000 req/day)**: `2-5`
+- **Very high traffic (> 100000 req/day)**: `5-10`
+
+**Storage impact:**
+```
+WINDOW_TIME=24h → Keeps 2 days of data
+WINDOW_TIME=4h  → Keeps 8 hours of data
+WINDOW_TIME=30m → Keeps 1 hour of data
+```
+
+With `CLEANUP_PERCENTAGE=1` and moderate traffic, database size typically stabilizes at < 10 MB.
 
 ### Monitoring
 
 Check Cloudflare Workers logs for:
+- `Cleaned up X expired rate limit records (older than Ys)` - Successful cleanup operations
+- `Rate limit cleanup failed: ...` - Cleanup errors (non-critical, requests continue)
 - `Rate limit check failed (fail-open):` - Database errors in fail-open mode
 - HTTP 429 responses in analytics
 - HTTP 500 responses (may indicate database issues in fail-closed mode)
