@@ -53,6 +53,12 @@ Set environment variables in Cloudflare Dashboard:
    - `WHITELIST_ACTION` (plain) - Optional: Action for whitelisted paths
    - `EXCEPT_PREFIX` (plain) - Optional: Comma-separated path prefixes for inverse matching
    - `EXCEPT_ACTION` (plain) - Optional: Action format {action}-except (e.g., block-except)
+   - `POSTGRES_URL` (secret) - Optional: PostgreSQL URL for rate limiting
+   - `IPSUBNET_WINDOWTIME_LIMIT` (plain) - Optional: Max requests per subnet (e.g., 100)
+   - `WINDOW_TIME` (plain) - Optional: Time window (e.g., 24h, 4h, 30m)
+   - `IPV4_SUFFIX` (plain) - Optional: IPv4 subnet mask (default: /32)
+   - `IPV6_SUFFIX` (plain) - Optional: IPv6 subnet mask (default: /60)
+   - `PG_ERROR_HANDLE` (plain) - Optional: fail-closed or fail-open (default: fail-closed)
 
 ### 4. Build the Project
 ```bash
@@ -107,6 +113,12 @@ wrangler deploy
 | `WHITELIST_ACTION` | Plain | ❌ No | Action for whitelisted paths: `block`/`verify`/`pass-web`/`pass-server`/`pass-asis` |
 | `EXCEPT_PREFIX` | Plain | ❌ No | Comma-separated path prefixes for inverse matching. Requires `EXCEPT_ACTION` to be set |
 | `EXCEPT_ACTION` | Plain | ❌ No | Inverse action format `{action}-except` (e.g., `block-except`). Paths NOT matching EXCEPT_PREFIX will trigger the action |
+| `POSTGRES_URL` | Secret | ❌ No | PostgreSQL connection URL for rate limiting (e.g., Neon Serverless Postgres). Required for rate limiting |
+| `IPSUBNET_WINDOWTIME_LIMIT` | Plain | ❌ No | Max requests per IP subnet within time window. Must be positive integer. Required for rate limiting |
+| `WINDOW_TIME` | Plain | ❌ No | Sliding time window (format: `24h`, `4h`, `30m`, `10s`). Required for rate limiting |
+| `IPV4_SUFFIX` | Plain | ❌ No | IPv4 subnet mask (default: `/32`). Examples: `/24`, `/32` |
+| `IPV6_SUFFIX` | Plain | ❌ No | IPv6 subnet mask (default: `/60`). Examples: `/56`, `/60`, `/64` |
+| `PG_ERROR_HANDLE` | Plain | ❌ No | Error handling strategy: `fail-closed` (default, reject on DB errors) or `fail-open` (allow on DB errors) |
 
 ## Testing
 
@@ -266,6 +278,188 @@ EXCEPT_ACTION=block-except
 ```env
 EXCEPT_PREFIX=/free,/trial
 EXCEPT_ACTION=verify-except
+```
+
+## PostgreSQL IP Subnet Rate Limiting
+
+Protect your worker from abuse by implementing IP subnet-based rate limiting using PostgreSQL.
+
+### Overview
+
+The rate limiting feature:
+- Uses PostgreSQL (e.g., Neon Serverless) to track request counts per IP subnet
+- Implements sliding time window algorithm
+- Supports both IPv4 and IPv6 with configurable subnet granularity
+- Only applies to `/info` endpoint and fast redirect requests
+- Returns HTTP 429 with `Retry-After` header when limit exceeded
+
+### Configuration
+
+**Required Variables (all three must be set):**
+```env
+POSTGRES_URL=postgresql://user:password@ep-xxx.neon.tech/neondb?sslmode=require
+IPSUBNET_WINDOWTIME_LIMIT=100
+WINDOW_TIME=24h
+```
+
+**Optional Variables:**
+```env
+IPV4_SUFFIX=/24        # Default: /32 (single IP)
+IPV6_SUFFIX=/60        # Default: /60
+PG_ERROR_HANDLE=fail-closed  # Default: fail-closed
+```
+
+### Time Window Format
+
+`WINDOW_TIME` accepts the following formats:
+- Hours: `24h`, `1h`, `48h`
+- Minutes: `30m`, `15m`, `60m`
+- Seconds: `10s`, `30s`, `600s`
+
+### Subnet Granularity
+
+**IPv4 Examples:**
+- `/32` - Single IP (most restrictive, default)
+- `/24` - 256 IPs (e.g., 192.168.1.0 - 192.168.1.255)
+- `/16` - 65,536 IPs (entire class C network)
+
+**IPv6 Examples:**
+- `/64` - Standard subnet (18 quintillion addresses)
+- `/60` - 16 /64 subnets (default)
+- `/56` - 256 /64 subnets
+
+### Error Handling Strategies
+
+**fail-closed (default, recommended):**
+- When database connection/query fails, reject the request
+- Returns HTTP 500 error
+- More secure, prevents bypass during outages
+- Use for high-security scenarios
+
+**fail-open:**
+- When database fails, allow the request to proceed
+- Logs error but doesn't block user
+- Better availability, less secure
+- Use when uptime is critical
+
+### Database Schema
+
+The worker automatically creates the following table:
+
+```sql
+CREATE TABLE IF NOT EXISTS IP_LIMIT_TABLE (
+  IP_HASH TEXT PRIMARY KEY,        -- SHA256 hash of IP subnet
+  IP_RANGE TEXT NOT NULL,           -- Original IP subnet (e.g., "192.168.1.0/24")
+  ACCESS_COUNT INTEGER NOT NULL,    -- Number of requests in current window
+  LAST_WINDOW_TIME INTEGER NOT NULL -- Unix timestamp of window start
+);
+```
+
+### How It Works
+
+1. Extract client IP from `CF-Connecting-IP` header
+2. Calculate IP subnet based on `IPV4_SUFFIX` or `IPV6_SUFFIX`
+3. Generate SHA256 hash of subnet as database key
+4. Query database for existing record:
+   - **No record**: Create new entry with count=1, allow request
+   - **Record exists**:
+     - If time window expired: Reset count=1, update timestamp, allow request
+     - If within window and count < limit: Increment count, allow request
+     - If within window and count >= limit: Return 429, **do not increment**
+
+### Rate Limit Response
+
+When limit is exceeded, returns:
+```json
+{
+  "code": 429,
+  "message": "192.168.1.0/24 exceeds the limit of 100 requests in 24h"
+}
+```
+
+Headers:
+```
+HTTP/1.1 429 Too Many Requests
+Retry-After: 43200
+Content-Type: application/json
+```
+
+### Setup with Neon Serverless Postgres
+
+1. **Create Neon Database:**
+   - Visit https://neon.tech
+   - Create a new project
+   - Copy the connection string
+
+2. **Configure Environment:**
+   ```env
+   POSTGRES_URL=postgresql://neondb_owner:xxx@ep-xxx.neon.tech/neondb?sslmode=require&channel_binding=require
+   IPSUBNET_WINDOWTIME_LIMIT=100
+   WINDOW_TIME=24h
+   ```
+
+3. **Deploy:**
+   ```bash
+   npm run deploy
+   ```
+
+The worker will automatically create the `IP_LIMIT_TABLE` on first request.
+
+### Example Configurations
+
+**Strict per-IP limiting (24 hours):**
+```env
+POSTGRES_URL=postgresql://...
+IPSUBNET_WINDOWTIME_LIMIT=50
+WINDOW_TIME=24h
+IPV4_SUFFIX=/32
+IPV6_SUFFIX=/64
+PG_ERROR_HANDLE=fail-closed
+```
+
+**Subnet-based limiting (4 hours):**
+```env
+POSTGRES_URL=postgresql://...
+IPSUBNET_WINDOWTIME_LIMIT=1000
+WINDOW_TIME=4h
+IPV4_SUFFIX=/24
+IPV6_SUFFIX=/60
+PG_ERROR_HANDLE=fail-open
+```
+
+**Short burst protection (30 minutes):**
+```env
+POSTGRES_URL=postgresql://...
+IPSUBNET_WINDOWTIME_LIMIT=20
+WINDOW_TIME=30m
+IPV4_SUFFIX=/32
+IPV6_SUFFIX=/64
+PG_ERROR_HANDLE=fail-closed
+```
+
+### Monitoring
+
+Check Cloudflare Workers logs for:
+- `Rate limit check failed (fail-open):` - Database errors in fail-open mode
+- HTTP 429 responses in analytics
+- HTTP 500 responses (may indicate database issues in fail-closed mode)
+
+### Performance Considerations
+
+- Database queries add ~50-200ms latency per request
+- Neon Serverless Postgres provides excellent cold start performance
+- Connection pooling is handled automatically by `@neondatabase/serverless`
+- Consider using fail-open for high-traffic scenarios if occasional bypass is acceptable
+
+### Disabling Rate Limiting
+
+To disable, simply remove or leave empty any of the three required variables:
+```env
+POSTGRES_URL=
+# or
+IPSUBNET_WINDOWTIME_LIMIT=
+# or
+WINDOW_TIME=
 ```
 
 ## Troubleshooting

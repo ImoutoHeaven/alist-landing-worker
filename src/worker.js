@@ -2,8 +2,11 @@ import {
   rotLower,
   uint8ToBase64,
   parseBoolean,
+  parseInteger,
+  parseWindowTime,
 } from './utils.js';
 import { renderLandingPage } from './frontend.js';
+import { checkRateLimit, formatWindowTime } from './pg-ratelimit.js';
 
 const REQUIRED_ENV = ['TOKEN', 'WORKER_ADDRESS_DOWNLOAD'];
 
@@ -85,6 +88,23 @@ const resolveConfig = (env = {}) => {
     }
   }
 
+  // Parse rate limit configuration
+  const postgresUrl = env.POSTGRES_URL && typeof env.POSTGRES_URL === 'string' ? env.POSTGRES_URL.trim() : '';
+  const windowTime = env.WINDOW_TIME && typeof env.WINDOW_TIME === 'string' ? env.WINDOW_TIME.trim() : '';
+  const windowTimeSeconds = parseWindowTime(windowTime);
+  const ipSubnetLimit = parseInteger(env.IPSUBNET_WINDOWTIME_LIMIT, 0);
+  const ipv4Suffix = env.IPV4_SUFFIX && typeof env.IPV4_SUFFIX === 'string' ? env.IPV4_SUFFIX.trim() : '/32';
+  const ipv6Suffix = env.IPV6_SUFFIX && typeof env.IPV6_SUFFIX === 'string' ? env.IPV6_SUFFIX.trim() : '/60';
+  const pgErrorHandle = env.PG_ERROR_HANDLE && typeof env.PG_ERROR_HANDLE === 'string'
+    ? env.PG_ERROR_HANDLE.trim().toLowerCase()
+    : 'fail-closed';
+
+  // Validate PG_ERROR_HANDLE value
+  const validPgErrorHandle = pgErrorHandle === 'fail-open' ? 'fail-open' : 'fail-closed';
+
+  // Rate limiting is enabled only if all three required params are set
+  const rateLimitEnabled = !!(postgresUrl && windowTimeSeconds > 0 && ipSubnetLimit > 0);
+
   return {
     token: env.TOKEN,
     workerAddresses: env.WORKER_ADDRESS_DOWNLOAD,
@@ -102,6 +122,15 @@ const resolveConfig = (env = {}) => {
     whitelistAction,
     exceptPrefixes,
     exceptAction,
+    // Rate limit configuration
+    rateLimitEnabled,
+    postgresUrl,
+    windowTimeSeconds,
+    windowTime,
+    ipSubnetLimit,
+    ipv4Suffix,
+    ipv6Suffix,
+    pgErrorHandle: validPgErrorHandle,
   };
 };
 
@@ -205,6 +234,15 @@ const respondJson = (origin, payload, status = 200) => {
   return new Response(JSON.stringify(payload), { status, headers });
 };
 
+const respondRateLimitExceeded = (origin, ipSubnet, limit, windowTime, retryAfter) => {
+  const headers = safeHeaders(origin);
+  headers.set('content-type', 'application/json;charset=UTF-8');
+  headers.set('cache-control', 'no-store');
+  headers.set('Retry-After', String(Math.ceil(retryAfter)));
+  const message = `${ipSubnet} exceeds the limit of ${limit} requests in ${windowTime}`;
+  return new Response(JSON.stringify({ code: 429, message }), { status: 429, headers });
+};
+
 const extractClientIP = (request) => {
   const raw = request.headers.get('CF-Connecting-IP');
   if (!raw) return '';
@@ -301,6 +339,34 @@ const handleInfo = async (request, config) => {
     return respondJson(origin, { code: 400, message: 'path is required' }, 400);
   }
 
+  // Check rate limit
+  const clientIP = extractClientIP(request);
+  if (config.rateLimitEnabled && clientIP) {
+    const rateLimitResult = await checkRateLimit(clientIP, {
+      postgresUrl: config.postgresUrl,
+      windowTimeSeconds: config.windowTimeSeconds,
+      limit: config.ipSubnetLimit,
+      ipv4Suffix: config.ipv4Suffix,
+      ipv6Suffix: config.ipv6Suffix,
+      pgErrorHandle: config.pgErrorHandle,
+    });
+
+    if (!rateLimitResult.allowed) {
+      if (rateLimitResult.error) {
+        // Database error with fail-closed
+        return respondJson(origin, { code: 500, message: rateLimitResult.error }, 500);
+      }
+      // Rate limit exceeded
+      return respondRateLimitExceeded(
+        origin,
+        rateLimitResult.ipSubnet,
+        config.ipSubnetLimit,
+        config.windowTime,
+        rateLimitResult.retryAfter
+      );
+    }
+  }
+
   // Check blacklist/whitelist
   const action = checkPathListAction(path, config);
 
@@ -313,8 +379,6 @@ const handleInfo = async (request, config) => {
   const forceVerify = action === 'verify';
   const skipVerify = action === 'pass-web' || action === 'pass-server' || action === 'pass-asis';
   const needVerify = forceVerify || (config.underAttack && !skipVerify);
-
-  const clientIP = extractClientIP(request);
 
   if (needVerify) {
     const token =
@@ -441,8 +505,36 @@ const handleFileRequest = async (request, config) => {
       return respondJson(request.headers.get('origin') || '*', { code: 401, message: verifyResult }, 401);
     }
 
-    // Generate download URL using URL object for proper encoding
+    // Check rate limit for fast redirect
     const clientIP = extractClientIP(request);
+    if (config.rateLimitEnabled && clientIP) {
+      const rateLimitResult = await checkRateLimit(clientIP, {
+        postgresUrl: config.postgresUrl,
+        windowTimeSeconds: config.windowTimeSeconds,
+        limit: config.ipSubnetLimit,
+        ipv4Suffix: config.ipv4Suffix,
+        ipv6Suffix: config.ipv6Suffix,
+        pgErrorHandle: config.pgErrorHandle,
+      });
+
+      if (!rateLimitResult.allowed) {
+        const origin = request.headers.get('origin') || '*';
+        if (rateLimitResult.error) {
+          // Database error with fail-closed
+          return respondJson(origin, { code: 500, message: rateLimitResult.error }, 500);
+        }
+        // Rate limit exceeded
+        return respondRateLimitExceeded(
+          origin,
+          rateLimitResult.ipSubnet,
+          config.ipSubnetLimit,
+          config.windowTime,
+          rateLimitResult.retryAfter
+        );
+      }
+    }
+
+    // Generate download URL using URL object for proper encoding
     const expire = extractExpireFromSign(sign);
 
     const pathBytes = new TextEncoder().encode(decodedPath);

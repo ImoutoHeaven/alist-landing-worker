@@ -20,6 +20,14 @@ compatibility_date = "2024-01-01"
 # WHITELIST_ACTION = "pass-asis"
 # EXCEPT_PREFIX = "/guest,/public"
 # EXCEPT_ACTION = "block-except"
+#
+# # PostgreSQL Rate Limiting (all three required to enable)
+# POSTGRES_URL = "postgresql://user:password@host/database?sslmode=require"
+# IPSUBNET_WINDOWTIME_LIMIT = "100"
+# WINDOW_TIME = "24h"
+# IPV4_SUFFIX = "/32"
+# IPV6_SUFFIX = "/60"
+# PG_ERROR_HANDLE = "fail-closed"
 
 # For local development, create a .dev.vars file with:
 # TOKEN=your-token

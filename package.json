@@ -17,6 +17,9 @@
   ],
   "author": "",
   "license": "MIT",
+  "dependencies": {
+    "@neondatabase/serverless": "^0.9.0"
+  },
   "devDependencies": {
     "esbuild": "^0.23.0",
     "wrangler": "^3.0.0"
