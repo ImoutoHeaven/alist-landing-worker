@@ -11,6 +11,7 @@ const ensureTable = async (sql) => {
     CREATE TABLE IF NOT EXISTS IP_LIMIT_TABLE (
       IP_HASH TEXT PRIMARY KEY,
       IP_RANGE TEXT NOT NULL,
+      IP_ADDR TEXT NOT NULL,
       ACCESS_COUNT INTEGER NOT NULL,
       LAST_WINDOW_TIME INTEGER NOT NULL
     )
@@ -64,7 +65,7 @@ export const checkRateLimit = async (ip, config) => {
 
     // Query for existing record
     const records = await sql`
-      SELECT IP_HASH, IP_RANGE, ACCESS_COUNT, LAST_WINDOW_TIME
+      SELECT IP_HASH, IP_RANGE, IP_ADDR, ACCESS_COUNT, LAST_WINDOW_TIME
       FROM IP_LIMIT_TABLE
       WHERE IP_HASH = ${ipHash}
     `;
@@ -83,8 +84,8 @@ export const checkRateLimit = async (ip, config) => {
     // If no record exists, create a new one
     if (!records || records.length === 0) {
       await sql`
-        INSERT INTO IP_LIMIT_TABLE (IP_HASH, IP_RANGE, ACCESS_COUNT, LAST_WINDOW_TIME)
-        VALUES (${ipHash}, ${ipSubnet}, 1, ${now})
+        INSERT INTO IP_LIMIT_TABLE (IP_HASH, IP_RANGE, IP_ADDR, ACCESS_COUNT, LAST_WINDOW_TIME)
+        VALUES (${ipHash}, ${ipSubnet}, ${JSON.stringify([ip])}, 1, ${now})
       `;
       triggerCleanup();
       return { allowed: true };
@@ -100,7 +101,7 @@ export const checkRateLimit = async (ip, config) => {
     if (diff >= config.windowTimeSeconds) {
       await sql`
         UPDATE IP_LIMIT_TABLE
-        SET ACCESS_COUNT = 1, LAST_WINDOW_TIME = ${now}
+        SET ACCESS_COUNT = 1, LAST_WINDOW_TIME = ${now}, IP_ADDR = ${JSON.stringify([ip])}
         WHERE IP_HASH = ${ipHash}
       `;
       triggerCleanup();
@@ -120,11 +121,24 @@ export const checkRateLimit = async (ip, config) => {
     }
 
     // Still within limit, increment count
-    await sql`
-      UPDATE IP_LIMIT_TABLE
-      SET ACCESS_COUNT = ACCESS_COUNT + 1
-      WHERE IP_HASH = ${ipHash}
-    `;
+    // Check if we need to update IP_ADDR with new unique IP
+    const existingIPs = JSON.parse(record.ip_addr || '[]');
+    const shouldUpdateIPs = !existingIPs.includes(ip);
+
+    if (shouldUpdateIPs) {
+      const newIPAddr = JSON.stringify([...existingIPs, ip]);
+      await sql`
+        UPDATE IP_LIMIT_TABLE
+        SET ACCESS_COUNT = ACCESS_COUNT + 1, IP_ADDR = ${newIPAddr}
+        WHERE IP_HASH = ${ipHash}
+      `;
+    } else {
+      await sql`
+        UPDATE IP_LIMIT_TABLE
+        SET ACCESS_COUNT = ACCESS_COUNT + 1
+        WHERE IP_HASH = ${ipHash}
+      `;
+    }
 
     triggerCleanup();
     return { allowed: true };
