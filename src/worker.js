@@ -166,8 +166,55 @@ const resolveConfig = (env = {}) => {
       } else {
         throw new Error('DB_MODE is set to "firebase" but required environment variables are missing: FIREBASE_PROJECT_ID, FIREBASE_PRIVATE_KEY, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY_ID, WINDOW_TIME, IPSUBNET_WINDOWTIME_LIMIT');
       }
+    } else if (normalizedDbMode === 'd1') {
+      // D1 (Cloudflare D1 Binding) configuration
+      const d1DatabaseBinding = env.D1_DATABASE_BINDING && typeof env.D1_DATABASE_BINDING === 'string' ? env.D1_DATABASE_BINDING.trim() : 'DB';
+      const d1TableName = env.D1_TABLE_NAME && typeof env.D1_TABLE_NAME === 'string' ? env.D1_TABLE_NAME.trim() : '';
+
+      if (d1DatabaseBinding && windowTimeSeconds > 0 && ipSubnetLimit > 0) {
+        rateLimitEnabled = true;
+        rateLimitConfig = {
+          env, // Pass env object so rate limiter can access the binding
+          databaseBinding: d1DatabaseBinding,
+          tableName: d1TableName || 'IP_LIMIT_TABLE',
+          windowTimeSeconds,
+          limit: ipSubnetLimit,
+          ipv4Suffix,
+          ipv6Suffix,
+          pgErrorHandle: validPgErrorHandle,
+          cleanupProbability,
+          blockTimeSeconds,
+        };
+      } else {
+        throw new Error('DB_MODE is set to "d1" but required environment variables are missing: WINDOW_TIME, IPSUBNET_WINDOWTIME_LIMIT');
+      }
+    } else if (normalizedDbMode === 'd1-rest') {
+      // D1 REST API configuration
+      const d1AccountId = env.D1_ACCOUNT_ID && typeof env.D1_ACCOUNT_ID === 'string' ? env.D1_ACCOUNT_ID.trim() : '';
+      const d1DatabaseId = env.D1_DATABASE_ID && typeof env.D1_DATABASE_ID === 'string' ? env.D1_DATABASE_ID.trim() : '';
+      const d1ApiToken = env.D1_API_TOKEN && typeof env.D1_API_TOKEN === 'string' ? env.D1_API_TOKEN.trim() : '';
+      const d1TableName = env.D1_TABLE_NAME && typeof env.D1_TABLE_NAME === 'string' ? env.D1_TABLE_NAME.trim() : '';
+
+      if (d1AccountId && d1DatabaseId && d1ApiToken && windowTimeSeconds > 0 && ipSubnetLimit > 0) {
+        rateLimitEnabled = true;
+        rateLimitConfig = {
+          accountId: d1AccountId,
+          databaseId: d1DatabaseId,
+          apiToken: d1ApiToken,
+          tableName: d1TableName || 'IP_LIMIT_TABLE',
+          windowTimeSeconds,
+          limit: ipSubnetLimit,
+          ipv4Suffix,
+          ipv6Suffix,
+          pgErrorHandle: validPgErrorHandle,
+          cleanupProbability,
+          blockTimeSeconds,
+        };
+      } else {
+        throw new Error('DB_MODE is set to "d1-rest" but required environment variables are missing: D1_ACCOUNT_ID, D1_DATABASE_ID, D1_API_TOKEN, WINDOW_TIME, IPSUBNET_WINDOWTIME_LIMIT');
+      }
     } else {
-      throw new Error(`Invalid DB_MODE: "${dbMode}". Valid options are: "neon", "firebase"`);
+      throw new Error(`Invalid DB_MODE: "${dbMode}". Valid options are: "neon", "firebase", "d1", "d1-rest"`);
     }
   }
 

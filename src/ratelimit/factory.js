@@ -6,6 +6,8 @@
 
 import * as neonRateLimiter from './neon.js';
 import * as firebaseRateLimiter from './firebase.js';
+import * as d1RateLimiter from './d1.js';
+import * as d1RestRateLimiter from './d1-rest.js';
 
 /**
  * Create a rate limiter instance based on the database mode
@@ -28,9 +30,15 @@ export const createRateLimiter = (dbMode) => {
     case 'firebase':
       return firebaseRateLimiter;
 
+    case 'd1':
+      return d1RateLimiter;
+
+    case 'd1-rest':
+      return d1RestRateLimiter;
+
     default:
       throw new Error(
-        `Invalid DB_MODE: "${dbMode}". Valid options are: "neon", "firebase", or leave empty to disable rate limiting.`
+        `Invalid DB_MODE: "${dbMode}". Valid options are: "neon", "firebase", "d1", "d1-rest", or leave empty to disable rate limiting.`
       );
   }
 };

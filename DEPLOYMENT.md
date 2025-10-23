@@ -53,7 +53,13 @@ Set environment variables in Cloudflare Dashboard:
    - `WHITELIST_ACTION` (plain) - Optional: Action for whitelisted paths
    - `EXCEPT_PREFIX` (plain) - Optional: Comma-separated path prefixes for inverse matching
    - `EXCEPT_ACTION` (plain) - Optional: Action format {action}-except (e.g., block-except)
-   - `POSTGRES_URL` (secret) - Optional: PostgreSQL URL for rate limiting
+   - `DB_MODE` (plain) - Optional: Database mode for rate limiting ("neon", "firebase", "d1", "d1-rest")
+   - `POSTGRES_URL` (secret) - Optional: PostgreSQL URL for rate limiting (required when DB_MODE=neon)
+   - `D1_DATABASE_BINDING` (plain) - Optional: D1 binding name (default: DB, required when DB_MODE=d1)
+   - `D1_TABLE_NAME` (plain) - Optional: D1 table name (default: IP_LIMIT_TABLE, for DB_MODE=d1 or d1-rest)
+   - `D1_ACCOUNT_ID` (plain) - Optional: Cloudflare account ID (required when DB_MODE=d1-rest)
+   - `D1_DATABASE_ID` (plain) - Optional: D1 database ID (required when DB_MODE=d1-rest)
+   - `D1_API_TOKEN` (secret) - Optional: Cloudflare API token (required when DB_MODE=d1-rest)
    - `IPSUBNET_WINDOWTIME_LIMIT` (plain) - Optional: Max requests per subnet (e.g., 100)
    - `WINDOW_TIME` (plain) - Optional: Time window (e.g., 24h, 4h, 30m)
    - `IPV4_SUFFIX` (plain) - Optional: IPv4 subnet mask (default: /32)
@@ -115,7 +121,13 @@ wrangler deploy
 | `WHITELIST_ACTION` | Plain | ❌ No | Action for whitelisted paths: `block`/`verify`/`pass-web`/`pass-server`/`pass-asis` |
 | `EXCEPT_PREFIX` | Plain | ❌ No | Comma-separated path prefixes for inverse matching. Requires `EXCEPT_ACTION` to be set |
 | `EXCEPT_ACTION` | Plain | ❌ No | Inverse action format `{action}-except` (e.g., `block-except`). Paths NOT matching EXCEPT_PREFIX will trigger the action |
-| `POSTGRES_URL` | Secret | ❌ No | PostgreSQL connection URL for rate limiting (e.g., Neon Serverless Postgres). Required for rate limiting |
+| `DB_MODE` | Plain | ❌ No | Database mode for rate limiting: `neon`, `firebase`, `d1`, `d1-rest`. If not set, rate limiting is disabled |
+| `POSTGRES_URL` | Secret | ❌ No | PostgreSQL connection URL (required when `DB_MODE=neon`) |
+| `D1_DATABASE_BINDING` | Plain | ❌ No | D1 binding name (default: `DB`, required when `DB_MODE=d1`) |
+| `D1_TABLE_NAME` | Plain | ❌ No | D1 table name (default: `IP_LIMIT_TABLE`, for `DB_MODE=d1` or `d1-rest`) |
+| `D1_ACCOUNT_ID` | Plain | ❌ No | Cloudflare account ID (required when `DB_MODE=d1-rest`) |
+| `D1_DATABASE_ID` | Plain | ❌ No | D1 database ID (required when `DB_MODE=d1-rest`) |
+| `D1_API_TOKEN` | Secret | ❌ No | Cloudflare API token (required when `DB_MODE=d1-rest`) |
 | `IPSUBNET_WINDOWTIME_LIMIT` | Plain | ❌ No | Max requests per IP subnet within time window. Must be positive integer. Required for rate limiting |
 | `WINDOW_TIME` | Plain | ❌ No | Sliding time window (format: `24h`, `4h`, `30m`, `10s`). Required for rate limiting |
 | `IPV4_SUFFIX` | Plain | ❌ No | IPv4 subnet mask (default: `/32`). Examples: `/24`, `/32` |
@@ -284,35 +296,234 @@ EXCEPT_PREFIX=/free,/trial
 EXCEPT_ACTION=verify-except
 ```
 
-## PostgreSQL IP Subnet Rate Limiting
+## IP Subnet Rate Limiting
 
-Protect your worker from abuse by implementing IP subnet-based rate limiting using PostgreSQL.
+Protect your worker from abuse by implementing IP subnet-based rate limiting with multiple database backend options.
 
 ### Overview
 
 The rate limiting feature:
-- Uses PostgreSQL (e.g., Neon Serverless) to track request counts per IP subnet
-- Implements sliding time window algorithm
+- Supports multiple database backends: **Neon (PostgreSQL)**, **Firebase (Firestore)**, **Cloudflare D1**
+- Tracks request counts per IP subnet with sliding time window algorithm
 - Supports both IPv4 and IPv6 with configurable subnet granularity
 - Only applies to `/info` endpoint and fast redirect requests
 - Returns HTTP 429 with `Retry-After` header when limit exceeded
 
-### Configuration
+### Database Mode Options
 
-**Required Variables (all three must be set):**
+| Mode | Description | Use Case |
+|------|-------------|----------|
+| `neon` | Neon Serverless PostgreSQL | High performance, mature SQL database |
+| `firebase` | Google Firebase Firestore | Serverless NoSQL, generous free tier |
+| `d1` | Cloudflare D1 (Binding) | Native Cloudflare integration, lowest latency |
+| `d1-rest` | Cloudflare D1 (REST API) | Remote access without Workers binding |
+
+**Choose D1 if:**
+- You want the lowest latency (same datacenter as your Worker)
+- You prefer native Cloudflare integration
+- You want free tier with 5 GB storage + 5 million reads/day
+
+**Choose Neon if:**
+- You need mature PostgreSQL features
+- You have existing Postgres infrastructure
+- You require complex queries or analytics
+
+**Choose Firebase if:**
+- You want generous free tier (1 GB storage, 50K reads/day)
+- You use other Google Cloud services
+- You prefer NoSQL flexibility
+
+### Common Configuration
+
+**Required for ALL database modes:**
 ```env
-POSTGRES_URL=postgresql://user:password@ep-xxx.neon.tech/neondb?sslmode=require
+DB_MODE=d1                     # or "neon", "firebase", "d1-rest"
 IPSUBNET_WINDOWTIME_LIMIT=100
 WINDOW_TIME=24h
 ```
 
-**Optional Variables:**
+**Optional Variables (all modes):**
 ```env
 IPV4_SUFFIX=/24        # Default: /32 (single IP)
 IPV6_SUFFIX=/60        # Default: /60
 PG_ERROR_HANDLE=fail-closed  # Default: fail-closed
 CLEANUP_PERCENTAGE=1   # Default: 1 (1% probability)
 BLOCK_TIME=10m         # Default: 10m (additional block time when limit exceeded)
+```
+
+### Configuration by Database Mode
+
+#### Option 1: Cloudflare D1 (Binding Mode) - Recommended
+
+**Advantages:**
+- Lowest latency (runs in same datacenter)
+- No external dependencies
+- Free tier: 5 GB storage + 5 million reads/day + 100K writes/day
+- Automatic connection pooling
+
+**Step 1: Create D1 Database**
+```bash
+# Login to Cloudflare
+wrangler login
+
+# Create a new D1 database
+wrangler d1 create alist-ratelimit-db
+
+# Output will show:
+# ✅ Successfully created DB 'alist-ratelimit-db'!
+#
+# [[d1_databases]]
+# binding = "DB"
+# database_name = "alist-ratelimit-db"
+# database_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+```
+
+**Step 2: Add Binding to wrangler.toml**
+
+Copy the output from Step 1 and add to your `wrangler.toml`:
+
+```toml
+[[d1_databases]]
+binding = "DB"  # Must match D1_DATABASE_BINDING env var
+database_name = "alist-ratelimit-db"
+database_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"  # Use your actual database_id
+```
+
+**Step 3: Set Environment Variables**
+
+For local development (`.dev.vars`):
+```env
+DB_MODE=d1
+D1_DATABASE_BINDING=DB  # Optional, defaults to "DB"
+D1_TABLE_NAME=IP_LIMIT_TABLE  # Optional, defaults to "IP_LIMIT_TABLE"
+IPSUBNET_WINDOWTIME_LIMIT=100
+WINDOW_TIME=24h
+```
+
+For production (Cloudflare Dashboard):
+1. Go to Workers & Pages > Your Worker > Settings > Variables
+2. Add environment variables:
+   - `DB_MODE` = `d1`
+   - `D1_DATABASE_BINDING` = `DB` (optional)
+   - `D1_TABLE_NAME` = `IP_LIMIT_TABLE` (optional)
+   - `IPSUBNET_WINDOWTIME_LIMIT` = `100`
+   - `WINDOW_TIME` = `24h`
+
+**Step 4: Deploy**
+```bash
+npm run deploy
+```
+
+The worker will automatically create the `IP_LIMIT_TABLE` table on first request.
+
+**Note:** The D1 binding is configured in `wrangler.toml`, so no additional environment variables are needed for the database connection itself.
+
+---
+
+#### Option 2: Cloudflare D1 (REST API Mode)
+
+**Advantages:**
+- No need to modify `wrangler.toml`
+- Can be used from external services
+- Same free tier as binding mode
+
+**When to use:**
+- You cannot use Workers bindings
+- You need to access D1 from external APIs
+- You're testing before setting up bindings
+
+**Step 1: Create D1 Database**
+```bash
+wrangler login
+wrangler d1 create alist-ratelimit-db
+```
+
+Copy the `database_id` from the output.
+
+**Step 2: Get Your Cloudflare Account ID**
+```bash
+# Method 1: Using wrangler
+wrangler whoami
+
+# Output will show:
+# Account ID: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+# Method 2: From Dashboard
+# Visit https://dash.cloudflare.com/
+# Click on any domain > Right sidebar shows "Account ID"
+```
+
+**Step 3: Create API Token**
+
+Visit: https://dash.cloudflare.com/profile/api-tokens
+
+Click "Create Token" > Choose one of:
+
+**Option A: Use Template (Easier)**
+1. Find "Edit Cloudflare Workers" template
+2. Click "Use template"
+3. Add **D1 Edit** permission:
+   - Click "Add more" under Permissions
+   - Select: Account > D1 > Edit
+4. Click "Continue to summary"
+5. Click "Create Token"
+6. **Copy the token immediately** (you can't view it again)
+
+**Option B: Create Custom Token (More Secure)**
+1. Click "Create Custom Token"
+2. Give it a name: `D1 Rate Limit API Token`
+3. Add permissions:
+   - Account > D1 > Edit
+4. (Optional) Add IP filtering or TTL for security
+5. Click "Continue to summary"
+6. Click "Create Token"
+7. **Copy the token immediately**
+
+**Step 4: Set Environment Variables**
+
+For local development (`.dev.vars`):
+```env
+DB_MODE=d1-rest
+D1_ACCOUNT_ID=your-account-id-here
+D1_DATABASE_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+D1_API_TOKEN=your-api-token-here
+D1_TABLE_NAME=IP_LIMIT_TABLE  # Optional
+IPSUBNET_WINDOWTIME_LIMIT=100
+WINDOW_TIME=24h
+```
+
+For production (Cloudflare Dashboard):
+1. Go to Workers & Pages > Your Worker > Settings > Variables
+2. Add as **encrypted** secrets:
+   - `DB_MODE` = `d1-rest`
+   - `D1_ACCOUNT_ID` = your account ID
+   - `D1_DATABASE_ID` = your database ID
+   - `D1_API_TOKEN` = your API token (mark as secret)
+   - `D1_TABLE_NAME` = `IP_LIMIT_TABLE` (optional)
+   - `IPSUBNET_WINDOWTIME_LIMIT` = `100`
+   - `WINDOW_TIME` = `24h`
+
+**Step 5: Deploy**
+```bash
+npm run deploy
+```
+
+**⚠️ Important Notes:**
+- REST API mode has rate limits: ~1200 requests per 5 minutes per account
+- Higher latency than binding mode (~100-200ms extra)
+- Best for low-traffic scenarios or development
+- For production with high traffic, use binding mode instead
+
+---
+
+#### Option 3: Neon (PostgreSQL)
+
+**Configuration:**
+```env
+DB_MODE=neon
+POSTGRES_URL=postgresql://user:password@ep-xxx.neon.tech/neondb?sslmode=require
+IPSUBNET_WINDOWTIME_LIMIT=100
+WINDOW_TIME=24h
 ```
 
 ### Time Window Format
@@ -350,8 +561,9 @@ BLOCK_TIME=10m         # Default: 10m (additional block time when limit exceeded
 
 ### Database Schema
 
-The worker automatically creates the following table:
+The worker automatically creates the following table (all database modes use the same schema):
 
+**For SQL databases (D1, Neon):**
 ```sql
 CREATE TABLE IF NOT EXISTS IP_LIMIT_TABLE (
   IP_HASH TEXT PRIMARY KEY,        -- SHA256 hash of IP subnet
@@ -361,6 +573,19 @@ CREATE TABLE IF NOT EXISTS IP_LIMIT_TABLE (
   LAST_WINDOW_TIME INTEGER NOT NULL,-- Unix timestamp of window start
   BLOCK_UNTIL INTEGER               -- Unix timestamp when block expires (NULL if not blocked)
 );
+```
+
+**For NoSQL databases (Firebase):**
+Collection: `IP_LIMIT_TABLE` (configurable)
+Document structure:
+```json
+{
+  "IP_RANGE": "192.168.1.0/24",
+  "IP_ADDR": ["192.168.1.10", "192.168.1.20"],
+  "ACCESS_COUNT": 42,
+  "LAST_WINDOW_TIME": 1234567890,
+  "BLOCK_UNTIL": 1234567890  // or null
+}
 ```
 
 ### How It Works
@@ -397,26 +622,39 @@ Content-Type: application/json
 
 **Note:** The `retry-after` field (in seconds) is included in both the response body and the `Retry-After` HTTP header for client convenience.
 
-### Setup with Neon Serverless Postgres
-
-1. **Create Neon Database:**
-   - Visit https://neon.tech
-   - Create a new project
-   - Copy the connection string
-
-2. **Configure Environment:**
-   ```env
-   POSTGRES_URL=postgresql://neondb_owner:xxx@ep-xxx.neon.tech/neondb?sslmode=require&channel_binding=require
-   IPSUBNET_WINDOWTIME_LIMIT=100
-   WINDOW_TIME=24h
-   ```
-
-3. **Deploy:**
-   ```bash
-   npm run deploy
-   ```
+**Setup:**
+1. Visit https://neon.tech
+2. Create a new project
+3. Copy the connection string
+4. Add to environment variables
+5. Deploy: `npm run deploy`
 
 The worker will automatically create the `IP_LIMIT_TABLE` on first request.
+
+---
+
+#### Option 4: Firebase (Firestore)
+
+**Configuration:**
+```env
+DB_MODE=firebase
+FIREBASE_PROJECT_ID=your-project-id
+FIREBASE_PRIVATE_KEY=-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n
+FIREBASE_CLIENT_EMAIL=firebase-adminsdk@your-project.iam.gserviceaccount.com
+FIREBASE_PRIVATE_KEY_ID=your-private-key-id
+FIREBASE_COLLECTION=IP_LIMIT_TABLE  # Optional
+IPSUBNET_WINDOWTIME_LIMIT=100
+WINDOW_TIME=24h
+```
+
+**Setup:**
+1. Visit https://console.firebase.google.com
+2. Create a new project
+3. Go to Project Settings > Service Accounts
+4. Click "Generate New Private Key"
+5. Extract credentials from downloaded JSON
+6. Add to environment variables
+7. Deploy: `npm run deploy`
 
 ### Example Configurations
 
@@ -515,14 +753,29 @@ Check Cloudflare Workers logs for:
 
 ### Disabling Rate Limiting
 
-To disable, simply remove or leave empty any of the three required variables:
+To disable, simply remove `DB_MODE` or leave it empty:
 ```env
-POSTGRES_URL=
-# or
+DB_MODE=
+# or remove the variable entirely
+```
+
+Alternatively, remove any of the required rate limiting variables:
+```env
 IPSUBNET_WINDOWTIME_LIMIT=
 # or
 WINDOW_TIME=
 ```
+
+### Performance Comparison
+
+| Database | Latency | Free Tier | Best For |
+|----------|---------|-----------|----------|
+| D1 (Binding) | ~10-30ms | 5M reads/day | ⭐ Best overall performance |
+| D1 (REST) | ~100-200ms | 5M reads/day | Development/testing |
+| Neon | ~50-150ms | 0.5 GB storage | PostgreSQL features |
+| Firebase | ~100-300ms | 50K reads/day | NoSQL flexibility |
+
+**Recommendation:** Use D1 with binding mode for production deployments.
 
 ## Troubleshooting
 

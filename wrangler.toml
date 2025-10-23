@@ -22,7 +22,7 @@ compatibility_date = "2024-01-01"
 # EXCEPT_ACTION = "block-except"
 #
 # # Database Mode for IP Rate Limiting
-# # Options: "neon" (PostgreSQL), "firebase" (Firestore)
+# # Options: "neon" (PostgreSQL), "firebase" (Firestore), "d1" (Cloudflare D1 Binding), "d1-rest" (Cloudflare D1 REST API)
 # # If not set, rate limiting is completely disabled
 # DB_MODE = ""
 #
@@ -42,6 +42,25 @@ compatibility_date = "2024-01-01"
 # FIREBASE_CLIENT_EMAIL = "firebase-adminsdk@your-project.iam.gserviceaccount.com"
 # FIREBASE_PRIVATE_KEY_ID = "your-private-key-id"
 # FIREBASE_COLLECTION = "IP_LIMIT_TABLE"  # Optional, defaults to IP_LIMIT_TABLE
+#
+# # D1 (Cloudflare D1 Binding) Rate Limiting - requires DB_MODE="d1"
+# # Note: You must also configure d1_databases binding below
+# D1_DATABASE_BINDING = "DB"  # Optional, defaults to "DB"
+# D1_TABLE_NAME = "IP_LIMIT_TABLE"  # Optional, defaults to IP_LIMIT_TABLE
+#
+# # D1 REST API Rate Limiting - requires DB_MODE="d1-rest"
+# # Use this mode when you cannot use Workers binding (e.g., external API calls)
+# D1_ACCOUNT_ID = "your-cloudflare-account-id"
+# D1_DATABASE_ID = "your-d1-database-id"
+# D1_API_TOKEN = "your-cloudflare-api-token"
+# D1_TABLE_NAME = "IP_LIMIT_TABLE"  # Optional, defaults to IP_LIMIT_TABLE
+
+# D1 Database Binding (for DB_MODE="d1")
+# Uncomment and configure this section if using D1 binding mode
+# [[d1_databases]]
+# binding = "DB"  # Must match D1_DATABASE_BINDING env var (or use default "DB")
+# database_name = "alist-ratelimit-db"
+# database_id = "your-d1-database-id"
 
 # For local development, create a .dev.vars file with:
 # TOKEN=your-token
