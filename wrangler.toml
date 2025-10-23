@@ -29,6 +29,7 @@ compatibility_date = "2024-01-01"
 # IPV6_SUFFIX = "/60"
 # PG_ERROR_HANDLE = "fail-closed"
 # CLEANUP_PERCENTAGE = "1"
+# BLOCK_TIME = "10m"
 
 # For local development, create a .dev.vars file with:
 # TOKEN=your-token

@@ -98,6 +98,8 @@ const resolveConfig = (env = {}) => {
   const pgErrorHandle = env.PG_ERROR_HANDLE && typeof env.PG_ERROR_HANDLE === 'string'
     ? env.PG_ERROR_HANDLE.trim().toLowerCase()
     : 'fail-closed';
+  const blockTime = env.BLOCK_TIME && typeof env.BLOCK_TIME === 'string' ? env.BLOCK_TIME.trim() : '10m';
+  const blockTimeSeconds = parseWindowTime(blockTime);
 
   // Parse cleanup percentage (default 1%)
   const cleanupPercentage = parseInteger(env.CLEANUP_PERCENTAGE, 1);
@@ -139,6 +141,7 @@ const resolveConfig = (env = {}) => {
     ipv6Suffix,
     pgErrorHandle: validPgErrorHandle,
     cleanupProbability,
+    blockTimeSeconds,
   };
 };
 
@@ -357,6 +360,7 @@ const handleInfo = async (request, config) => {
       ipv4Suffix: config.ipv4Suffix,
       ipv6Suffix: config.ipv6Suffix,
       pgErrorHandle: config.pgErrorHandle,
+      blockTimeSeconds: config.blockTimeSeconds,
     });
 
     if (!rateLimitResult.allowed) {
@@ -523,6 +527,7 @@ const handleFileRequest = async (request, config) => {
         ipv4Suffix: config.ipv4Suffix,
         ipv6Suffix: config.ipv6Suffix,
         pgErrorHandle: config.pgErrorHandle,
+        blockTimeSeconds: config.blockTimeSeconds,
       });
 
       if (!rateLimitResult.allowed) {

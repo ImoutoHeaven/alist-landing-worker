@@ -13,7 +13,8 @@ const ensureTable = async (sql) => {
       IP_RANGE TEXT NOT NULL,
       IP_ADDR TEXT NOT NULL,
       ACCESS_COUNT INTEGER NOT NULL,
-      LAST_WINDOW_TIME INTEGER NOT NULL
+      LAST_WINDOW_TIME INTEGER NOT NULL,
+      BLOCK_UNTIL INTEGER
     )
   `;
 };
@@ -29,6 +30,7 @@ const ensureTable = async (sql) => {
  * @param {string} config.ipv6Suffix - IPv6 subnet suffix
  * @param {string} config.pgErrorHandle - Error handling strategy ('fail-open' or 'fail-closed')
  * @param {number} config.cleanupProbability - Probability of triggering cleanup (0.0 to 1.0)
+ * @param {number} config.blockTimeSeconds - Additional block time in seconds when limit exceeded
  * @returns {Promise<{allowed: boolean, ipSubnet?: string, retryAfter?: number, error?: string}>}
  */
 export const checkRateLimit = async (ip, config) => {
@@ -65,7 +67,7 @@ export const checkRateLimit = async (ip, config) => {
 
     // Query for existing record
     const records = await sql`
-      SELECT IP_HASH, IP_RANGE, IP_ADDR, ACCESS_COUNT, LAST_WINDOW_TIME
+      SELECT IP_HASH, IP_RANGE, IP_ADDR, ACCESS_COUNT, LAST_WINDOW_TIME, BLOCK_UNTIL
       FROM IP_LIMIT_TABLE
       WHERE IP_HASH = ${ipHash}
     `;
@@ -84,8 +86,8 @@ export const checkRateLimit = async (ip, config) => {
     // If no record exists, create a new one
     if (!records || records.length === 0) {
       await sql`
-        INSERT INTO IP_LIMIT_TABLE (IP_HASH, IP_RANGE, IP_ADDR, ACCESS_COUNT, LAST_WINDOW_TIME)
-        VALUES (${ipHash}, ${ipSubnet}, ${JSON.stringify([ip])}, 1, ${now})
+        INSERT INTO IP_LIMIT_TABLE (IP_HASH, IP_RANGE, IP_ADDR, ACCESS_COUNT, LAST_WINDOW_TIME, BLOCK_UNTIL)
+        VALUES (${ipHash}, ${ipSubnet}, ${JSON.stringify([ip])}, 1, ${now}, NULL)
       `;
       triggerCleanup();
       return { allowed: true };
@@ -96,28 +98,67 @@ export const checkRateLimit = async (ip, config) => {
     const lastWindowTime = Number.parseInt(record.last_window_time, 10);
     const currentCount = Number.parseInt(record.access_count, 10);
     const diff = now - lastWindowTime;
+    const blockUntil = record.block_until ? Number.parseInt(record.block_until, 10) : null;
 
-    // If time window has expired, reset count
-    if (diff >= config.windowTimeSeconds) {
+    // Priority 1: Check if IP is currently blocked (BLOCK_UNTIL)
+    if (blockUntil && blockUntil > now) {
+      // Still blocked, return 429 with retry after
+      const retryAfter = blockUntil - now;
+      return {
+        allowed: false,
+        ipSubnet,
+        retryAfter: Math.max(1, retryAfter),
+      };
+    }
+
+    // Priority 2: If BLOCK_UNTIL has expired, clear it and reset counter
+    if (blockUntil && blockUntil <= now) {
       await sql`
         UPDATE IP_LIMIT_TABLE
-        SET ACCESS_COUNT = 1, LAST_WINDOW_TIME = ${now}, IP_ADDR = ${JSON.stringify([ip])}
+        SET ACCESS_COUNT = 1, LAST_WINDOW_TIME = ${now}, IP_ADDR = ${JSON.stringify([ip])}, BLOCK_UNTIL = NULL
         WHERE IP_HASH = ${ipHash}
       `;
       triggerCleanup();
       return { allowed: true };
     }
 
-    // Within time window
-    // Check if current count has reached the limit (before incrementing)
+    // Priority 3: If time window has expired, reset count
+    if (diff >= config.windowTimeSeconds) {
+      await sql`
+        UPDATE IP_LIMIT_TABLE
+        SET ACCESS_COUNT = 1, LAST_WINDOW_TIME = ${now}, IP_ADDR = ${JSON.stringify([ip])}, BLOCK_UNTIL = NULL
+        WHERE IP_HASH = ${ipHash}
+      `;
+      triggerCleanup();
+      return { allowed: true };
+    }
+
+    // Priority 4: Within time window, check if limit reached
     if (currentCount >= config.limit) {
-      // Rate limit exceeded, do not increment count
-      const retryAfter = config.windowTimeSeconds - diff;
-      return {
-        allowed: false,
-        ipSubnet,
-        retryAfter: Math.max(1, retryAfter), // Ensure at least 1 second
-      };
+      // Rate limit exceeded, set BLOCK_UNTIL if blockTimeSeconds configured
+      const blockTimeSeconds = config.blockTimeSeconds || 0;
+      if (blockTimeSeconds > 0) {
+        const newBlockUntil = now + blockTimeSeconds;
+        await sql`
+          UPDATE IP_LIMIT_TABLE
+          SET BLOCK_UNTIL = ${newBlockUntil}
+          WHERE IP_HASH = ${ipHash}
+        `;
+        const retryAfter = blockTimeSeconds;
+        return {
+          allowed: false,
+          ipSubnet,
+          retryAfter: Math.max(1, retryAfter),
+        };
+      } else {
+        // No block time configured, use original behavior
+        const retryAfter = config.windowTimeSeconds - diff;
+        return {
+          allowed: false,
+          ipSubnet,
+          retryAfter: Math.max(1, retryAfter),
+        };
+      }
     }
 
     // Still within limit, increment count

@@ -60,6 +60,7 @@ Set environment variables in Cloudflare Dashboard:
    - `IPV6_SUFFIX` (plain) - Optional: IPv6 subnet mask (default: /60)
    - `PG_ERROR_HANDLE` (plain) - Optional: fail-closed or fail-open (default: fail-closed)
    - `CLEANUP_PERCENTAGE` (plain) - Optional: Cleanup probability 0-100 (default: 1)
+   - `BLOCK_TIME` (plain) - Optional: Additional block time when rate limit exceeded (default: 10m, format: s/m/h)
 
 ### 4. Build the Project
 ```bash
@@ -121,6 +122,7 @@ wrangler deploy
 | `IPV6_SUFFIX` | Plain | ❌ No | IPv6 subnet mask (default: `/60`). Examples: `/56`, `/60`, `/64` |
 | `PG_ERROR_HANDLE` | Plain | ❌ No | Error handling strategy: `fail-closed` (default, reject on DB errors) or `fail-open` (allow on DB errors) |
 | `CLEANUP_PERCENTAGE` | Plain | ❌ No | Cleanup probability in percentage (default: `1`). Range: 0-100. Removes records older than `WINDOW_TIME × 2` |
+| `BLOCK_TIME` | Plain | ❌ No | Additional block time when rate limit exceeded (default: `10m`). Format: `{number}{unit}` where unit is `s`/`m`/`h`. Examples: `30s`, `10m`, `2h` |
 
 ## Testing
 
@@ -310,6 +312,7 @@ IPV4_SUFFIX=/24        # Default: /32 (single IP)
 IPV6_SUFFIX=/60        # Default: /60
 PG_ERROR_HANDLE=fail-closed  # Default: fail-closed
 CLEANUP_PERCENTAGE=1   # Default: 1 (1% probability)
+BLOCK_TIME=10m         # Default: 10m (additional block time when limit exceeded)
 ```
 
 ### Time Window Format
@@ -353,8 +356,10 @@ The worker automatically creates the following table:
 CREATE TABLE IF NOT EXISTS IP_LIMIT_TABLE (
   IP_HASH TEXT PRIMARY KEY,        -- SHA256 hash of IP subnet
   IP_RANGE TEXT NOT NULL,           -- Original IP subnet (e.g., "192.168.1.0/24")
+  IP_ADDR TEXT NOT NULL,            -- JSON array of unique IPs in this subnet
   ACCESS_COUNT INTEGER NOT NULL,    -- Number of requests in current window
-  LAST_WINDOW_TIME INTEGER NOT NULL -- Unix timestamp of window start
+  LAST_WINDOW_TIME INTEGER NOT NULL,-- Unix timestamp of window start
+  BLOCK_UNTIL INTEGER               -- Unix timestamp when block expires (NULL if not blocked)
 );
 ```
 
@@ -366,9 +371,11 @@ CREATE TABLE IF NOT EXISTS IP_LIMIT_TABLE (
 4. Query database for existing record:
    - **No record**: Create new entry with count=1, allow request
    - **Record exists**:
-     - If time window expired: Reset count=1, update timestamp, allow request
-     - If within window and count < limit: Increment count, allow request
-     - If within window and count >= limit: Return 429, **do not increment**
+     - **Priority 1**: If `BLOCK_UNTIL` is set and not expired: Return 429 with retry after remaining block time
+     - **Priority 2**: If `BLOCK_UNTIL` expired: Clear block, reset count=1, allow request
+     - **Priority 3**: If time window expired: Reset count=1, clear block, allow request
+     - **Priority 4**: If within window and count < limit: Increment count, allow request
+     - **Priority 5**: If within window and count >= limit: Set `BLOCK_UNTIL = now + BLOCK_TIME`, return 429
 
 ### Rate Limit Response
 
@@ -419,6 +426,7 @@ IPV4_SUFFIX=/32
 IPV6_SUFFIX=/64
 PG_ERROR_HANDLE=fail-closed
 CLEANUP_PERCENTAGE=1
+BLOCK_TIME=30m
 ```
 
 **Subnet-based limiting (4 hours):**
@@ -430,6 +438,7 @@ IPV4_SUFFIX=/24
 IPV6_SUFFIX=/60
 PG_ERROR_HANDLE=fail-open
 CLEANUP_PERCENTAGE=2
+BLOCK_TIME=15m
 ```
 
 **Short burst protection (30 minutes):**
@@ -441,6 +450,7 @@ IPV4_SUFFIX=/32
 IPV6_SUFFIX=/64
 PG_ERROR_HANDLE=fail-closed
 CLEANUP_PERCENTAGE=5
+BLOCK_TIME=10m
 ```
 
 ### Automatic Data Cleanup
