@@ -24,6 +24,13 @@ export const parseInteger = (value, defaultValue) => {
   return parsed;
 };
 
+export const parseNumber = (value, defaultValue) => {
+  if (value === undefined || value === null || value === '') return defaultValue;
+  const parsed = Number.parseFloat(value);
+  if (Number.isNaN(parsed)) return defaultValue;
+  return parsed;
+};
+
 /**
  * Parse time window string (e.g., "24h", "4h", "30m", "10s") to seconds
  * @param {string} value - Time window string

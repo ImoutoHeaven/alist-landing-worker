@@ -40,7 +40,7 @@ persist = true
 # IPV4_SUFFIX = "/32"
 # IPV6_SUFFIX = "/60"
 # PG_ERROR_HANDLE = "fail-closed"
-# CLEANUP_PERCENTAGE = "1"
+# CLEANUP_PERCENTAGE = "1"  # 0-100 inclusive, decimals allowed (e.g., "0.1" = 0.1%)
 # BLOCK_TIME = "10m"
 #
 # # Firebase (Firestore) Rate Limiting - requires DB_MODE="firebase"

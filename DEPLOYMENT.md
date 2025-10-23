@@ -65,7 +65,7 @@ Set environment variables in Cloudflare Dashboard:
    - `IPV4_SUFFIX` (plain) - Optional: IPv4 subnet mask (default: /32)
    - `IPV6_SUFFIX` (plain) - Optional: IPv6 subnet mask (default: /60)
    - `PG_ERROR_HANDLE` (plain) - Optional: fail-closed or fail-open (default: fail-closed)
-   - `CLEANUP_PERCENTAGE` (plain) - Optional: Cleanup probability 0-100 (default: 1)
+   - `CLEANUP_PERCENTAGE` (plain) - Optional: Cleanup probability 0-100 (default: 1, decimals allowed like 0.1 for 0.1%)
    - `BLOCK_TIME` (plain) - Optional: Additional block time when rate limit exceeded (default: 10m, format: s/m/h)
 
 ### 4. Build the Project
@@ -133,7 +133,7 @@ wrangler deploy
 | `IPV4_SUFFIX` | Plain | ❌ No | IPv4 subnet mask (default: `/32`). Examples: `/24`, `/32` |
 | `IPV6_SUFFIX` | Plain | ❌ No | IPv6 subnet mask (default: `/60`). Examples: `/56`, `/60`, `/64` |
 | `PG_ERROR_HANDLE` | Plain | ❌ No | Error handling strategy: `fail-closed` (default, reject on DB errors) or `fail-open` (allow on DB errors) |
-| `CLEANUP_PERCENTAGE` | Plain | ❌ No | Cleanup probability in percentage (default: `1`). Range: 0-100. Removes records older than `WINDOW_TIME × 2` |
+| `CLEANUP_PERCENTAGE` | Plain | ❌ No | Cleanup probability in percentage (default: `1`). Range: 0-100, decimals allowed (e.g., `0.1`). Removes records older than `WINDOW_TIME × 2` |
 | `BLOCK_TIME` | Plain | ❌ No | Additional block time when rate limit exceeded (default: `10m`). Format: `{number}{unit}` where unit is `s`/`m`/`h`. Examples: `30s`, `10m`, `2h` |
 
 ## Testing
@@ -347,7 +347,7 @@ WINDOW_TIME=24h
 IPV4_SUFFIX=/24        # Default: /32 (single IP)
 IPV6_SUFFIX=/60        # Default: /60
 PG_ERROR_HANDLE=fail-closed  # Default: fail-closed
-CLEANUP_PERCENTAGE=1   # Default: 1 (1% probability)
+CLEANUP_PERCENTAGE=1   # Default: 1 (1% probability). Supports decimals (e.g., 0.1 = 0.1%)
 BLOCK_TIME=10m         # Default: 10m (additional block time when limit exceeded)
 ```
 
@@ -701,18 +701,19 @@ The worker automatically cleans up expired records to prevent database bloat.
 **How it works:**
 - **Cleanup Threshold**: Records older than `WINDOW_TIME × 2` are deleted
 - **BLOCK_UNTIL Protection**: Records that are still blocked (BLOCK_UNTIL not expired) are **never deleted**, even if their window time is old
-- **Cleanup Probability**: Controlled by `CLEANUP_PERCENTAGE` (default: 1%)
+- **Cleanup Probability**: Controlled by `CLEANUP_PERCENTAGE` (default: 1%, decimals allowed)
 - **Trigger**: On each successful rate limit check
 - **Execution**: Asynchronous (doesn't block user requests)
 
 **Configuration:**
 
 ```env
-CLEANUP_PERCENTAGE=1   # 1% probability (default)
+CLEANUP_PERCENTAGE=1   # 1% probability (default). Supports decimals (e.g., 0.1 = 0.1%)
 ```
 
 **Probability Examples:**
 - `0` - Never cleanup (not recommended, database will grow indefinitely)
+- `0.1` - 0.1% probability (~1 cleanup per 1000 requests, very light touch)
 - `1` - 1% probability (default, ~1 cleanup per 100 requests)
 - `5` - 5% probability (aggressive, ~1 cleanup per 20 requests)
 - `10` - 10% probability (very aggressive, high database load)

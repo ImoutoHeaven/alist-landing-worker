@@ -3,6 +3,7 @@ import {
   uint8ToBase64,
   parseBoolean,
   parseInteger,
+  parseNumber,
   parseWindowTime,
 } from './utils.js';
 import { renderLandingPage } from './frontend.js';
@@ -104,8 +105,8 @@ const resolveConfig = (env = {}) => {
   const blockTimeSeconds = parseWindowTime(blockTime);
 
   // Parse cleanup percentage (default 1%)
-  const cleanupPercentage = parseInteger(env.CLEANUP_PERCENTAGE, 1);
-  // Clamp between 0 and 100
+  const cleanupPercentage = parseNumber(env.CLEANUP_PERCENTAGE, 1);
+  // Clamp between 0 and 100 (supports decimal percentages)
   const validCleanupPercentage = Math.max(0, Math.min(100, cleanupPercentage));
   // Convert to probability (0.0 to 1.0)
   const cleanupProbability = validCleanupPercentage / 100;
