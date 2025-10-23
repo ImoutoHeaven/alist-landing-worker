@@ -1,6 +1,126 @@
 import * as Firestore from 'fireworkers';
 import { calculateIPSubnet, sha256Hash } from '../utils.js';
 
+const FIRESTORE_BASE = 'https://firestore.googleapis.com/v1';
+const FIRESTORE_MAX_RETRIES = 3;
+
+const encodeFirestoreValue = (value) => {
+  if (value === null || value === undefined) {
+    return { nullValue: 'NULL_VALUE' };
+  }
+  if (Array.isArray(value)) {
+    return {
+      arrayValue: {
+        values: value.map(encodeFirestoreValue),
+      },
+    };
+  }
+  if (typeof value === 'object') {
+    const entries = Object.entries(value).map(([key, nested]) => [key, encodeFirestoreValue(nested)]);
+    return {
+      mapValue: {
+        fields: Object.fromEntries(entries),
+      },
+    };
+  }
+  if (typeof value === 'number') {
+    if (Number.isInteger(value)) {
+      return { integerValue: value.toString() };
+    }
+    return { doubleValue: value };
+  }
+  if (typeof value === 'boolean') {
+    return { booleanValue: value };
+  }
+  return { stringValue: String(value) };
+};
+
+const buildFirestoreDocument = (fields) => ({
+  fields: Object.fromEntries(
+    Object.entries(fields).map(([key, value]) => [key, encodeFirestoreValue(value)]),
+  ),
+});
+
+const firestoreCollectionEndpoint = (projectId, collectionName) => {
+  const encodedCollection = collectionName
+    .split('/')
+    .map((segment) => encodeURIComponent(segment))
+    .join('/');
+  return `${FIRESTORE_BASE}/projects/${projectId}/databases/(default)/documents/${encodedCollection}`;
+};
+
+const firestoreDocumentEndpoint = (projectId, collectionName, docId) => {
+  const encodedCollection = collectionName
+    .split('/')
+    .map((segment) => encodeURIComponent(segment))
+    .join('/');
+  const encodedDocId = encodeURIComponent(docId);
+  return `${FIRESTORE_BASE}/projects/${projectId}/databases/(default)/documents/${encodedCollection}/${encodedDocId}`;
+};
+
+const parseFirestoreError = async (response) => {
+  let errorPayload = null;
+  try {
+    errorPayload = await response.json();
+  } catch (error) {
+    // Ignore JSON parse errors; fall back to status text
+  }
+  const message = errorPayload?.error?.message || `Firestore request failed with status ${response.status}`;
+  const error = new Error(message);
+  error.status = response.status;
+  if (errorPayload?.error?.status) {
+    error.code = errorPayload.error.status;
+  }
+  throw error;
+};
+
+const createFirestoreDocument = async (db, collectionName, docId, fields) => {
+  const endpoint = `${firestoreCollectionEndpoint(db.project_id, collectionName)}?documentId=${encodeURIComponent(docId)}`;
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${db.jwt}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(buildFirestoreDocument(fields)),
+  });
+  if (!response.ok) {
+    await parseFirestoreError(response);
+  }
+  return response.json();
+};
+
+const patchFirestoreDocument = async (db, collectionName, docId, fields, updateTime) => {
+  const endpoint = firestoreDocumentEndpoint(db.project_id, collectionName, docId);
+  const payload = buildFirestoreDocument(fields);
+  if (updateTime) {
+    payload.currentDocument = { updateTime };
+  }
+  const response = await fetch(endpoint, {
+    method: 'PATCH',
+    headers: {
+      Authorization: `Bearer ${db.jwt}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    await parseFirestoreError(response);
+  }
+  return response.json();
+};
+
+const isConcurrencyConflict = (error) => {
+  if (!error || typeof error !== 'object') return false;
+  if (error.code === 'ALREADY_EXISTS' || error.code === 'FAILED_PRECONDITION') {
+    return true;
+  }
+  if (error.status === 409 || error.status === 412) {
+    return true;
+  }
+  return false;
+};
+
 /**
  * Check and update rate limit for an IP address using Firebase Firestore
  * @param {string} ip - Client IP address
@@ -86,95 +206,115 @@ export const checkRateLimit = async (ip, config) => {
       }
     };
 
-    // Try to get existing document
-    let doc = null;
-    try {
-      doc = await Firestore.get(db, collectionName, ipHash);
-    } catch (error) {
-      // Document doesn't exist - this is expected for first request from this IP subnet
-      // Firestore.get() throws error when document not found
-    }
+    for (let attempt = 0; attempt < FIRESTORE_MAX_RETRIES; attempt += 1) {
+      let doc = null;
+      let docUpdateTime = '';
+      try {
+        doc = await Firestore.get(db, collectionName, ipHash);
+        docUpdateTime = doc?.updateTime || '';
+      } catch (error) {
+        doc = null;
+      }
 
-    // If no document exists, create a new one using update (which does upsert)
-    if (!doc) {
-      await Firestore.update(db, collectionName, ipHash, {
-        IP_RANGE: ipSubnet,
-        IP_ADDR: [ip],
-        ACCESS_COUNT: 1,
-        LAST_WINDOW_TIME: now,
-        BLOCK_UNTIL: null,
-      });
-      triggerCleanup();
-      return { allowed: true };
-    }
+      if (!doc) {
+        try {
+          await createFirestoreDocument(db, collectionName, ipHash, {
+            IP_RANGE: ipSubnet,
+            IP_ADDR: [ip],
+            ACCESS_COUNT: 1,
+            LAST_WINDOW_TIME: now,
+            BLOCK_UNTIL: null,
+          });
+          triggerCleanup();
+          return { allowed: true };
+        } catch (createError) {
+          if (isConcurrencyConflict(createError)) {
+            continue;
+          }
+          throw createError;
+        }
+      }
 
-    // Document exists, get data
-    // Note: fireworkers returns {fields: {FIELD_NAME: value}} format
-    // Firestore integerValue is returned as string, need to convert to number
-    const data = doc.fields || {};
-    const lastWindowTime = Number(data.LAST_WINDOW_TIME) || 0;
-    const currentCount = Number(data.ACCESS_COUNT) || 0;
-    const diff = now - lastWindowTime;
-    const blockUntil = data.BLOCK_UNTIL ? Number(data.BLOCK_UNTIL) : null;
+      const data = doc?.fields || {};
+      const ipRangeValue = data.IP_RANGE || ipSubnet;
+      const lastWindowTime = Number(data.LAST_WINDOW_TIME) || 0;
+      const currentCount = Number(data.ACCESS_COUNT) || 0;
+      const diff = now - lastWindowTime;
+      const blockUntil = data.BLOCK_UNTIL ? Number(data.BLOCK_UNTIL) : null;
+      const existingIPs = Array.isArray(data.IP_ADDR) ? [...data.IP_ADDR] : [];
 
-    // Priority 1: Check if IP is currently blocked (BLOCK_UNTIL)
-    if (blockUntil && blockUntil > now) {
-      // Still blocked, return 429 with retry after
-      const retryAfter = blockUntil - now;
-      return {
-        allowed: false,
-        ipSubnet,
-        retryAfter: Math.max(1, retryAfter),
-      };
-    }
-
-    // Priority 2: If BLOCK_UNTIL has expired, clear it and reset counter
-    if (blockUntil && blockUntil <= now) {
-      await Firestore.update(db, collectionName, ipHash, {
-        IP_RANGE: data.IP_RANGE || ipSubnet,
-        ACCESS_COUNT: 1,
-        LAST_WINDOW_TIME: now,
-        IP_ADDR: [ip],
-        BLOCK_UNTIL: null,
-      });
-      triggerCleanup();
-      return { allowed: true };
-    }
-
-    // Priority 3: If time window has expired, reset count
-    if (diff >= config.windowTimeSeconds) {
-      await Firestore.update(db, collectionName, ipHash, {
-        IP_RANGE: data.IP_RANGE || ipSubnet,
-        ACCESS_COUNT: 1,
-        LAST_WINDOW_TIME: now,
-        IP_ADDR: [ip],
-        BLOCK_UNTIL: null,
-      });
-      triggerCleanup();
-      return { allowed: true };
-    }
-
-    // Priority 4: Within time window, check if limit reached
-    if (currentCount >= config.limit) {
-      // Rate limit exceeded, set BLOCK_UNTIL if blockTimeSeconds configured
-      const blockTimeSeconds = config.blockTimeSeconds || 0;
-      if (blockTimeSeconds > 0) {
-        const newBlockUntil = now + blockTimeSeconds;
-        await Firestore.update(db, collectionName, ipHash, {
-          IP_RANGE: data.IP_RANGE || ipSubnet,
-          ACCESS_COUNT: currentCount,
-          LAST_WINDOW_TIME: lastWindowTime,
-          IP_ADDR: data.IP_ADDR || [ip],
-          BLOCK_UNTIL: newBlockUntil,
-        });
-        const retryAfter = blockTimeSeconds;
+      if (blockUntil && blockUntil > now) {
+        const retryAfter = blockUntil - now;
         return {
           allowed: false,
           ipSubnet,
           retryAfter: Math.max(1, retryAfter),
         };
-      } else {
-        // No block time configured, use original behavior
+      }
+
+      if (blockUntil && blockUntil <= now) {
+        try {
+          await patchFirestoreDocument(db, collectionName, ipHash, {
+            IP_RANGE: ipRangeValue,
+            ACCESS_COUNT: 1,
+            LAST_WINDOW_TIME: now,
+            IP_ADDR: [ip],
+            BLOCK_UNTIL: null,
+          }, docUpdateTime);
+          triggerCleanup();
+          return { allowed: true };
+        } catch (patchError) {
+          if (isConcurrencyConflict(patchError)) {
+            continue;
+          }
+          throw patchError;
+        }
+      }
+
+      if (diff >= config.windowTimeSeconds) {
+        try {
+          await patchFirestoreDocument(db, collectionName, ipHash, {
+            IP_RANGE: ipRangeValue,
+            ACCESS_COUNT: 1,
+            LAST_WINDOW_TIME: now,
+            IP_ADDR: [ip],
+            BLOCK_UNTIL: null,
+          }, docUpdateTime);
+          triggerCleanup();
+          return { allowed: true };
+        } catch (patchError) {
+          if (isConcurrencyConflict(patchError)) {
+            continue;
+          }
+          throw patchError;
+        }
+      }
+
+      if (currentCount >= config.limit) {
+        const blockTimeSeconds = config.blockTimeSeconds || 0;
+        if (blockTimeSeconds > 0) {
+          const newBlockUntil = now + blockTimeSeconds;
+          try {
+            await patchFirestoreDocument(db, collectionName, ipHash, {
+              IP_RANGE: ipRangeValue,
+              ACCESS_COUNT: currentCount,
+              LAST_WINDOW_TIME: lastWindowTime,
+              IP_ADDR: existingIPs.length > 0 ? existingIPs : [ip],
+              BLOCK_UNTIL: newBlockUntil,
+            }, docUpdateTime);
+          } catch (patchError) {
+            if (isConcurrencyConflict(patchError)) {
+              continue;
+            }
+            throw patchError;
+          }
+          const retryAfter = blockTimeSeconds;
+          return {
+            allowed: false,
+            ipSubnet,
+            retryAfter: Math.max(1, retryAfter),
+          };
+        }
         const retryAfter = config.windowTimeSeconds - diff;
         return {
           allowed: false,
@@ -182,33 +322,29 @@ export const checkRateLimit = async (ip, config) => {
           retryAfter: Math.max(1, retryAfter),
         };
       }
+
+      const shouldUpdateIPs = !existingIPs.includes(ip);
+      const nextIPs = shouldUpdateIPs ? [...existingIPs, ip] : existingIPs;
+
+      try {
+        await patchFirestoreDocument(db, collectionName, ipHash, {
+          IP_RANGE: ipRangeValue,
+          ACCESS_COUNT: currentCount + 1,
+          LAST_WINDOW_TIME: lastWindowTime,
+          IP_ADDR: nextIPs,
+          BLOCK_UNTIL: blockUntil,
+        }, docUpdateTime);
+        triggerCleanup();
+        return { allowed: true };
+      } catch (patchError) {
+        if (isConcurrencyConflict(patchError)) {
+          continue;
+        }
+        throw patchError;
+      }
     }
 
-    // Still within limit, increment count
-    // Check if we need to update IP_ADDR with new unique IP
-    const existingIPs = data.IP_ADDR || [];
-    const shouldUpdateIPs = !existingIPs.includes(ip);
-
-    if (shouldUpdateIPs) {
-      await Firestore.update(db, collectionName, ipHash, {
-        IP_RANGE: data.IP_RANGE || ipSubnet,
-        ACCESS_COUNT: currentCount + 1,
-        LAST_WINDOW_TIME: lastWindowTime,
-        IP_ADDR: [...existingIPs, ip],
-        BLOCK_UNTIL: blockUntil,
-      });
-    } else {
-      await Firestore.update(db, collectionName, ipHash, {
-        IP_RANGE: data.IP_RANGE || ipSubnet,
-        ACCESS_COUNT: currentCount + 1,
-        LAST_WINDOW_TIME: lastWindowTime,
-        IP_ADDR: existingIPs,
-        BLOCK_UNTIL: blockUntil,
-      });
-    }
-
-    triggerCleanup();
-    return { allowed: true };
+    throw new Error('Firestore concurrency retry limit exceeded');
   } catch (error) {
     // Handle errors based on pgErrorHandle strategy
     const errorMessage = error instanceof Error ? error.message : String(error);

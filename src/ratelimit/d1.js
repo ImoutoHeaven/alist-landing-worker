@@ -75,13 +75,6 @@ export const checkRateLimit = async (ip, config) => {
     const now = Math.floor(Date.now() / 1000);
 
     // Query for existing record
-    const stmt = db.prepare(
-      `SELECT IP_HASH, IP_RANGE, IP_ADDR, ACCESS_COUNT, LAST_WINDOW_TIME, BLOCK_UNTIL
-       FROM ${tableName}
-       WHERE IP_HASH = ?`
-    );
-    const result = await stmt.bind(ipHash).first();
-
     // Probabilistic cleanup helper
     const triggerCleanup = () => {
       // Use configured cleanup probability (default 1% = 0.01)
@@ -110,111 +103,126 @@ export const checkRateLimit = async (ip, config) => {
       }
     };
 
-    // If no record exists, create a new one
-    if (!result) {
-      const insertStmt = db.prepare(
-        `INSERT INTO ${tableName} (IP_HASH, IP_RANGE, IP_ADDR, ACCESS_COUNT, LAST_WINDOW_TIME, BLOCK_UNTIL)
-         VALUES (?, ?, ?, ?, ?, ?)`
-      );
-      await insertStmt.bind(ipHash, ipSubnet, JSON.stringify([ip]), 1, now, null).run();
-      triggerCleanup();
-      return { allowed: true };
-    }
+    // Wrap read/modify/write in a transaction to avoid race conditions on INSERT
+    await db.prepare('BEGIN IMMEDIATE').run();
 
-    // Record exists, check time window
-    const lastWindowTime = Number.parseInt(result.LAST_WINDOW_TIME, 10);
-    const currentCount = Number.parseInt(result.ACCESS_COUNT, 10);
-    const diff = now - lastWindowTime;
-    const blockUntil = result.BLOCK_UNTIL ? Number.parseInt(result.BLOCK_UNTIL, 10) : null;
+    const stmt = db.prepare(
+      `SELECT IP_HASH, IP_RANGE, IP_ADDR, ACCESS_COUNT, LAST_WINDOW_TIME, BLOCK_UNTIL
+       FROM ${tableName}
+       WHERE IP_HASH = ?`
+    );
+    const result = await stmt.bind(ipHash).first();
 
-    // Priority 1: Check if IP is currently blocked (BLOCK_UNTIL)
-    if (blockUntil && blockUntil > now) {
-      // Still blocked, return 429 with retry after
-      const retryAfter = blockUntil - now;
-      return {
-        allowed: false,
-        ipSubnet,
-        retryAfter: Math.max(1, retryAfter),
-      };
-    }
+    let response = { allowed: true };
+    let shouldRunCleanup = false;
 
-    // Priority 2: If BLOCK_UNTIL has expired, clear it and reset counter
-    if (blockUntil && blockUntil <= now) {
-      const updateStmt = db.prepare(
-        `UPDATE ${tableName}
-         SET ACCESS_COUNT = ?, LAST_WINDOW_TIME = ?, IP_ADDR = ?, BLOCK_UNTIL = ?
-         WHERE IP_HASH = ?`
-      );
-      await updateStmt.bind(1, now, JSON.stringify([ip]), null, ipHash).run();
-      triggerCleanup();
-      return { allowed: true };
-    }
-
-    // Priority 3: If time window has expired, reset count
-    if (diff >= config.windowTimeSeconds) {
-      const updateStmt = db.prepare(
-        `UPDATE ${tableName}
-         SET ACCESS_COUNT = ?, LAST_WINDOW_TIME = ?, IP_ADDR = ?, BLOCK_UNTIL = ?
-         WHERE IP_HASH = ?`
-      );
-      await updateStmt.bind(1, now, JSON.stringify([ip]), null, ipHash).run();
-      triggerCleanup();
-      return { allowed: true };
-    }
-
-    // Priority 4: Within time window, check if limit reached
-    if (currentCount >= config.limit) {
-      // Rate limit exceeded, set BLOCK_UNTIL if blockTimeSeconds configured
-      const blockTimeSeconds = config.blockTimeSeconds || 0;
-      if (blockTimeSeconds > 0) {
-        const newBlockUntil = now + blockTimeSeconds;
-        const updateStmt = db.prepare(
-          `UPDATE ${tableName}
-           SET BLOCK_UNTIL = ?
-           WHERE IP_HASH = ?`
+    try {
+      // If no record exists, create a new one
+      if (!result) {
+        const insertStmt = db.prepare(
+          `INSERT INTO ${tableName} (IP_HASH, IP_RANGE, IP_ADDR, ACCESS_COUNT, LAST_WINDOW_TIME, BLOCK_UNTIL)
+           VALUES (?, ?, ?, ?, ?, ?)`
         );
-        await updateStmt.bind(newBlockUntil, ipHash).run();
-        const retryAfter = blockTimeSeconds;
-        return {
-          allowed: false,
-          ipSubnet,
-          retryAfter: Math.max(1, retryAfter),
-        };
+        await insertStmt.bind(ipHash, ipSubnet, JSON.stringify([ip]), 1, now, null).run();
+        shouldRunCleanup = true;
       } else {
-        // No block time configured, use original behavior
-        const retryAfter = config.windowTimeSeconds - diff;
-        return {
-          allowed: false,
-          ipSubnet,
-          retryAfter: Math.max(1, retryAfter),
-        };
+        // Record exists, check time window
+        const lastWindowTime = Number.parseInt(result.LAST_WINDOW_TIME, 10);
+        const currentCount = Number.parseInt(result.ACCESS_COUNT, 10);
+        const diff = now - lastWindowTime;
+        const blockUntil = result.BLOCK_UNTIL ? Number.parseInt(result.BLOCK_UNTIL, 10) : null;
+
+        // Priority 1: Check if IP is currently blocked (BLOCK_UNTIL)
+        if (blockUntil && blockUntil > now) {
+          const retryAfter = blockUntil - now;
+          response = {
+            allowed: false,
+            ipSubnet,
+            retryAfter: Math.max(1, retryAfter),
+          };
+        } else if (blockUntil && blockUntil <= now) {
+          // Priority 2: BLOCK_UNTIL expired, reset counter
+          const updateStmt = db.prepare(
+            `UPDATE ${tableName}
+             SET ACCESS_COUNT = ?, LAST_WINDOW_TIME = ?, IP_ADDR = ?, BLOCK_UNTIL = ?
+             WHERE IP_HASH = ?`
+          );
+          await updateStmt.bind(1, now, JSON.stringify([ip]), null, ipHash).run();
+          shouldRunCleanup = true;
+        } else if (diff >= config.windowTimeSeconds) {
+          // Priority 3: window expired, reset counter
+          const updateStmt = db.prepare(
+            `UPDATE ${tableName}
+             SET ACCESS_COUNT = ?, LAST_WINDOW_TIME = ?, IP_ADDR = ?, BLOCK_UNTIL = ?
+             WHERE IP_HASH = ?`
+          );
+          await updateStmt.bind(1, now, JSON.stringify([ip]), null, ipHash).run();
+          shouldRunCleanup = true;
+        } else if (currentCount >= config.limit) {
+          // Priority 4: limit reached
+          const blockTimeSeconds = config.blockTimeSeconds || 0;
+          if (blockTimeSeconds > 0) {
+            const newBlockUntil = now + blockTimeSeconds;
+            const updateStmt = db.prepare(
+              `UPDATE ${tableName}
+               SET BLOCK_UNTIL = ?
+               WHERE IP_HASH = ?`
+            );
+            await updateStmt.bind(newBlockUntil, ipHash).run();
+            const retryAfter = blockTimeSeconds;
+            response = {
+              allowed: false,
+              ipSubnet,
+              retryAfter: Math.max(1, retryAfter),
+            };
+          } else {
+            const retryAfter = config.windowTimeSeconds - diff;
+            response = {
+              allowed: false,
+              ipSubnet,
+              retryAfter: Math.max(1, retryAfter),
+            };
+          }
+        } else {
+          // Still within limit, increment count
+          const existingIPs = JSON.parse(result.IP_ADDR || '[]');
+          const shouldUpdateIPs = !existingIPs.includes(ip);
+
+          if (shouldUpdateIPs) {
+            const newIPAddr = JSON.stringify([...existingIPs, ip]);
+            const updateStmt = db.prepare(
+              `UPDATE ${tableName}
+               SET ACCESS_COUNT = ACCESS_COUNT + 1, IP_ADDR = ?
+               WHERE IP_HASH = ?`
+            );
+            await updateStmt.bind(newIPAddr, ipHash).run();
+          } else {
+            const updateStmt = db.prepare(
+              `UPDATE ${tableName}
+               SET ACCESS_COUNT = ACCESS_COUNT + 1
+               WHERE IP_HASH = ?`
+            );
+            await updateStmt.bind(ipHash).run();
+          }
+
+          shouldRunCleanup = true;
+        }
       }
+
+      await db.prepare('COMMIT').run();
+    } catch (txnError) {
+      try {
+        await db.prepare('ROLLBACK').run();
+      } catch (rollbackError) {
+        console.error('Rate limit rollback failed:', rollbackError instanceof Error ? rollbackError.message : String(rollbackError));
+      }
+      throw txnError;
     }
 
-    // Still within limit, increment count
-    // Check if we need to update IP_ADDR with new unique IP
-    const existingIPs = JSON.parse(result.IP_ADDR || '[]');
-    const shouldUpdateIPs = !existingIPs.includes(ip);
-
-    if (shouldUpdateIPs) {
-      const newIPAddr = JSON.stringify([...existingIPs, ip]);
-      const updateStmt = db.prepare(
-        `UPDATE ${tableName}
-         SET ACCESS_COUNT = ACCESS_COUNT + 1, IP_ADDR = ?
-         WHERE IP_HASH = ?`
-      );
-      await updateStmt.bind(newIPAddr, ipHash).run();
-    } else {
-      const updateStmt = db.prepare(
-        `UPDATE ${tableName}
-         SET ACCESS_COUNT = ACCESS_COUNT + 1
-         WHERE IP_HASH = ?`
-      );
-      await updateStmt.bind(ipHash).run();
+    if (shouldRunCleanup) {
+      triggerCleanup();
     }
-
-    triggerCleanup();
-    return { allowed: true };
+    return response;
   } catch (error) {
     // Handle errors based on pgErrorHandle strategy
     const errorMessage = error instanceof Error ? error.message : String(error);
