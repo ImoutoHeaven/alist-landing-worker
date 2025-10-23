@@ -2,6 +2,13 @@ name = "alist-landing-worker"
 main = "dist/worker.js"
 compatibility_date = "2024-01-01"
 
+[observability]
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+invocation_logs = true
+persist = true
+
 # Environment variables (configure these in Cloudflare Dashboard or use secrets)
 # [vars]
 # TOKEN = "your-hmac-token"

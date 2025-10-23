@@ -141,12 +141,25 @@ export const checkRateLimit = async (ip, config) => {
       }
     };
 
-    await executeQuery(accountId, databaseId, apiToken, 'BEGIN IMMEDIATE');
+    const insertSql = `INSERT OR IGNORE INTO ${tableName}
+                       (IP_HASH, IP_RANGE, IP_ADDR, ACCESS_COUNT, LAST_WINDOW_TIME, BLOCK_UNTIL)
+                       VALUES (?, ?, ?, ?, ?, ?)`;
+    const insertResult = await executeQuery(accountId, databaseId, apiToken, insertSql, [
+      ipHash,
+      ipSubnet,
+      JSON.stringify([ip]),
+      1,
+      now,
+      null
+    ]);
+    const inserted = insertResult.meta?.changes > 0;
+    if (inserted) {
+      triggerCleanup();
+      return { allowed: true };
+    }
 
-    let response = { allowed: true };
-    let shouldRunCleanup = false;
-
-    try {
+    const maxAttempts = 5;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       const selectSql = `SELECT IP_HASH, IP_RANGE, IP_ADDR, ACCESS_COUNT, LAST_WINDOW_TIME, BLOCK_UNTIL
                          FROM ${tableName}
                          WHERE IP_HASH = ?`;
@@ -154,9 +167,7 @@ export const checkRateLimit = async (ip, config) => {
       const records = queryResult.results || [];
 
       if (!records || records.length === 0) {
-        const insertSql = `INSERT INTO ${tableName} (IP_HASH, IP_RANGE, IP_ADDR, ACCESS_COUNT, LAST_WINDOW_TIME, BLOCK_UNTIL)
-                           VALUES (?, ?, ?, ?, ?, ?)`;
-        await executeQuery(accountId, databaseId, apiToken, insertSql, [
+        const retryInsert = await executeQuery(accountId, databaseId, apiToken, insertSql, [
           ipHash,
           ipSubnet,
           JSON.stringify([ip]),
@@ -164,90 +175,130 @@ export const checkRateLimit = async (ip, config) => {
           now,
           null
         ]);
-        shouldRunCleanup = true;
-      } else {
-        const record = records[0];
-        const lastWindowTime = Number.parseInt(record.LAST_WINDOW_TIME, 10);
-        const currentCount = Number.parseInt(record.ACCESS_COUNT, 10);
-        const diff = now - lastWindowTime;
-        const blockUntil = record.BLOCK_UNTIL ? Number.parseInt(record.BLOCK_UNTIL, 10) : null;
+        if (retryInsert.meta?.changes > 0) {
+          triggerCleanup();
+          return { allowed: true };
+        }
+        console.warn(`[Rate Limit] D1 REST insert race on attempt ${attempt + 1} for hash ${ipHash}`);
+        continue;
+      }
 
-        if (blockUntil && blockUntil > now) {
-          const retryAfter = blockUntil - now;
-          response = {
+      const record = records[0];
+      const lastWindowTime = Number.parseInt(record.LAST_WINDOW_TIME, 10);
+      const currentCount = Number.parseInt(record.ACCESS_COUNT, 10);
+      const diff = now - lastWindowTime;
+      const blockUntil = record.BLOCK_UNTIL ? Number.parseInt(record.BLOCK_UNTIL, 10) : null;
+      const ipAddrJson = record.IP_ADDR || '[]';
+
+      let existingIPs = [];
+      try {
+        const parsed = JSON.parse(ipAddrJson);
+        if (Array.isArray(parsed)) {
+          existingIPs = parsed;
+        }
+      } catch (error) {
+        existingIPs = [];
+      }
+
+      if (blockUntil && blockUntil > now) {
+        const retryAfter = blockUntil - now;
+        return {
+          allowed: false,
+          ipSubnet,
+          retryAfter: Math.max(1, retryAfter),
+        };
+      }
+
+      const whereParts = [
+        'IP_HASH = ?',
+        'ACCESS_COUNT = ?',
+        'LAST_WINDOW_TIME = ?',
+        'IP_ADDR = ?',
+      ];
+      const whereParams = [ipHash, currentCount, lastWindowTime, ipAddrJson];
+      if (blockUntil === null) {
+        whereParts.push('BLOCK_UNTIL IS NULL');
+      } else {
+        whereParts.push('BLOCK_UNTIL = ?');
+        whereParams.push(blockUntil);
+      }
+      const whereClause = whereParts.join(' AND ');
+
+      const updateAndReturn = async (sql, params, cleanupNeeded, responsePayload, debugContext) => {
+        const updateResult = await executeQuery(accountId, databaseId, apiToken, sql, params);
+        if (updateResult.meta?.changes > 0) {
+          if (cleanupNeeded) {
+            triggerCleanup();
+          }
+          return responsePayload;
+        }
+        console.warn(`[Rate Limit] D1 REST ${debugContext} concurrency retry ${attempt + 1} for hash ${ipHash}`);
+        return null;
+      };
+
+      if (blockUntil && blockUntil <= now) {
+        const updateSql = `UPDATE ${tableName}
+                           SET ACCESS_COUNT = ?, LAST_WINDOW_TIME = ?, IP_ADDR = ?, BLOCK_UNTIL = NULL
+                           WHERE ${whereClause}`;
+        const params = [1, now, JSON.stringify([ip]), ...whereParams];
+        const result = await updateAndReturn(updateSql, params, true, { allowed: true }, 'block reset');
+        if (result) return result;
+        continue;
+      }
+
+      if (diff >= config.windowTimeSeconds) {
+        const updateSql = `UPDATE ${tableName}
+                           SET ACCESS_COUNT = ?, LAST_WINDOW_TIME = ?, IP_ADDR = ?, BLOCK_UNTIL = NULL
+                           WHERE ${whereClause}`;
+        const params = [1, now, JSON.stringify([ip]), ...whereParams];
+        const result = await updateAndReturn(updateSql, params, true, { allowed: true }, 'window reset');
+        if (result) return result;
+        continue;
+      }
+
+      if (currentCount >= config.limit) {
+        const blockTimeSeconds = config.blockTimeSeconds || 0;
+        if (blockTimeSeconds > 0) {
+          const newBlockUntil = now + blockTimeSeconds;
+          const updateSql = `UPDATE ${tableName}
+                             SET BLOCK_UNTIL = ?
+                             WHERE ${whereClause}`;
+          const params = [newBlockUntil, ...whereParams];
+          const result = await updateAndReturn(updateSql, params, false, {
             allowed: false,
             ipSubnet,
-            retryAfter: Math.max(1, retryAfter),
-          };
-        } else if (blockUntil && blockUntil <= now) {
-          const updateSql = `UPDATE ${tableName}
-                             SET ACCESS_COUNT = ?, LAST_WINDOW_TIME = ?, IP_ADDR = ?, BLOCK_UNTIL = ?
-                             WHERE IP_HASH = ?`;
-          await executeQuery(accountId, databaseId, apiToken, updateSql, [1, now, JSON.stringify([ip]), null, ipHash]);
-          shouldRunCleanup = true;
-        } else if (diff >= config.windowTimeSeconds) {
-          const updateSql = `UPDATE ${tableName}
-                             SET ACCESS_COUNT = ?, LAST_WINDOW_TIME = ?, IP_ADDR = ?, BLOCK_UNTIL = ?
-                             WHERE IP_HASH = ?`;
-          await executeQuery(accountId, databaseId, apiToken, updateSql, [1, now, JSON.stringify([ip]), null, ipHash]);
-          shouldRunCleanup = true;
-        } else if (currentCount >= config.limit) {
-          const blockTimeSeconds = config.blockTimeSeconds || 0;
-          if (blockTimeSeconds > 0) {
-            const newBlockUntil = now + blockTimeSeconds;
-            const updateSql = `UPDATE ${tableName}
-                               SET BLOCK_UNTIL = ?
-                               WHERE IP_HASH = ?`;
-            await executeQuery(accountId, databaseId, apiToken, updateSql, [newBlockUntil, ipHash]);
-            const retryAfter = blockTimeSeconds;
-            response = {
-              allowed: false,
-              ipSubnet,
-              retryAfter: Math.max(1, retryAfter),
-            };
-          } else {
-            const retryAfter = config.windowTimeSeconds - diff;
-            response = {
-              allowed: false,
-              ipSubnet,
-              retryAfter: Math.max(1, retryAfter),
-            };
-          }
-        } else {
-          const existingIPs = JSON.parse(record.IP_ADDR || '[]');
-          const shouldUpdateIPs = !existingIPs.includes(ip);
-
-          if (shouldUpdateIPs) {
-            const newIPAddr = JSON.stringify([...existingIPs, ip]);
-            const updateSql = `UPDATE ${tableName}
-                               SET ACCESS_COUNT = ACCESS_COUNT + 1, IP_ADDR = ?
-                               WHERE IP_HASH = ?`;
-            await executeQuery(accountId, databaseId, apiToken, updateSql, [newIPAddr, ipHash]);
-          } else {
-            const updateSql = `UPDATE ${tableName}
-                               SET ACCESS_COUNT = ACCESS_COUNT + 1
-                               WHERE IP_HASH = ?`;
-            await executeQuery(accountId, databaseId, apiToken, updateSql, [ipHash]);
-          }
-
-          shouldRunCleanup = true;
+            retryAfter: Math.max(1, blockTimeSeconds),
+          }, 'block time set');
+          if (result) return result;
+          continue;
         }
+
+        const retryAfter = config.windowTimeSeconds - diff;
+        return {
+          allowed: false,
+          ipSubnet,
+          retryAfter: Math.max(1, retryAfter),
+        };
       }
 
-      await executeQuery(accountId, databaseId, apiToken, 'COMMIT');
-    } catch (txnError) {
-      try {
-        await executeQuery(accountId, databaseId, apiToken, 'ROLLBACK');
-      } catch (rollbackError) {
-        console.error('Rate limit rollback failed (REST):', rollbackError instanceof Error ? rollbackError.message : String(rollbackError));
-      }
-      throw txnError;
+      const shouldUpdateIPs = !existingIPs.includes(ip);
+      const nextIPs = shouldUpdateIPs ? [...existingIPs, ip] : existingIPs;
+      const newIPJson = JSON.stringify(nextIPs);
+      const updateSql = `UPDATE ${tableName}
+                         SET ACCESS_COUNT = ?, LAST_WINDOW_TIME = ?, IP_ADDR = ?, BLOCK_UNTIL = ?
+                         WHERE ${whereClause}`;
+      const params = [
+        currentCount + 1,
+        lastWindowTime,
+        newIPJson,
+        blockUntil,
+        ...whereParams,
+      ];
+      const result = await updateAndReturn(updateSql, params, true, { allowed: true }, 'counter increment');
+      if (result) return result;
     }
 
-    if (shouldRunCleanup) {
-      triggerCleanup();
-    }
-    return response;
+    throw new Error('D1 REST concurrency retry limit exceeded');
   } catch (error) {
     // Handle errors based on pgErrorHandle strategy
     const errorMessage = error instanceof Error ? error.message : String(error);
