@@ -1,5 +1,5 @@
 import { neon } from '@neondatabase/serverless';
-import { calculateIPSubnet, sha256Hash } from './utils.js';
+import { calculateIPSubnet, sha256Hash } from '../utils.js';
 
 /**
  * Ensure the IP_LIMIT_TABLE exists in the database
@@ -31,6 +31,7 @@ const ensureTable = async (sql) => {
  * @param {string} config.pgErrorHandle - Error handling strategy ('fail-open' or 'fail-closed')
  * @param {number} config.cleanupProbability - Probability of triggering cleanup (0.0 to 1.0)
  * @param {number} config.blockTimeSeconds - Additional block time in seconds when limit exceeded
+ * @param {Object} config.ctx - ExecutionContext for waitUntil (optional)
  * @returns {Promise<{allowed: boolean, ipSubnet?: string, retryAfter?: number, error?: string}>}
  */
 export const checkRateLimit = async (ip, config) => {
@@ -77,9 +78,26 @@ export const checkRateLimit = async (ip, config) => {
       // Use configured cleanup probability (default 1% = 0.01)
       const probability = config.cleanupProbability || 0.01;
       if (Math.random() < probability) {
-        cleanupExpiredRecords(sql, config.windowTimeSeconds).catch(() => {
-          // Silent catch - already logged in cleanupExpiredRecords
-        });
+        console.log(`[Rate Limit Cleanup] Triggered cleanup (probability: ${probability * 100}%)`);
+
+        // Use ctx.waitUntil to ensure cleanup completes even after response is sent
+        const cleanupPromise = cleanupExpiredRecords(sql, config.windowTimeSeconds)
+          .then((deletedCount) => {
+            console.log(`[Rate Limit Cleanup] Background cleanup finished: ${deletedCount} records deleted`);
+            return deletedCount;
+          })
+          .catch((error) => {
+            console.error('[Rate Limit Cleanup] Background cleanup failed:', error instanceof Error ? error.message : String(error));
+          });
+
+        if (config.ctx && config.ctx.waitUntil) {
+          // Cloudflare Workers context available, use waitUntil
+          config.ctx.waitUntil(cleanupPromise);
+          console.log(`[Rate Limit Cleanup] Cleanup scheduled in background (using ctx.waitUntil)`);
+        } else {
+          // No context available, cleanup may be interrupted
+          console.warn(`[Rate Limit Cleanup] No ctx.waitUntil available, cleanup may be interrupted`);
+        }
       }
     };
 
@@ -210,10 +228,11 @@ export const checkRateLimit = async (ip, config) => {
  * @returns {Promise<number>} - Number of deleted records
  */
 const cleanupExpiredRecords = async (sql, windowTimeSeconds) => {
+  const now = Math.floor(Date.now() / 1000);
+  const cutoffTime = now - (windowTimeSeconds * 2);
+
   try {
-    // Calculate cutoff time: 2x the window time for safety buffer
-    const now = Math.floor(Date.now() / 1000);
-    const cutoffTime = now - (windowTimeSeconds * 2);
+    console.log(`[Rate Limit Cleanup] Executing DELETE query (cutoff: ${cutoffTime}, windowTime: ${windowTimeSeconds}s)`);
 
     // Delete records where:
     // 1. LAST_WINDOW_TIME is older than cutoff (window expired)
@@ -226,14 +245,12 @@ const cleanupExpiredRecords = async (sql, windowTimeSeconds) => {
     `;
 
     const deletedCount = result.count || 0;
-    if (deletedCount > 0) {
-      console.log(`Cleaned up ${deletedCount} expired rate limit records (older than ${windowTimeSeconds * 2}s and not blocked)`);
-    }
+    console.log(`[Rate Limit Cleanup] DELETE completed: ${deletedCount} expired records deleted (older than ${windowTimeSeconds * 2}s and not blocked)`);
 
     return deletedCount;
   } catch (error) {
     // Log error but don't propagate (cleanup failure shouldn't block requests)
-    console.error('Rate limit cleanup failed:', error instanceof Error ? error.message : String(error));
+    console.error('[Rate Limit Cleanup] DELETE failed:', error instanceof Error ? error.message : String(error));
     return 0;
   }
 };

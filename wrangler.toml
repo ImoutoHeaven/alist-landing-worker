@@ -21,7 +21,12 @@ compatibility_date = "2024-01-01"
 # EXCEPT_PREFIX = "/guest,/public"
 # EXCEPT_ACTION = "block-except"
 #
-# # PostgreSQL Rate Limiting (all three required to enable)
+# # Database Mode for IP Rate Limiting
+# # Options: "neon" (PostgreSQL), "firebase" (Firestore)
+# # If not set, rate limiting is completely disabled
+# DB_MODE = ""
+#
+# # Neon (PostgreSQL) Rate Limiting - requires DB_MODE="neon"
 # POSTGRES_URL = "postgresql://user:password@host/database?sslmode=require"
 # IPSUBNET_WINDOWTIME_LIMIT = "100"
 # WINDOW_TIME = "24h"
@@ -30,6 +35,13 @@ compatibility_date = "2024-01-01"
 # PG_ERROR_HANDLE = "fail-closed"
 # CLEANUP_PERCENTAGE = "1"
 # BLOCK_TIME = "10m"
+#
+# # Firebase (Firestore) Rate Limiting - requires DB_MODE="firebase"
+# FIREBASE_PROJECT_ID = "your-project-id"
+# FIREBASE_PRIVATE_KEY = "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+# FIREBASE_CLIENT_EMAIL = "firebase-adminsdk@your-project.iam.gserviceaccount.com"
+# FIREBASE_PRIVATE_KEY_ID = "your-private-key-id"
+# FIREBASE_COLLECTION = "IP_LIMIT_TABLE"  # Optional, defaults to IP_LIMIT_TABLE
 
 # For local development, create a .dev.vars file with:
 # TOKEN=your-token

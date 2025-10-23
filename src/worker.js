@@ -6,7 +6,7 @@ import {
   parseWindowTime,
 } from './utils.js';
 import { renderLandingPage } from './frontend.js';
-import { checkRateLimit, formatWindowTime } from './pg-ratelimit.js';
+import { createRateLimiter } from './ratelimit/factory.js';
 
 const REQUIRED_ENV = ['TOKEN', 'WORKER_ADDRESS_DOWNLOAD'];
 
@@ -88,8 +88,10 @@ const resolveConfig = (env = {}) => {
     }
   }
 
-  // Parse rate limit configuration
-  const postgresUrl = env.POSTGRES_URL && typeof env.POSTGRES_URL === 'string' ? env.POSTGRES_URL.trim() : '';
+  // Parse database mode for rate limiting
+  const dbMode = env.DB_MODE && typeof env.DB_MODE === 'string' ? env.DB_MODE.trim() : '';
+
+  // Parse common rate limit configuration
   const windowTime = env.WINDOW_TIME && typeof env.WINDOW_TIME === 'string' ? env.WINDOW_TIME.trim() : '';
   const windowTimeSeconds = parseWindowTime(windowTime);
   const ipSubnetLimit = parseInteger(env.IPSUBNET_WINDOWTIME_LIMIT, 0);
@@ -111,8 +113,63 @@ const resolveConfig = (env = {}) => {
   // Validate PG_ERROR_HANDLE value
   const validPgErrorHandle = pgErrorHandle === 'fail-open' ? 'fail-open' : 'fail-closed';
 
-  // Rate limiting is enabled only if all three required params are set
-  const rateLimitEnabled = !!(postgresUrl && windowTimeSeconds > 0 && ipSubnetLimit > 0);
+  // Parse database-specific configuration
+  let rateLimitEnabled = false;
+  let rateLimitConfig = {};
+
+  if (dbMode) {
+    const normalizedDbMode = dbMode.toLowerCase();
+
+    if (normalizedDbMode === 'neon') {
+      // Neon (PostgreSQL) configuration
+      const postgresUrl = env.POSTGRES_URL && typeof env.POSTGRES_URL === 'string' ? env.POSTGRES_URL.trim() : '';
+
+      if (postgresUrl && windowTimeSeconds > 0 && ipSubnetLimit > 0) {
+        rateLimitEnabled = true;
+        rateLimitConfig = {
+          postgresUrl,
+          windowTimeSeconds,
+          limit: ipSubnetLimit,
+          ipv4Suffix,
+          ipv6Suffix,
+          pgErrorHandle: validPgErrorHandle,
+          cleanupProbability,
+          blockTimeSeconds,
+        };
+      } else {
+        throw new Error('DB_MODE is set to "neon" but required environment variables are missing: POSTGRES_URL, WINDOW_TIME, IPSUBNET_WINDOWTIME_LIMIT');
+      }
+    } else if (normalizedDbMode === 'firebase') {
+      // Firebase (Firestore) configuration
+      const firebaseProjectId = env.FIREBASE_PROJECT_ID && typeof env.FIREBASE_PROJECT_ID === 'string' ? env.FIREBASE_PROJECT_ID.trim() : '';
+      const firebasePrivateKey = env.FIREBASE_PRIVATE_KEY && typeof env.FIREBASE_PRIVATE_KEY === 'string' ? env.FIREBASE_PRIVATE_KEY : '';
+      const firebaseClientEmail = env.FIREBASE_CLIENT_EMAIL && typeof env.FIREBASE_CLIENT_EMAIL === 'string' ? env.FIREBASE_CLIENT_EMAIL.trim() : '';
+      const firebasePrivateKeyId = env.FIREBASE_PRIVATE_KEY_ID && typeof env.FIREBASE_PRIVATE_KEY_ID === 'string' ? env.FIREBASE_PRIVATE_KEY_ID.trim() : '';
+      const firebaseCollection = env.FIREBASE_COLLECTION && typeof env.FIREBASE_COLLECTION === 'string' ? env.FIREBASE_COLLECTION.trim() : 'IP_LIMIT_TABLE';
+
+      if (firebaseProjectId && firebasePrivateKey && firebaseClientEmail && firebasePrivateKeyId && windowTimeSeconds > 0 && ipSubnetLimit > 0) {
+        rateLimitEnabled = true;
+        rateLimitConfig = {
+          projectId: firebaseProjectId,
+          privateKey: firebasePrivateKey,
+          clientEmail: firebaseClientEmail,
+          privateKeyId: firebasePrivateKeyId,
+          collection: firebaseCollection,
+          windowTimeSeconds,
+          limit: ipSubnetLimit,
+          ipv4Suffix,
+          ipv6Suffix,
+          pgErrorHandle: validPgErrorHandle,
+          cleanupProbability,
+          blockTimeSeconds,
+        };
+      } else {
+        throw new Error('DB_MODE is set to "firebase" but required environment variables are missing: FIREBASE_PROJECT_ID, FIREBASE_PRIVATE_KEY, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY_ID, WINDOW_TIME, IPSUBNET_WINDOWTIME_LIMIT');
+      }
+    } else {
+      throw new Error(`Invalid DB_MODE: "${dbMode}". Valid options are: "neon", "firebase"`);
+    }
+  }
 
   return {
     token: env.TOKEN,
@@ -132,16 +189,11 @@ const resolveConfig = (env = {}) => {
     exceptPrefixes,
     exceptAction,
     // Rate limit configuration
+    dbMode,
     rateLimitEnabled,
-    postgresUrl,
-    windowTimeSeconds,
+    rateLimitConfig,
     windowTime,
     ipSubnetLimit,
-    ipv4Suffix,
-    ipv6Suffix,
-    pgErrorHandle: validPgErrorHandle,
-    cleanupProbability,
-    blockTimeSeconds,
   };
 };
 
@@ -345,7 +397,7 @@ const checkPathListAction = (path, config) => {
 
 const handleOptions = (request) => new Response(null, { headers: safeHeaders(request.headers.get('Origin')) });
 
-const handleInfo = async (request, config) => {
+const handleInfo = async (request, config, rateLimiter, ctx) => {
   const origin = request.headers.get('origin') || '*';
   const url = new URL(request.url);
   const path = url.searchParams.get('path');
@@ -357,16 +409,8 @@ const handleInfo = async (request, config) => {
 
   // Check rate limit
   const clientIP = extractClientIP(request);
-  if (config.rateLimitEnabled && clientIP) {
-    const rateLimitResult = await checkRateLimit(clientIP, {
-      postgresUrl: config.postgresUrl,
-      windowTimeSeconds: config.windowTimeSeconds,
-      limit: config.ipSubnetLimit,
-      ipv4Suffix: config.ipv4Suffix,
-      ipv6Suffix: config.ipv6Suffix,
-      pgErrorHandle: config.pgErrorHandle,
-      blockTimeSeconds: config.blockTimeSeconds,
-    });
+  if (rateLimiter && clientIP) {
+    const rateLimitResult = await rateLimiter.checkRateLimit(clientIP, { ...config.rateLimitConfig, ctx });
 
     if (!rateLimitResult.allowed) {
       if (rateLimitResult.error) {
@@ -470,7 +514,7 @@ const handleInfo = async (request, config) => {
   return respondJson(origin, responsePayload, 200);
 };
 
-const handleFileRequest = async (request, config) => {
+const handleFileRequest = async (request, config, rateLimiter, ctx) => {
   if (request.method !== 'GET' && request.method !== 'HEAD') {
     return respondJson(request.headers.get('origin') || '*', { code: 405, message: 'method not allowed' }, 405);
   }
@@ -524,16 +568,8 @@ const handleFileRequest = async (request, config) => {
 
     // Check rate limit for fast redirect
     const clientIP = extractClientIP(request);
-    if (config.rateLimitEnabled && clientIP) {
-      const rateLimitResult = await checkRateLimit(clientIP, {
-        postgresUrl: config.postgresUrl,
-        windowTimeSeconds: config.windowTimeSeconds,
-        limit: config.ipSubnetLimit,
-        ipv4Suffix: config.ipv4Suffix,
-        ipv6Suffix: config.ipv6Suffix,
-        pgErrorHandle: config.pgErrorHandle,
-        blockTimeSeconds: config.blockTimeSeconds,
-      });
+    if (rateLimiter && clientIP) {
+      const rateLimitResult = await rateLimiter.checkRateLimit(clientIP, { ...config.rateLimitConfig, ctx });
 
       if (!rateLimitResult.allowed) {
         const origin = request.headers.get('origin') || '*';
@@ -590,7 +626,7 @@ const handleFileRequest = async (request, config) => {
   });
 };
 
-const routeRequest = async (request, config) => {
+const routeRequest = async (request, config, rateLimiter, ctx) => {
   if (request.method === 'OPTIONS') {
     return handleOptions(request);
   }
@@ -599,16 +635,19 @@ const routeRequest = async (request, config) => {
   if (request.method === 'GET' && pathname === '/info') {
     const ipv4Error = ensureIPv4(request, config.ipv4Only);
     if (ipv4Error) return ipv4Error;
-    return handleInfo(request, config);
+    return handleInfo(request, config, rateLimiter, ctx);
   }
-  return handleFileRequest(request, config);
+  return handleFileRequest(request, config, rateLimiter, ctx);
 };
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const config = resolveConfig(env || {});
     try {
-      return await routeRequest(request, config);
+      // Create rate limiter instance based on DB_MODE
+      const rateLimiter = config.rateLimitEnabled ? createRateLimiter(config.dbMode) : null;
+
+      return await routeRequest(request, config, rateLimiter, ctx);
     } catch (error) {
       const origin = request.headers.get('origin') || '*';
       const message = error instanceof Error ? error.message : String(error);
