@@ -383,7 +383,8 @@ When limit is exceeded, returns:
 ```json
 {
   "code": 429,
-  "message": "192.168.1.0/24 exceeds the limit of 100 requests in 24h"
+  "message": "192.168.1.0/24 exceeds the limit of 100 requests in 24h",
+  "retry-after": 43200
 }
 ```
 
@@ -393,6 +394,8 @@ HTTP/1.1 429 Too Many Requests
 Retry-After: 43200
 Content-Type: application/json
 ```
+
+**Note:** The `retry-after` field (in seconds) is included in both the response body and the `Retry-After` HTTP header for client convenience.
 
 ### Setup with Neon Serverless Postgres
 
@@ -459,6 +462,7 @@ The worker automatically cleans up expired records to prevent database bloat.
 
 **How it works:**
 - **Cleanup Threshold**: Records older than `WINDOW_TIME × 2` are deleted
+- **BLOCK_UNTIL Protection**: Records that are still blocked (BLOCK_UNTIL not expired) are **never deleted**, even if their window time is old
 - **Cleanup Probability**: Controlled by `CLEANUP_PERCENTAGE` (default: 1%)
 - **Trigger**: On each successful rate limit check
 - **Execution**: Asynchronous (doesn't block user requests)
@@ -484,17 +488,19 @@ CLEANUP_PERCENTAGE=1   # 1% probability (default)
 
 **Storage impact:**
 ```
-WINDOW_TIME=24h → Keeps 2 days of data
-WINDOW_TIME=4h  → Keeps 8 hours of data
-WINDOW_TIME=30m → Keeps 1 hour of data
+WINDOW_TIME=24h → Keeps 2 days of data (+ blocked IPs until BLOCK_TIME expires)
+WINDOW_TIME=4h  → Keeps 8 hours of data (+ blocked IPs until BLOCK_TIME expires)
+WINDOW_TIME=30m → Keeps 1 hour of data (+ blocked IPs until BLOCK_TIME expires)
 ```
+
+**Important:** If `BLOCK_TIME` is longer than `WINDOW_TIME × 2`, blocked IP records will be retained until the block expires, not just 2× the window time. This ensures blocked IPs cannot bypass the punishment by waiting for cleanup.
 
 With `CLEANUP_PERCENTAGE=1` and moderate traffic, database size typically stabilizes at < 10 MB.
 
 ### Monitoring
 
 Check Cloudflare Workers logs for:
-- `Cleaned up X expired rate limit records (older than Ys)` - Successful cleanup operations
+- `Cleaned up X expired rate limit records (older than Ys and not blocked)` - Successful cleanup operations
 - `Rate limit cleanup failed: ...` - Cleanup errors (non-critical, requests continue)
 - `Rate limit check failed (fail-open):` - Database errors in fail-open mode
 - HTTP 429 responses in analytics

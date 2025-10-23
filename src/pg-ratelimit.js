@@ -204,6 +204,7 @@ export const checkRateLimit = async (ip, config) => {
 /**
  * Clean up expired records from the database
  * Removes records older than windowTimeSeconds * 2 (double buffer)
+ * Respects BLOCK_UNTIL: does NOT delete records that are still blocked
  * @param {Function} sql - Neon SQL function
  * @param {number} windowTimeSeconds - Time window in seconds
  * @returns {Promise<number>} - Number of deleted records
@@ -214,14 +215,19 @@ const cleanupExpiredRecords = async (sql, windowTimeSeconds) => {
     const now = Math.floor(Date.now() / 1000);
     const cutoffTime = now - (windowTimeSeconds * 2);
 
+    // Delete records where:
+    // 1. LAST_WINDOW_TIME is older than cutoff (window expired)
+    // 2. AND (BLOCK_UNTIL is NULL OR BLOCK_UNTIL has expired)
+    // This ensures we don't delete records that are still blocked
     const result = await sql`
       DELETE FROM IP_LIMIT_TABLE
       WHERE LAST_WINDOW_TIME < ${cutoffTime}
+        AND (BLOCK_UNTIL IS NULL OR BLOCK_UNTIL < ${now})
     `;
 
     const deletedCount = result.count || 0;
     if (deletedCount > 0) {
-      console.log(`Cleaned up ${deletedCount} expired rate limit records (older than ${windowTimeSeconds * 2}s)`);
+      console.log(`Cleaned up ${deletedCount} expired rate limit records (older than ${windowTimeSeconds * 2}s and not blocked)`);
     }
 
     return deletedCount;

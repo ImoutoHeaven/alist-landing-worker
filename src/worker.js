@@ -249,9 +249,14 @@ const respondRateLimitExceeded = (origin, ipSubnet, limit, windowTime, retryAfte
   const headers = safeHeaders(origin);
   headers.set('content-type', 'application/json;charset=UTF-8');
   headers.set('cache-control', 'no-store');
-  headers.set('Retry-After', String(Math.ceil(retryAfter)));
+  const retryAfterSeconds = Math.ceil(retryAfter);
+  headers.set('Retry-After', String(retryAfterSeconds));
   const message = `${ipSubnet} exceeds the limit of ${limit} requests in ${windowTime}`;
-  return new Response(JSON.stringify({ code: 429, message }), { status: 429, headers });
+  return new Response(JSON.stringify({
+    code: 429,
+    message,
+    'retry-after': retryAfterSeconds
+  }), { status: 429, headers });
 };
 
 const extractClientIP = (request) => {
