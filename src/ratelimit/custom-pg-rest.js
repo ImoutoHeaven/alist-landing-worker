@@ -14,75 +14,87 @@ const randomBackoff = async (attempt) => {
 };
 
 /**
- * Execute SQL query via D1 REST API
- * @param {string} accountId - Cloudflare account ID
- * @param {string} databaseId - D1 database ID
- * @param {string} apiToken - Cloudflare API token
- * @param {string} sql - SQL query string
- * @param {Array} params - Query parameters (optional)
+ * Execute query via PostgREST API
+ * @param {string} postgrestUrl - PostgREST API base URL
+ * @param {string} verifyHeader - Authentication header name
+ * @param {string} verifySecret - Authentication header value
+ * @param {string} tableName - Table name
+ * @param {string} method - HTTP method (GET, POST, PATCH, DELETE)
+ * @param {string} filters - URL query filters (for GET/PATCH/DELETE)
+ * @param {Object} body - Request body (for POST/PATCH)
+ * @param {Object} extraHeaders - Additional headers
  * @returns {Promise<Object>} - Query result
  */
-const executeQuery = async (accountId, databaseId, apiToken, sql, params = []) => {
-  const endpoint = `https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database/${databaseId}/query`;
+const executeQuery = async (postgrestUrl, verifyHeader, verifySecret, tableName, method, filters = '', body = null, extraHeaders = {}) => {
+  const url = `${postgrestUrl}/${tableName}${filters ? `?${filters}` : ''}`;
 
-  const body = { sql };
-  if (params && params.length > 0) {
-    body.params = params;
+  const headers = {
+    [verifyHeader]: verifySecret,
+    'Content-Type': 'application/json',
+    ...extraHeaders,
+  };
+
+  const options = {
+    method,
+    headers,
+  };
+
+  if (body) {
+    options.body = JSON.stringify(body);
   }
 
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${apiToken}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  });
+  const response = await fetch(url, options);
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`D1 REST API error (${response.status}): ${errorText}`);
+    throw new Error(`PostgREST API error (${response.status}): ${errorText}`);
   }
 
-  const result = await response.json();
-
-  // Cloudflare D1 REST API returns: { success: true, result: [{ results: [...], success: true }] }
-  if (!result.success) {
-    throw new Error(`D1 REST API query failed: ${JSON.stringify(result.errors || 'Unknown error')}`);
+  // For POST/PATCH/DELETE, PostgREST returns the affected rows or empty
+  // For GET, it returns an array of rows
+  let result;
+  const contentType = response.headers.get('content-type');
+  if (contentType && contentType.includes('application/json')) {
+    result = await response.json();
+  } else {
+    result = [];
   }
 
-  return result.result?.[0] || { results: [], success: true };
+  // Get Content-Range header to determine affected rows count
+  const contentRange = response.headers.get('content-range');
+  let affectedRows = 0;
+  if (contentRange) {
+    // Content-Range format: "0-4/*" or "*/0" (no matches)
+    const match = contentRange.match(/(\d+)-(\d+)|\*\/(\d+)/);
+    if (match) {
+      if (match[1] !== undefined && match[2] !== undefined) {
+        affectedRows = parseInt(match[2], 10) - parseInt(match[1], 10) + 1;
+      } else if (match[3] !== undefined) {
+        affectedRows = parseInt(match[3], 10);
+      }
+    }
+  } else if (method === 'POST' && response.status === 201) {
+    // POST successful, assume 1 row inserted
+    affectedRows = 1;
+  } else if (method === 'PATCH' || method === 'DELETE') {
+    // For PATCH/DELETE without Prefer: return=representation
+    // We need to use Prefer: return=minimal and check if response is empty
+    affectedRows = Array.isArray(result) ? result.length : 0;
+  }
+
+  return {
+    data: Array.isArray(result) ? result : [],
+    affectedRows,
+  };
 };
 
 /**
- * Ensure the IP_LIMIT_TABLE exists in the database
- * @param {string} accountId - Cloudflare account ID
- * @param {string} databaseId - D1 database ID
- * @param {string} apiToken - Cloudflare API token
- * @param {string} tableName - Table name
- * @returns {Promise<void>}
- */
-const ensureTable = async (accountId, databaseId, apiToken, tableName) => {
-  const sql = `
-    CREATE TABLE IF NOT EXISTS ${tableName} (
-      IP_HASH TEXT PRIMARY KEY,
-      IP_RANGE TEXT NOT NULL,
-      IP_ADDR TEXT NOT NULL,
-      ACCESS_COUNT INTEGER NOT NULL,
-      LAST_WINDOW_TIME INTEGER NOT NULL,
-      BLOCK_UNTIL INTEGER
-    )
-  `;
-  await executeQuery(accountId, databaseId, apiToken, sql);
-};
-
-/**
- * Check and update rate limit for an IP address using D1 REST API
+ * Check and update rate limit for an IP address using PostgREST API
  * @param {string} ip - Client IP address
  * @param {Object} config - Rate limit configuration
- * @param {string} config.accountId - Cloudflare account ID
- * @param {string} config.databaseId - D1 database ID
- * @param {string} config.apiToken - Cloudflare API token
+ * @param {string} config.postgrestUrl - PostgREST API base URL
+ * @param {string} config.verifyHeader - Authentication header name
+ * @param {string} config.verifySecret - Authentication header value
  * @param {string} config.tableName - Table name (defaults to 'IP_LIMIT_TABLE')
  * @param {number} config.windowTimeSeconds - Time window in seconds
  * @param {number} config.limit - Request limit per window
@@ -96,7 +108,7 @@ const ensureTable = async (accountId, databaseId, apiToken, tableName) => {
  */
 export const checkRateLimit = async (ip, config) => {
   // If any required config is missing, skip rate limiting
-  if (!config.accountId || !config.databaseId || !config.apiToken || !config.windowTimeSeconds || !config.limit) {
+  if (!config.postgrestUrl || !config.verifyHeader || !config.verifySecret || !config.windowTimeSeconds || !config.limit) {
     return { allowed: true };
   }
 
@@ -105,11 +117,8 @@ export const checkRateLimit = async (ip, config) => {
   }
 
   try {
-    const { accountId, databaseId, apiToken } = config;
+    const { postgrestUrl, verifyHeader, verifySecret } = config;
     const tableName = config.tableName || 'IP_LIMIT_TABLE';
-
-    // Ensure table exists
-    await ensureTable(accountId, databaseId, apiToken, tableName);
 
     // Calculate IP subnet
     const ipSubnet = calculateIPSubnet(ip, config.ipv4Suffix, config.ipv6Suffix);
@@ -134,7 +143,7 @@ export const checkRateLimit = async (ip, config) => {
         console.log(`[Rate Limit Cleanup] Triggered cleanup (probability: ${probability * 100}%)`);
 
         // Use ctx.waitUntil to ensure cleanup completes even after response is sent
-        const cleanupPromise = cleanupExpiredRecords(accountId, databaseId, apiToken, tableName, config.windowTimeSeconds)
+        const cleanupPromise = cleanupExpiredRecords(postgrestUrl, verifyHeader, verifySecret, tableName, config.windowTimeSeconds)
           .then((deletedCount) => {
             console.log(`[Rate Limit Cleanup] Background cleanup finished: ${deletedCount} records deleted`);
             return deletedCount;
@@ -154,50 +163,75 @@ export const checkRateLimit = async (ip, config) => {
       }
     };
 
-    const insertSql = `INSERT OR IGNORE INTO ${tableName}
-                       (IP_HASH, IP_RANGE, IP_ADDR, ACCESS_COUNT, LAST_WINDOW_TIME, BLOCK_UNTIL)
-                       VALUES (?, ?, ?, ?, ?, ?)`;
-    const insertResult = await executeQuery(accountId, databaseId, apiToken, insertSql, [
-      ipHash,
-      ipSubnet,
-      JSON.stringify([ip]),
-      1,
-      now,
-      null
-    ]);
-    const inserted = insertResult.meta?.changes > 0;
+    // Try to insert new record (ignore if exists)
+    const insertResult = await executeQuery(
+      postgrestUrl,
+      verifyHeader,
+      verifySecret,
+      tableName,
+      'POST',
+      '',
+      {
+        IP_HASH: ipHash,
+        IP_RANGE: ipSubnet,
+        IP_ADDR: JSON.stringify([ip]),
+        ACCESS_COUNT: 1,
+        LAST_WINDOW_TIME: now,
+        BLOCK_UNTIL: null,
+      },
+      { 'Prefer': 'resolution=ignore-duplicates' }
+    );
+
+    const inserted = insertResult.affectedRows > 0;
     if (inserted) {
       triggerCleanup();
       return { allowed: true };
     }
 
+    // Record exists, use optimistic locking with retry
     const maxAttempts = 15; // Increased from 5 to handle high concurrency
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       // Add random backoff before retry (except first attempt)
       if (attempt > 0) {
         await randomBackoff(attempt - 1);
       }
+      // Fetch current record
+      const selectFilters = `IP_HASH=eq.${ipHash}&select=IP_HASH,IP_RANGE,IP_ADDR,ACCESS_COUNT,LAST_WINDOW_TIME,BLOCK_UNTIL`;
+      const queryResult = await executeQuery(
+        postgrestUrl,
+        verifyHeader,
+        verifySecret,
+        tableName,
+        'GET',
+        selectFilters
+      );
 
-      const selectSql = `SELECT IP_HASH, IP_RANGE, IP_ADDR, ACCESS_COUNT, LAST_WINDOW_TIME, BLOCK_UNTIL
-                         FROM ${tableName}
-                         WHERE IP_HASH = ?`;
-      const queryResult = await executeQuery(accountId, databaseId, apiToken, selectSql, [ipHash]);
-      const records = queryResult.results || [];
+      const records = queryResult.data || [];
 
       if (!records || records.length === 0) {
-        const retryInsert = await executeQuery(accountId, databaseId, apiToken, insertSql, [
-          ipHash,
-          ipSubnet,
-          JSON.stringify([ip]),
-          1,
-          now,
-          null
-        ]);
-        if (retryInsert.meta?.changes > 0) {
+        // Record disappeared (race condition), try insert again
+        const retryInsert = await executeQuery(
+          postgrestUrl,
+          verifyHeader,
+          verifySecret,
+          tableName,
+          'POST',
+          '',
+          {
+            IP_HASH: ipHash,
+            IP_RANGE: ipSubnet,
+            IP_ADDR: JSON.stringify([ip]),
+            ACCESS_COUNT: 1,
+            LAST_WINDOW_TIME: now,
+            BLOCK_UNTIL: null,
+          },
+          { 'Prefer': 'resolution=ignore-duplicates' }
+        );
+        if (retryInsert.affectedRows > 0) {
           triggerCleanup();
           return { allowed: true };
         }
-        console.warn(`[Rate Limit] D1 REST insert race on attempt ${attempt + 1} for hash ${ipHash}`);
+        console.warn(`[Rate Limit] PostgREST insert race on attempt ${attempt + 1} for hash ${ipHash}`);
         continue;
       }
 
@@ -218,6 +252,7 @@ export const checkRateLimit = async (ip, config) => {
         existingIPs = [];
       }
 
+      // Check if currently blocked
       if (blockUntil && blockUntil > now) {
         const retryAfter = blockUntil - now;
         return {
@@ -227,62 +262,81 @@ export const checkRateLimit = async (ip, config) => {
         };
       }
 
-      const whereParts = [
-        'IP_HASH = ?',
-        'ACCESS_COUNT = ?',
-        'LAST_WINDOW_TIME = ?',
-        'IP_ADDR = ?',
-      ];
-      const whereParams = [ipHash, currentCount, lastWindowTime, ipAddrJson];
-      if (blockUntil === null) {
-        whereParts.push('BLOCK_UNTIL IS NULL');
-      } else {
-        whereParts.push('BLOCK_UNTIL = ?');
-        whereParams.push(blockUntil);
-      }
-      const whereClause = whereParts.join(' AND ');
+      // Build optimistic lock filters (match all current field values)
+      const buildOptimisticLockFilters = () => {
+        const filters = [
+          `IP_HASH=eq.${ipHash}`,
+          `ACCESS_COUNT=eq.${currentCount}`,
+          `LAST_WINDOW_TIME=eq.${lastWindowTime}`,
+          `IP_ADDR=eq.${encodeURIComponent(ipAddrJson)}`,
+        ];
+        if (blockUntil === null) {
+          filters.push('BLOCK_UNTIL=is.null');
+        } else {
+          filters.push(`BLOCK_UNTIL=eq.${blockUntil}`);
+        }
+        return filters.join('&');
+      };
 
-      const updateAndReturn = async (sql, params, cleanupNeeded, responsePayload, debugContext) => {
-        const updateResult = await executeQuery(accountId, databaseId, apiToken, sql, params);
-        if (updateResult.meta?.changes > 0) {
+      const updateAndReturn = async (filters, updateBody, cleanupNeeded, responsePayload, debugContext) => {
+        const updateResult = await executeQuery(
+          postgrestUrl,
+          verifyHeader,
+          verifySecret,
+          tableName,
+          'PATCH',
+          filters,
+          updateBody,
+          { 'Prefer': 'return=representation' }
+        );
+        if (updateResult.affectedRows > 0) {
           if (cleanupNeeded) {
             triggerCleanup();
           }
           return responsePayload;
         }
-        console.warn(`[Rate Limit] D1 REST ${debugContext} concurrency retry ${attempt + 1} for hash ${ipHash}`);
+        console.warn(`[Rate Limit] PostgREST ${debugContext} concurrency retry ${attempt + 1} for hash ${ipHash}`);
         return null;
       };
 
+      // Case 1: Block expired, reset to new window
       if (blockUntil && blockUntil <= now) {
-        const updateSql = `UPDATE ${tableName}
-                           SET ACCESS_COUNT = ?, LAST_WINDOW_TIME = ?, IP_ADDR = ?, BLOCK_UNTIL = NULL
-                           WHERE ${whereClause}`;
-        const params = [1, now, JSON.stringify([ip]), ...whereParams];
-        const result = await updateAndReturn(updateSql, params, true, { allowed: true }, 'block reset');
+        const filters = buildOptimisticLockFilters();
+        const updateBody = {
+          ACCESS_COUNT: 1,
+          LAST_WINDOW_TIME: now,
+          IP_ADDR: JSON.stringify([ip]),
+          BLOCK_UNTIL: null,
+        };
+        const result = await updateAndReturn(filters, updateBody, true, { allowed: true }, 'block reset');
         if (result) return result;
         continue;
       }
 
+      // Case 2: Window expired, reset to new window
       if (diff >= config.windowTimeSeconds) {
-        const updateSql = `UPDATE ${tableName}
-                           SET ACCESS_COUNT = ?, LAST_WINDOW_TIME = ?, IP_ADDR = ?, BLOCK_UNTIL = NULL
-                           WHERE ${whereClause}`;
-        const params = [1, now, JSON.stringify([ip]), ...whereParams];
-        const result = await updateAndReturn(updateSql, params, true, { allowed: true }, 'window reset');
+        const filters = buildOptimisticLockFilters();
+        const updateBody = {
+          ACCESS_COUNT: 1,
+          LAST_WINDOW_TIME: now,
+          IP_ADDR: JSON.stringify([ip]),
+          BLOCK_UNTIL: null,
+        };
+        const result = await updateAndReturn(filters, updateBody, true, { allowed: true }, 'window reset');
         if (result) return result;
         continue;
       }
 
+      // Case 3: Limit exceeded
       if (currentCount >= config.limit) {
         const blockTimeSeconds = config.blockTimeSeconds || 0;
         if (blockTimeSeconds > 0) {
           const newBlockUntil = now + blockTimeSeconds;
-          const updateSql = `UPDATE ${tableName}
-                             SET BLOCK_UNTIL = ?
-                             WHERE ${whereClause}`;
-          const params = [newBlockUntil, ...whereParams];
-          const result = await updateAndReturn(updateSql, params, false, {
+          const filters = buildOptimisticLockFilters();
+          const updateBody = {
+            BLOCK_UNTIL: newBlockUntil,
+          };
+          const result = await updateAndReturn(filters, updateBody, false, {
             allowed: false,
             ipSubnet,
             retryAfter: Math.max(1, blockTimeSeconds),
@@ -291,6 +345,7 @@ export const checkRateLimit = async (ip, config) => {
           continue;
         }
 
+        // No block time configured, just return rate limit exceeded
         const retryAfter = config.windowTimeSeconds - diff;
         return {
           allowed: false,
@@ -299,24 +354,20 @@ export const checkRateLimit = async (ip, config) => {
         };
       }
 
+      // Case 4: Increment counter
       const shouldUpdateIPs = !existingIPs.includes(ip);
       const nextIPs = shouldUpdateIPs ? [...existingIPs, ip] : existingIPs;
       const newIPJson = JSON.stringify(nextIPs);
-      const updateSql = `UPDATE ${tableName}
-                         SET ACCESS_COUNT = ?, LAST_WINDOW_TIME = ?, IP_ADDR = ?, BLOCK_UNTIL = ?
-                         WHERE ${whereClause}`;
-      const params = [
-        currentCount + 1,
-        lastWindowTime,
-        newIPJson,
-        blockUntil,
-        ...whereParams,
-      ];
-      const result = await updateAndReturn(updateSql, params, true, { allowed: true }, 'counter increment');
+      const filters = buildOptimisticLockFilters();
+      const updateBody = {
+        ACCESS_COUNT: currentCount + 1,
+        IP_ADDR: newIPJson,
+      };
+      const result = await updateAndReturn(filters, updateBody, true, { allowed: true }, 'counter increment');
       if (result) return result;
     }
 
-    throw new Error('D1 REST concurrency retry limit exceeded');
+    throw new Error('PostgREST concurrency retry limit exceeded');
   } catch (error) {
     // Handle errors based on pgErrorHandle strategy
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -339,14 +390,14 @@ export const checkRateLimit = async (ip, config) => {
  * Clean up expired records from the database
  * Removes records older than windowTimeSeconds * 2 (double buffer)
  * Respects BLOCK_UNTIL: does NOT delete records that are still blocked
- * @param {string} accountId - Cloudflare account ID
- * @param {string} databaseId - D1 database ID
- * @param {string} apiToken - Cloudflare API token
+ * @param {string} postgrestUrl - PostgREST API base URL
+ * @param {string} verifyHeader - Authentication header name
+ * @param {string} verifySecret - Authentication header value
  * @param {string} tableName - Table name
  * @param {number} windowTimeSeconds - Time window in seconds
  * @returns {Promise<number>} - Number of deleted records
  */
-const cleanupExpiredRecords = async (accountId, databaseId, apiToken, tableName, windowTimeSeconds) => {
+const cleanupExpiredRecords = async (postgrestUrl, verifyHeader, verifySecret, tableName, windowTimeSeconds) => {
   const now = Math.floor(Date.now() / 1000);
   const cutoffTime = now - (windowTimeSeconds * 2);
 
@@ -357,12 +408,21 @@ const cleanupExpiredRecords = async (accountId, databaseId, apiToken, tableName,
     // 1. LAST_WINDOW_TIME is older than cutoff (window expired)
     // 2. AND (BLOCK_UNTIL is NULL OR BLOCK_UNTIL has expired)
     // This ensures we don't delete records that are still blocked
-    const deleteSql = `DELETE FROM ${tableName}
-                       WHERE LAST_WINDOW_TIME < ?
-                         AND (BLOCK_UNTIL IS NULL OR BLOCK_UNTIL < ?)`;
-    const result = await executeQuery(accountId, databaseId, apiToken, deleteSql, [cutoffTime, now]);
+    // PostgREST filter syntax: LAST_WINDOW_TIME=lt.{cutoff}&and=(BLOCK_UNTIL.is.null,BLOCK_UNTIL.lt.{now})
+    const filters = `LAST_WINDOW_TIME=lt.${cutoffTime}&and=(BLOCK_UNTIL.is.null,BLOCK_UNTIL.lt.${now})`;
 
-    const deletedCount = result.meta?.changes || 0;
+    const result = await executeQuery(
+      postgrestUrl,
+      verifyHeader,
+      verifySecret,
+      tableName,
+      'DELETE',
+      filters,
+      null,
+      { 'Prefer': 'return=representation' }
+    );
+
+    const deletedCount = result.affectedRows || 0;
     console.log(`[Rate Limit Cleanup] DELETE completed: ${deletedCount} expired records deleted (older than ${windowTimeSeconds * 2}s and not blocked)`);
 
     return deletedCount;

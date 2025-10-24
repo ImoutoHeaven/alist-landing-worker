@@ -214,8 +214,33 @@ const resolveConfig = (env = {}) => {
       } else {
         throw new Error('DB_MODE is set to "d1-rest" but required environment variables are missing: D1_ACCOUNT_ID, D1_DATABASE_ID, D1_API_TOKEN, WINDOW_TIME, IPSUBNET_WINDOWTIME_LIMIT');
       }
+    } else if (normalizedDbMode === 'custom-pg-rest') {
+      // Custom PostgreSQL REST API (PostgREST) configuration
+      const postgrestUrl = env.POSTGREST_URL && typeof env.POSTGREST_URL === 'string' ? env.POSTGREST_URL.trim() : '';
+      const postgrestTableName = env.POSTGREST_TABLE_NAME && typeof env.POSTGREST_TABLE_NAME === 'string' ? env.POSTGREST_TABLE_NAME.trim() : '';
+      const verifyHeader = env.VERIFY_HEADER && typeof env.VERIFY_HEADER === 'string' ? env.VERIFY_HEADER.trim() : '';
+      const verifySecret = env.VERIFY_SECRET && typeof env.VERIFY_SECRET === 'string' ? env.VERIFY_SECRET.trim() : '';
+
+      if (postgrestUrl && verifyHeader && verifySecret && windowTimeSeconds > 0 && ipSubnetLimit > 0) {
+        rateLimitEnabled = true;
+        rateLimitConfig = {
+          postgrestUrl,
+          verifyHeader,
+          verifySecret,
+          tableName: postgrestTableName || 'IP_LIMIT_TABLE',
+          windowTimeSeconds,
+          limit: ipSubnetLimit,
+          ipv4Suffix,
+          ipv6Suffix,
+          pgErrorHandle: validPgErrorHandle,
+          cleanupProbability,
+          blockTimeSeconds,
+        };
+      } else {
+        throw new Error('DB_MODE is set to "custom-pg-rest" but required environment variables are missing: POSTGREST_URL, VERIFY_HEADER, VERIFY_SECRET, WINDOW_TIME, IPSUBNET_WINDOWTIME_LIMIT');
+      }
     } else {
-      throw new Error(`Invalid DB_MODE: "${dbMode}". Valid options are: "neon", "firebase", "d1", "d1-rest"`);
+      throw new Error(`Invalid DB_MODE: "${dbMode}". Valid options are: "neon", "firebase", "d1", "d1-rest", "custom-pg-rest"`);
     }
   }
 
