@@ -702,8 +702,9 @@ Unlike D1/Neon modes, PostgREST cannot execute DDL commands via REST API. The wo
 Connect to your PostgreSQL database and run:
 
 ```sql
--- Create the rate limit table
-CREATE TABLE IP_LIMIT_TABLE (
+-- ⚠️ IMPORTANT: Use double quotes to preserve uppercase table name!
+-- PostgreSQL converts unquoted identifiers to lowercase automatically.
+CREATE TABLE "IP_LIMIT_TABLE" (
   IP_HASH TEXT PRIMARY KEY,
   IP_RANGE TEXT NOT NULL,
   IP_ADDR TEXT NOT NULL,
@@ -712,17 +713,29 @@ CREATE TABLE IP_LIMIT_TABLE (
   BLOCK_UNTIL INTEGER
 );
 
--- (Optional) Create an index for faster cleanup queries
-CREATE INDEX idx_last_window_time ON IP_LIMIT_TABLE(LAST_WINDOW_TIME);
-CREATE INDEX idx_block_until ON IP_LIMIT_TABLE(BLOCK_UNTIL) WHERE BLOCK_UNTIL IS NOT NULL;
+-- (Optional) Create indexes for faster cleanup queries
+CREATE INDEX idx_last_window_time ON "IP_LIMIT_TABLE"(LAST_WINDOW_TIME);
+CREATE INDEX idx_block_until ON "IP_LIMIT_TABLE"(BLOCK_UNTIL) WHERE BLOCK_UNTIL IS NOT NULL;
 ```
+
+**⚠️ PostgreSQL Table Name Case Sensitivity:**
+- Without quotes: `CREATE TABLE IP_LIMIT_TABLE` → creates `ip_limit_table` (lowercase)
+- With quotes: `CREATE TABLE "IP_LIMIT_TABLE"` → creates `IP_LIMIT_TABLE` (uppercase) ✅
+- PostgREST API paths are case-sensitive: `/IP_LIMIT_TABLE` ≠ `/ip_limit_table`
+- **Always use double quotes** to match the default table name expected by the worker
 
 **Verify table creation:**
 ```sql
--- Check if table exists
-SELECT * FROM IP_LIMIT_TABLE LIMIT 0;
+-- Check if uppercase table exists (should work without errors)
+SELECT * FROM "IP_LIMIT_TABLE" LIMIT 0;
 
--- Should return empty result without errors
+-- List all tables to verify exact name
+\dt
+-- Look for: IP_LIMIT_TABLE (uppercase, not ip_limit_table)
+
+-- Alternative: Query system catalog
+SELECT tablename FROM pg_tables WHERE schemaname = 'public';
+-- Should show: IP_LIMIT_TABLE (not ip_limit_table)
 ```
 
 **If using a custom table name**, replace `IP_LIMIT_TABLE` with your chosen name and set `POSTGREST_TABLE_NAME` environment variable accordingly.
@@ -952,9 +965,11 @@ Rate limit check failed (fail-open): PostgREST API error (404):
    psql -h your-host -U your-user -d your-database
    ```
 
-2. Create the table manually:
+2. Create the table manually (use **double quotes** to preserve uppercase):
    ```sql
-   CREATE TABLE IP_LIMIT_TABLE (
+   -- PostgreSQL converts unquoted names to lowercase!
+   -- Use quotes to create uppercase table name
+   CREATE TABLE "IP_LIMIT_TABLE" (
      IP_HASH TEXT PRIMARY KEY,
      IP_RANGE TEXT NOT NULL,
      IP_ADDR TEXT NOT NULL,
@@ -964,15 +979,22 @@ Rate limit check failed (fail-open): PostgREST API error (404):
    );
 
    -- Optional: Create indexes for better performance
-   CREATE INDEX idx_last_window_time ON IP_LIMIT_TABLE(LAST_WINDOW_TIME);
-   CREATE INDEX idx_block_until ON IP_LIMIT_TABLE(BLOCK_UNTIL) WHERE BLOCK_UNTIL IS NOT NULL;
+   CREATE INDEX idx_last_window_time ON "IP_LIMIT_TABLE"(LAST_WINDOW_TIME);
+   CREATE INDEX idx_block_until ON "IP_LIMIT_TABLE"(BLOCK_UNTIL) WHERE BLOCK_UNTIL IS NOT NULL;
    ```
 
-3. Verify the table exists:
+3. Verify the table exists with correct case:
    ```sql
-   \dt IP_LIMIT_TABLE
-   -- or
-   SELECT * FROM IP_LIMIT_TABLE LIMIT 0;
+   -- Check uppercase table exists
+   SELECT * FROM "IP_LIMIT_TABLE" LIMIT 0;
+
+   -- List tables to verify exact name
+   \dt
+   -- Should show: IP_LIMIT_TABLE (uppercase)
+
+   -- Check in system catalog
+   SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename = 'IP_LIMIT_TABLE';
+   -- Should return: IP_LIMIT_TABLE (if empty, table is lowercase)
    ```
 
 4. If using a custom table name, ensure `POSTGREST_TABLE_NAME` environment variable matches
@@ -987,6 +1009,55 @@ Rate limit check failed (fail-open): PostgREST API error (404):
    ```
 
 **Note:** Unlike D1/Neon modes, PostgREST cannot auto-create tables. This is a one-time manual setup.
+
+---
+
+### Error: "Perhaps you meant the table 'public.ip_limit_table'" (case mismatch)
+
+**Symptom:**
+```
+Rate limit check failed (fail-open): PostgREST API error (404):
+{"code":"PGRST205","hint":"Perhaps you meant the table 'public.ip_limit_table'",
+ "message":"Could not find the table 'public.IP_LIMIT_TABLE' in the schema cache"}
+```
+
+**Cause:** Table was created without quotes, PostgreSQL converted it to lowercase `ip_limit_table`.
+
+**Solution:**
+
+**Option A: Recreate table with correct uppercase name (recommended)**
+
+```sql
+-- Drop the lowercase table
+DROP TABLE ip_limit_table;
+
+-- Create uppercase table with quotes
+CREATE TABLE "IP_LIMIT_TABLE" (
+  IP_HASH TEXT PRIMARY KEY,
+  IP_RANGE TEXT NOT NULL,
+  IP_ADDR TEXT NOT NULL,
+  ACCESS_COUNT INTEGER NOT NULL,
+  LAST_WINDOW_TIME INTEGER NOT NULL,
+  BLOCK_UNTIL INTEGER
+);
+
+-- Recreate indexes
+CREATE INDEX idx_last_window_time ON "IP_LIMIT_TABLE"(LAST_WINDOW_TIME);
+CREATE INDEX idx_block_until ON "IP_LIMIT_TABLE"(BLOCK_UNTIL) WHERE BLOCK_UNTIL IS NOT NULL;
+```
+
+**Option B: Use lowercase table name in worker (if you want to keep existing table)**
+
+Set environment variable to match the lowercase table:
+```env
+POSTGREST_TABLE_NAME=ip_limit_table
+```
+
+**Important:**
+- PostgreSQL treats `IP_LIMIT_TABLE` and `"IP_LIMIT_TABLE"` differently
+- Without quotes → `ip_limit_table` (lowercase, SQL standard)
+- With quotes → `IP_LIMIT_TABLE` (preserves case)
+- PostgREST API paths are case-sensitive: `/IP_LIMIT_TABLE` ≠ `/ip_limit_table`
 
 ---
 
