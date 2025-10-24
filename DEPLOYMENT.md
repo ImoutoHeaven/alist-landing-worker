@@ -53,8 +53,7 @@ Set environment variables in Cloudflare Dashboard:
    - `WHITELIST_ACTION` (plain) - Optional: Action for whitelisted paths
    - `EXCEPT_PREFIX` (plain) - Optional: Comma-separated path prefixes for inverse matching
    - `EXCEPT_ACTION` (plain) - Optional: Action format {action}-except (e.g., block-except)
-   - `DB_MODE` (plain) - Optional: Database mode for rate limiting ("neon", "firebase", "d1", "d1-rest", "custom-pg-rest")
-   - `POSTGRES_URL` (secret) - Optional: PostgreSQL URL for rate limiting (required when DB_MODE=neon)
+   - `DB_MODE` (plain) - Optional: Database mode for rate limiting ("d1", "d1-rest", "custom-pg-rest")
    - `D1_DATABASE_BINDING` (plain) - Optional: D1 binding name (default: DB, required when DB_MODE=d1)
    - `D1_TABLE_NAME` (plain) - Optional: D1 table name (default: IP_LIMIT_TABLE, for DB_MODE=d1 or d1-rest)
    - `D1_ACCOUNT_ID` (plain) - Optional: Cloudflare account ID (required when DB_MODE=d1-rest)
@@ -123,8 +122,7 @@ wrangler deploy
 | `WHITELIST_ACTION` | Plain | ❌ No | Action for whitelisted paths: `block`/`verify`/`pass-web`/`pass-server`/`pass-asis` |
 | `EXCEPT_PREFIX` | Plain | ❌ No | Comma-separated path prefixes for inverse matching. Requires `EXCEPT_ACTION` to be set |
 | `EXCEPT_ACTION` | Plain | ❌ No | Inverse action format `{action}-except` (e.g., `block-except`). Paths NOT matching EXCEPT_PREFIX will trigger the action |
-| `DB_MODE` | Plain | ❌ No | Database mode for rate limiting: `neon`, `firebase`, `d1`, `d1-rest`, `custom-pg-rest`. If not set, rate limiting is disabled |
-| `POSTGRES_URL` | Secret | ❌ No | PostgreSQL connection URL (required when `DB_MODE=neon`) |
+| `DB_MODE` | Plain | ❌ No | Database mode for rate limiting: `d1`, `d1-rest`, `custom-pg-rest`. If not set, rate limiting is disabled |
 | `D1_DATABASE_BINDING` | Plain | ❌ No | D1 binding name (default: `DB`, required when `DB_MODE=d1`) |
 | `D1_TABLE_NAME` | Plain | ❌ No | D1 table name (default: `IP_LIMIT_TABLE`, for `DB_MODE=d1` or `d1-rest`) |
 | `D1_ACCOUNT_ID` | Plain | ❌ No | Cloudflare account ID (required when `DB_MODE=d1-rest`) |
@@ -307,7 +305,7 @@ Protect your worker from abuse by implementing IP subnet-based rate limiting wit
 ### Overview
 
 The rate limiting feature:
-- Supports multiple database backends: **Neon (PostgreSQL)**, **Firebase (Firestore)**, **Cloudflare D1**
+- Supports multiple database backends: **Cloudflare D1**, **Custom PostgreSQL + PostgREST**
 - Tracks request counts per IP subnet with sliding time window algorithm
 - Supports both IPv4 and IPv6 with configurable subnet granularity
 - Only applies to `/info` endpoint and fast redirect requests
@@ -317,8 +315,6 @@ The rate limiting feature:
 
 | Mode | Description | Use Case |
 |------|-------------|----------|
-| `neon` | Neon Serverless PostgreSQL | High performance, mature SQL database |
-| `firebase` | Google Firebase Firestore | Serverless NoSQL, generous free tier |
 | `d1` | Cloudflare D1 (Binding) | Native Cloudflare integration, lowest latency |
 | `d1-rest` | Cloudflare D1 (REST API) | Remote access without Workers binding |
 | `custom-pg-rest` | Self-hosted PostgreSQL + PostgREST | Full control, self-hosted infrastructure |
@@ -327,16 +323,6 @@ The rate limiting feature:
 - You want the lowest latency (same datacenter as your Worker)
 - You prefer native Cloudflare integration
 - You want free tier with 5 GB storage + 5 million reads/day
-
-**Choose Neon if:**
-- You need mature PostgreSQL features
-- You have existing Postgres infrastructure
-- You require complex queries or analytics
-
-**Choose Firebase if:**
-- You want generous free tier (1 GB storage, 50K reads/day)
-- You use other Google Cloud services
-- You prefer NoSQL flexibility
 
 **Choose custom-pg-rest if:**
 - You have self-hosted PostgreSQL infrastructure
@@ -348,7 +334,7 @@ The rate limiting feature:
 
 **Required for ALL database modes:**
 ```env
-DB_MODE=d1                     # or "neon", "firebase", "d1-rest", "custom-pg-rest"
+DB_MODE=d1                     # or "d1-rest", "custom-pg-rest"
 IPSUBNET_WINDOWTIME_LIMIT=100
 WINDOW_TIME=24h
 ```
@@ -527,42 +513,6 @@ npm run deploy
 
 ---
 
-#### Option 3: Neon (PostgreSQL)
-
-**Step 1: Create Neon Database**
-
-**Setup:**
-1. Visit https://neon.tech
-2. Create a new project
-3. Copy the connection string
-4. **Run init.sql** to create table and indexes:
-   ```bash
-   # Download or locate init.sql from the project
-   psql "postgresql://user:password@ep-xxx.neon.tech/neondb?sslmode=require" < init.sql
-   ```
-   This creates:
-   - `IP_LIMIT_TABLE` table (without `IP_ADDR` field)
-   - Performance indexes
-
-**Step 2: Set Environment Variables**
-
-For local development (`.dev.vars`):
-```env
-DB_MODE=neon
-POSTGRES_URL=postgresql://user:password@ep-xxx.neon.tech/neondb?sslmode=require
-IPSUBNET_WINDOWTIME_LIMIT=100
-WINDOW_TIME=24h
-```
-
-For production (Cloudflare Dashboard):
-- Add `POSTGRES_URL` as an encrypted secret
-- Add other variables as plain text
-
-**Step 3: Deploy**
-```bash
-npm run deploy
-```
-
 ### Time Window Format
 
 `WINDOW_TIME` accepts the following formats:
@@ -600,7 +550,7 @@ npm run deploy
 
 **⚠️ IMPORTANT: After v2.0 atomic refactoring, the `IP_ADDR` field has been removed for simplified atomic operations.**
 
-**For SQL databases (D1, Neon, custom-pg-rest):**
+**For SQL databases (D1, custom-pg-rest):**
 
 Use `init.sql` to create the table:
 
@@ -619,21 +569,6 @@ CREATE INDEX IF NOT EXISTS idx_block_until ON "IP_LIMIT_TABLE"("BLOCK_UNTIL") WH
 ```
 
 **For custom-pg-rest only**: `init.sql` also creates the `upsert_rate_limit()` stored procedure required for atomic operations.
-
-**For NoSQL databases (Firebase):**
-Collection: `IP_LIMIT_TABLE` (configurable)
-Document structure:
-```json
-{
-  "IP_RANGE": "192.168.1.0/24",
-  "IP_ADDR": ["192.168.1.10", "192.168.1.20"],
-  "ACCESS_COUNT": 42,
-  "LAST_WINDOW_TIME": 1234567890,
-  "BLOCK_UNTIL": 1234567890  // or null
-}
-```
-
-**Note**: Firebase still uses `IP_ADDR` field. Only SQL database implementations (Neon, D1, custom-pg-rest) have removed it.
 
 ### How It Works
 
@@ -671,32 +606,7 @@ Content-Type: application/json
 
 ---
 
-#### Option 4: Firebase (Firestore)
-
-**Configuration:**
-```env
-DB_MODE=firebase
-FIREBASE_PROJECT_ID=your-project-id
-FIREBASE_PRIVATE_KEY=-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n
-FIREBASE_CLIENT_EMAIL=firebase-adminsdk@your-project.iam.gserviceaccount.com
-FIREBASE_PRIVATE_KEY_ID=your-private-key-id
-FIREBASE_COLLECTION=IP_LIMIT_TABLE  # Optional
-IPSUBNET_WINDOWTIME_LIMIT=100
-WINDOW_TIME=24h
-```
-
-**Setup:**
-1. Visit https://console.firebase.google.com
-2. Create a new project
-3. Go to Project Settings > Service Accounts
-4. Click "Generate New Private Key"
-5. Extract credentials from downloaded JSON
-6. Add to environment variables
-7. Deploy: `npm run deploy`
-
----
-
-#### Option 5: Custom PostgreSQL + PostgREST
+#### Option 3: Custom PostgreSQL + PostgREST
 
 **Advantages:**
 - Full control over database and infrastructure
@@ -716,7 +626,7 @@ WINDOW_TIME=24h
 3. Reverse proxy with authentication (e.g., nginx with custom headers)
 
 **⚠️ Before you start:**
-- Unlike D1/Neon/Firebase modes, this mode **does NOT auto-create tables or stored procedures**
+- Unlike D1 modes, this mode **does NOT auto-create tables or stored procedures**
 - You MUST manually run `init.sql` on your PostgreSQL database (see Step 1 below)
 - Failure to run init.sql will result in `PGRST205` errors or RPC function not found errors
 
@@ -835,7 +745,7 @@ npm run deploy
 - **CRITICAL**: The table MUST be created manually before deployment (see Step 1)
   - PostgREST cannot execute CREATE TABLE via REST API
   - Worker will fail with `PGRST205` error if table doesn't exist
-  - No automatic table creation like D1/Neon modes
+  - No automatic table creation like D1 modes
 - PostgREST must be accessible from Cloudflare Workers (public HTTPS endpoint)
 - Use HTTPS and authentication headers to secure your PostgREST endpoint
 - Latency depends on your PostgreSQL server location (~50-200ms typical)
@@ -854,7 +764,7 @@ npm run deploy
 
 **Strict per-IP limiting (24 hours):**
 ```env
-POSTGRES_URL=postgresql://...
+DB_MODE=d1  # or d1-rest, custom-pg-rest
 IPSUBNET_WINDOWTIME_LIMIT=50
 WINDOW_TIME=24h
 IPV4_SUFFIX=/32
@@ -866,7 +776,7 @@ BLOCK_TIME=30m
 
 **Subnet-based limiting (4 hours):**
 ```env
-POSTGRES_URL=postgresql://...
+DB_MODE=d1  # or d1-rest, custom-pg-rest
 IPSUBNET_WINDOWTIME_LIMIT=1000
 WINDOW_TIME=4h
 IPV4_SUFFIX=/24
@@ -878,7 +788,7 @@ BLOCK_TIME=15m
 
 **Short burst protection (30 minutes):**
 ```env
-POSTGRES_URL=postgresql://...
+DB_MODE=d1  # or d1-rest, custom-pg-rest
 IPSUBNET_WINDOWTIME_LIMIT=20
 WINDOW_TIME=30m
 IPV4_SUFFIX=/32
@@ -941,10 +851,9 @@ Check Cloudflare Workers logs for:
 
 ### Performance Considerations
 
-- Database queries add ~50-200ms latency per request
-- Neon Serverless Postgres provides excellent cold start performance
-- Connection pooling is handled automatically by `@neondatabase/serverless`
+- Database queries add ~10-200ms latency per request (D1 binding is fastest)
 - Consider using fail-open for high-traffic scenarios if occasional bypass is acceptable
+- For custom-pg-rest, use connection pooling (e.g., PgBouncer) for better performance
 
 ### Disabling Rate Limiting
 
@@ -967,8 +876,6 @@ WINDOW_TIME=
 |----------|---------|-----------|----------|
 | D1 (Binding) | ~10-30ms | 5M reads/day | ⭐ Best overall performance |
 | D1 (REST) | ~100-200ms | 5M reads/day | Development/testing |
-| Neon | ~50-150ms | 0.5 GB storage | PostgreSQL features |
-| Firebase | ~100-300ms | 50K reads/day | NoSQL flexibility |
 | Custom PG+REST | ~50-200ms | Depends on hosting | Self-hosted control |
 
 **Recommendation:** Use D1 with binding mode for production deployments, or custom-pg-rest if you need full control.
@@ -1030,7 +937,7 @@ Rate limit check failed (fail-open): PostgREST API error (404):
    sudo systemctl restart postgrest
    ```
 
-**Note:** Unlike D1/Neon modes, PostgREST cannot auto-create tables. This is a one-time manual setup.
+**Note:** Unlike D1 modes, PostgREST cannot auto-create tables. This is a one-time manual setup.
 
 ---
 

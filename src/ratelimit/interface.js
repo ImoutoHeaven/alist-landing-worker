@@ -6,11 +6,9 @@
  * ## Implementation Notes (Post-Atomic Refactoring)
  *
  * All implementations now use atomic database operations (UPSERT + RETURNING):
- * - neon.js: Single atomic SQL via Neon serverless driver
  * - custom-pg-rest.js: Calls RPC stored procedure (upsert_rate_limit)
  * - d1.js: Single atomic SQLite UPSERT with RETURNING
  * - d1-rest.js: Same as d1.js but via D1 REST API
- * - firebase.js: Uses Firebase transactions (unchanged)
  *
  * No optimistic locking, retry loops, or randomBackoff needed.
  * Concurrency is handled at the database level via ON CONFLICT.
@@ -70,4 +68,4 @@
  */
 
 // This file serves as documentation only.
-// Actual implementations are in neon.js, custom-pg-rest.js, d1.js, d1-rest.js, and firebase.js
+// Actual implementations are in custom-pg-rest.js, d1.js, and d1-rest.js

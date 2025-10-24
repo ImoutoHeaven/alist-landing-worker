@@ -206,7 +206,7 @@ export const checkRateLimit = async (ip, config) => {
     }
 
     // Check if limit exceeded (without block time configured)
-    if (accessCount > config.limit) {
+    if (accessCount >= config.limit) {
       const diff = now - lastWindowTime;
       const retryAfter = config.windowTimeSeconds - diff;
       return {

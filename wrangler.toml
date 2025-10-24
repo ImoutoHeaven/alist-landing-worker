@@ -29,7 +29,7 @@ persist = true
 # EXCEPT_ACTION = "block-except"
 #
 # # Database Mode for IP Rate Limiting
-# # Options: "neon" (PostgreSQL), "firebase" (Firestore), "d1" (Cloudflare D1 Binding), "d1-rest" (Cloudflare D1 REST API), "custom-pg-rest" (Custom PostgreSQL + PostgREST)
+# # Options: "d1" (Cloudflare D1 Binding), "d1-rest" (Cloudflare D1 REST API), "custom-pg-rest" (Custom PostgreSQL + PostgREST)
 # # If not set, rate limiting is completely disabled
 # DB_MODE = ""
 # IPSUBNET_WINDOWTIME_LIMIT = "100"
@@ -39,16 +39,6 @@ persist = true
 # PG_ERROR_HANDLE = "fail-closed"
 # CLEANUP_PERCENTAGE = "1"  # 0-100 inclusive, decimals allowed (e.g., "0.1" = 0.1%)
 # BLOCK_TIME = "10m"
-#
-# # Neon (PostgreSQL) Rate Limiting - requires DB_MODE="neon"
-# POSTGRES_URL = "postgresql://user:password@host/database?sslmode=require"
-#
-# # Firebase (Firestore) Rate Limiting - requires DB_MODE="firebase"
-# FIREBASE_PROJECT_ID = "your-project-id"
-# FIREBASE_PRIVATE_KEY = "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
-# FIREBASE_CLIENT_EMAIL = "firebase-adminsdk@your-project.iam.gserviceaccount.com"
-# FIREBASE_PRIVATE_KEY_ID = "your-private-key-id"
-# FIREBASE_COLLECTION = "IP_LIMIT_TABLE"  # Optional, defaults to IP_LIMIT_TABLE
 #
 # # D1 (Cloudflare D1 Binding) Rate Limiting - requires DB_MODE="d1"
 # # Note: You must also configure d1_databases binding below

@@ -121,53 +121,7 @@ const resolveConfig = (env = {}) => {
   if (dbMode) {
     const normalizedDbMode = dbMode.toLowerCase();
 
-    if (normalizedDbMode === 'neon') {
-      // Neon (PostgreSQL) configuration
-      const postgresUrl = env.POSTGRES_URL && typeof env.POSTGRES_URL === 'string' ? env.POSTGRES_URL.trim() : '';
-
-      if (postgresUrl && windowTimeSeconds > 0 && ipSubnetLimit > 0) {
-        rateLimitEnabled = true;
-        rateLimitConfig = {
-          postgresUrl,
-          windowTimeSeconds,
-          limit: ipSubnetLimit,
-          ipv4Suffix,
-          ipv6Suffix,
-          pgErrorHandle: validPgErrorHandle,
-          cleanupProbability,
-          blockTimeSeconds,
-        };
-      } else {
-        throw new Error('DB_MODE is set to "neon" but required environment variables are missing: POSTGRES_URL, WINDOW_TIME, IPSUBNET_WINDOWTIME_LIMIT');
-      }
-    } else if (normalizedDbMode === 'firebase') {
-      // Firebase (Firestore) configuration
-      const firebaseProjectId = env.FIREBASE_PROJECT_ID && typeof env.FIREBASE_PROJECT_ID === 'string' ? env.FIREBASE_PROJECT_ID.trim() : '';
-      const firebasePrivateKey = env.FIREBASE_PRIVATE_KEY && typeof env.FIREBASE_PRIVATE_KEY === 'string' ? env.FIREBASE_PRIVATE_KEY : '';
-      const firebaseClientEmail = env.FIREBASE_CLIENT_EMAIL && typeof env.FIREBASE_CLIENT_EMAIL === 'string' ? env.FIREBASE_CLIENT_EMAIL.trim() : '';
-      const firebasePrivateKeyId = env.FIREBASE_PRIVATE_KEY_ID && typeof env.FIREBASE_PRIVATE_KEY_ID === 'string' ? env.FIREBASE_PRIVATE_KEY_ID.trim() : '';
-      const firebaseCollection = env.FIREBASE_COLLECTION && typeof env.FIREBASE_COLLECTION === 'string' ? env.FIREBASE_COLLECTION.trim() : 'IP_LIMIT_TABLE';
-
-      if (firebaseProjectId && firebasePrivateKey && firebaseClientEmail && firebasePrivateKeyId && windowTimeSeconds > 0 && ipSubnetLimit > 0) {
-        rateLimitEnabled = true;
-        rateLimitConfig = {
-          projectId: firebaseProjectId,
-          privateKey: firebasePrivateKey,
-          clientEmail: firebaseClientEmail,
-          privateKeyId: firebasePrivateKeyId,
-          collection: firebaseCollection,
-          windowTimeSeconds,
-          limit: ipSubnetLimit,
-          ipv4Suffix,
-          ipv6Suffix,
-          pgErrorHandle: validPgErrorHandle,
-          cleanupProbability,
-          blockTimeSeconds,
-        };
-      } else {
-        throw new Error('DB_MODE is set to "firebase" but required environment variables are missing: FIREBASE_PROJECT_ID, FIREBASE_PRIVATE_KEY, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY_ID, WINDOW_TIME, IPSUBNET_WINDOWTIME_LIMIT');
-      }
-    } else if (normalizedDbMode === 'd1') {
+    if (normalizedDbMode === 'd1') {
       // D1 (Cloudflare D1 Binding) configuration
       const d1DatabaseBinding = env.D1_DATABASE_BINDING && typeof env.D1_DATABASE_BINDING === 'string' ? env.D1_DATABASE_BINDING.trim() : 'DB';
       const d1TableName = env.D1_TABLE_NAME && typeof env.D1_TABLE_NAME === 'string' ? env.D1_TABLE_NAME.trim() : '';
@@ -240,7 +194,7 @@ const resolveConfig = (env = {}) => {
         throw new Error('DB_MODE is set to "custom-pg-rest" but required environment variables are missing: POSTGREST_URL, VERIFY_HEADER, VERIFY_SECRET, WINDOW_TIME, IPSUBNET_WINDOWTIME_LIMIT');
       }
     } else {
-      throw new Error(`Invalid DB_MODE: "${dbMode}". Valid options are: "neon", "firebase", "d1", "d1-rest", "custom-pg-rest"`);
+      throw new Error(`Invalid DB_MODE: "${dbMode}". Valid options are: "d1", "d1-rest", "custom-pg-rest"`);
     }
   }
 
