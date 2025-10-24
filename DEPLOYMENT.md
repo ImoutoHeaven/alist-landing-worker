@@ -53,13 +53,15 @@ Set environment variables in Cloudflare Dashboard:
    - `WHITELIST_ACTION` (plain) - Optional: Action for whitelisted paths
    - `EXCEPT_PREFIX` (plain) - Optional: Comma-separated path prefixes for inverse matching
    - `EXCEPT_ACTION` (plain) - Optional: Action format {action}-except (e.g., block-except)
-   - `DB_MODE` (plain) - Optional: Database mode for rate limiting ("neon", "firebase", "d1", "d1-rest")
+   - `DB_MODE` (plain) - Optional: Database mode for rate limiting ("neon", "firebase", "d1", "d1-rest", "custom-pg-rest")
    - `POSTGRES_URL` (secret) - Optional: PostgreSQL URL for rate limiting (required when DB_MODE=neon)
    - `D1_DATABASE_BINDING` (plain) - Optional: D1 binding name (default: DB, required when DB_MODE=d1)
    - `D1_TABLE_NAME` (plain) - Optional: D1 table name (default: IP_LIMIT_TABLE, for DB_MODE=d1 or d1-rest)
    - `D1_ACCOUNT_ID` (plain) - Optional: Cloudflare account ID (required when DB_MODE=d1-rest)
    - `D1_DATABASE_ID` (plain) - Optional: D1 database ID (required when DB_MODE=d1-rest)
    - `D1_API_TOKEN` (secret) - Optional: Cloudflare API token (required when DB_MODE=d1-rest)
+   - `POSTGREST_URL` (plain) - Optional: PostgREST API endpoint URL (required when DB_MODE=custom-pg-rest)
+   - `POSTGREST_TABLE_NAME` (plain) - Optional: PostgREST table name (default: IP_LIMIT_TABLE, for DB_MODE=custom-pg-rest)
    - `IPSUBNET_WINDOWTIME_LIMIT` (plain) - Optional: Max requests per subnet (e.g., 100)
    - `WINDOW_TIME` (plain) - Optional: Time window (e.g., 24h, 4h, 30m)
    - `IPV4_SUFFIX` (plain) - Optional: IPv4 subnet mask (default: /32)
@@ -121,13 +123,15 @@ wrangler deploy
 | `WHITELIST_ACTION` | Plain | ❌ No | Action for whitelisted paths: `block`/`verify`/`pass-web`/`pass-server`/`pass-asis` |
 | `EXCEPT_PREFIX` | Plain | ❌ No | Comma-separated path prefixes for inverse matching. Requires `EXCEPT_ACTION` to be set |
 | `EXCEPT_ACTION` | Plain | ❌ No | Inverse action format `{action}-except` (e.g., `block-except`). Paths NOT matching EXCEPT_PREFIX will trigger the action |
-| `DB_MODE` | Plain | ❌ No | Database mode for rate limiting: `neon`, `firebase`, `d1`, `d1-rest`. If not set, rate limiting is disabled |
+| `DB_MODE` | Plain | ❌ No | Database mode for rate limiting: `neon`, `firebase`, `d1`, `d1-rest`, `custom-pg-rest`. If not set, rate limiting is disabled |
 | `POSTGRES_URL` | Secret | ❌ No | PostgreSQL connection URL (required when `DB_MODE=neon`) |
 | `D1_DATABASE_BINDING` | Plain | ❌ No | D1 binding name (default: `DB`, required when `DB_MODE=d1`) |
 | `D1_TABLE_NAME` | Plain | ❌ No | D1 table name (default: `IP_LIMIT_TABLE`, for `DB_MODE=d1` or `d1-rest`) |
 | `D1_ACCOUNT_ID` | Plain | ❌ No | Cloudflare account ID (required when `DB_MODE=d1-rest`) |
 | `D1_DATABASE_ID` | Plain | ❌ No | D1 database ID (required when `DB_MODE=d1-rest`) |
 | `D1_API_TOKEN` | Secret | ❌ No | Cloudflare API token (required when `DB_MODE=d1-rest`) |
+| `POSTGREST_URL` | Plain | ❌ No | PostgREST API endpoint URL (required when `DB_MODE=custom-pg-rest`) |
+| `POSTGREST_TABLE_NAME` | Plain | ❌ No | PostgREST table name (default: `IP_LIMIT_TABLE`, for `DB_MODE=custom-pg-rest`) |
 | `IPSUBNET_WINDOWTIME_LIMIT` | Plain | ❌ No | Max requests per IP subnet within time window. Must be positive integer. Required for rate limiting |
 | `WINDOW_TIME` | Plain | ❌ No | Sliding time window (format: `24h`, `4h`, `30m`, `10s`). Required for rate limiting |
 | `IPV4_SUFFIX` | Plain | ❌ No | IPv4 subnet mask (default: `/32`). Examples: `/24`, `/32` |
@@ -317,6 +321,7 @@ The rate limiting feature:
 | `firebase` | Google Firebase Firestore | Serverless NoSQL, generous free tier |
 | `d1` | Cloudflare D1 (Binding) | Native Cloudflare integration, lowest latency |
 | `d1-rest` | Cloudflare D1 (REST API) | Remote access without Workers binding |
+| `custom-pg-rest` | Self-hosted PostgreSQL + PostgREST | Full control, self-hosted infrastructure |
 
 **Choose D1 if:**
 - You want the lowest latency (same datacenter as your Worker)
@@ -333,11 +338,17 @@ The rate limiting feature:
 - You use other Google Cloud services
 - You prefer NoSQL flexibility
 
+**Choose custom-pg-rest if:**
+- You have self-hosted PostgreSQL infrastructure
+- You want full control over your database
+- You're already using PostgREST for other services
+- You need to avoid third-party dependencies
+
 ### Common Configuration
 
 **Required for ALL database modes:**
 ```env
-DB_MODE=d1                     # or "neon", "firebase", "d1-rest"
+DB_MODE=d1                     # or "neon", "firebase", "d1-rest", "custom-pg-rest"
 IPSUBNET_WINDOWTIME_LIMIT=100
 WINDOW_TIME=24h
 ```
@@ -656,6 +667,149 @@ WINDOW_TIME=24h
 6. Add to environment variables
 7. Deploy: `npm run deploy`
 
+---
+
+#### Option 5: Custom PostgreSQL + PostgREST
+
+**Advantages:**
+- Full control over database and infrastructure
+- No third-party dependencies or vendor lock-in
+- Use existing PostgreSQL infrastructure
+- Low latency if hosted nearby
+
+**When to use:**
+- You have self-hosted PostgreSQL database
+- You're already using PostgREST for other services
+- You want complete control over data and infrastructure
+- You need to avoid cloud vendor dependencies
+
+**Prerequisites:**
+1. PostgreSQL database (self-hosted or managed) with `CREATE TABLE` permissions
+2. PostgREST installed and configured (see https://postgrest.org)
+3. Reverse proxy with authentication (e.g., nginx with custom headers)
+
+**⚠️ Before you start:**
+- Unlike D1/Neon/Firebase modes, this mode **does NOT auto-create tables**
+- You MUST manually run SQL to create the `IP_LIMIT_TABLE` (see Step 1 below)
+- Failure to create the table will result in `PGRST205` errors
+
+**Step 1: Create Database Table**
+
+**⚠️ CRITICAL: You MUST create this table manually before deployment!**
+
+Unlike D1/Neon modes, PostgREST cannot execute DDL commands via REST API. The worker will fail with `PGRST205` error if the table doesn't exist.
+
+Connect to your PostgreSQL database and run:
+
+```sql
+-- Create the rate limit table
+CREATE TABLE IP_LIMIT_TABLE (
+  IP_HASH TEXT PRIMARY KEY,
+  IP_RANGE TEXT NOT NULL,
+  IP_ADDR TEXT NOT NULL,
+  ACCESS_COUNT INTEGER NOT NULL,
+  LAST_WINDOW_TIME INTEGER NOT NULL,
+  BLOCK_UNTIL INTEGER
+);
+
+-- (Optional) Create an index for faster cleanup queries
+CREATE INDEX idx_last_window_time ON IP_LIMIT_TABLE(LAST_WINDOW_TIME);
+CREATE INDEX idx_block_until ON IP_LIMIT_TABLE(BLOCK_UNTIL) WHERE BLOCK_UNTIL IS NOT NULL;
+```
+
+**Verify table creation:**
+```sql
+-- Check if table exists
+SELECT * FROM IP_LIMIT_TABLE LIMIT 0;
+
+-- Should return empty result without errors
+```
+
+**If using a custom table name**, replace `IP_LIMIT_TABLE` with your chosen name and set `POSTGREST_TABLE_NAME` environment variable accordingly.
+
+**Step 2: Configure PostgREST**
+
+Create or update your PostgREST configuration file (`postgrest.conf`):
+
+```conf
+db-uri = "postgres://username:password@localhost:5432/database"
+db-schemas = "public"
+db-anon-role = "web_anon"
+server-host = "127.0.0.1"
+server-port = 3000
+```
+
+Start PostgREST:
+```bash
+postgrest postgrest.conf
+```
+
+**Step 3: Set Up Reverse Proxy Authentication**
+
+Configure nginx (or your reverse proxy) to add authentication headers:
+
+```nginx
+location /postgrest/ {
+    # Verify custom authentication header
+    if ($http_x_api_key != "your-secret-key") {
+        return 401;
+    }
+
+    # Proxy to PostgREST
+    proxy_pass http://localhost:3000/;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+}
+```
+
+**Step 4: Set Environment Variables**
+
+For local development (`.dev.vars`):
+```env
+DB_MODE=custom-pg-rest
+POSTGREST_URL=https://your-domain.com/postgrest
+POSTGREST_TABLE_NAME=IP_LIMIT_TABLE  # Optional, defaults to IP_LIMIT_TABLE
+VERIFY_HEADER=X-API-Key
+VERIFY_SECRET=your-secret-key
+IPSUBNET_WINDOWTIME_LIMIT=100
+WINDOW_TIME=24h
+```
+
+For production (Cloudflare Dashboard):
+1. Go to Workers & Pages > Your Worker > Settings > Variables
+2. Add environment variables:
+   - `DB_MODE` = `custom-pg-rest`
+   - `POSTGREST_URL` = `https://your-domain.com/postgrest`
+   - `POSTGREST_TABLE_NAME` = `IP_LIMIT_TABLE` (optional)
+   - `VERIFY_HEADER` = `X-API-Key` (or your custom header name)
+   - `VERIFY_SECRET` = your secret key (mark as secret)
+   - `IPSUBNET_WINDOWTIME_LIMIT` = `100`
+   - `WINDOW_TIME` = `24h`
+
+**Step 5: Deploy**
+```bash
+npm run deploy
+```
+
+**⚠️ Important Notes:**
+- **CRITICAL**: The table MUST be created manually before deployment (see Step 1)
+  - PostgREST cannot execute CREATE TABLE via REST API
+  - Worker will fail with `PGRST205` error if table doesn't exist
+  - No automatic table creation like D1/Neon modes
+- PostgREST must be accessible from Cloudflare Workers (public HTTPS endpoint)
+- Use HTTPS and authentication headers to secure your PostgREST endpoint
+- Latency depends on your PostgreSQL server location (~50-200ms typical)
+- For production, use connection pooling (e.g., PgBouncer) for better performance
+- Consider creating indexes on `LAST_WINDOW_TIME` and `BLOCK_UNTIL` for better cleanup performance
+
+**Security Best Practices:**
+- Always use HTTPS for PostgREST endpoint
+- Implement rate limiting on your reverse proxy
+- Use strong authentication credentials
+- Restrict PostgREST access to only the rate limit table
+- Monitor PostgreSQL logs for suspicious activity
+- Use separate PostgreSQL role with minimal permissions
+
 ### Example Configurations
 
 **Strict per-IP limiting (24 hours):**
@@ -775,10 +929,66 @@ WINDOW_TIME=
 | D1 (REST) | ~100-200ms | 5M reads/day | Development/testing |
 | Neon | ~50-150ms | 0.5 GB storage | PostgreSQL features |
 | Firebase | ~100-300ms | 50K reads/day | NoSQL flexibility |
+| Custom PG+REST | ~50-200ms | Depends on hosting | Self-hosted control |
 
-**Recommendation:** Use D1 with binding mode for production deployments.
+**Recommendation:** Use D1 with binding mode for production deployments, or custom-pg-rest if you need full control.
 
 ## Troubleshooting
+
+### Error: "PostgREST API error (404): PGRST205 - Could not find the table"
+
+**Symptom:**
+```
+Rate limit check failed (fail-open): PostgREST API error (404):
+{"code":"PGRST205","message":"Could not find the table 'public.IP_LIMIT_TABLE' in the schema cache"}
+```
+
+**Cause:** The rate limit table doesn't exist in your PostgreSQL database.
+
+**Solution:**
+
+1. Connect to your PostgreSQL database:
+   ```bash
+   psql -h your-host -U your-user -d your-database
+   ```
+
+2. Create the table manually:
+   ```sql
+   CREATE TABLE IP_LIMIT_TABLE (
+     IP_HASH TEXT PRIMARY KEY,
+     IP_RANGE TEXT NOT NULL,
+     IP_ADDR TEXT NOT NULL,
+     ACCESS_COUNT INTEGER NOT NULL,
+     LAST_WINDOW_TIME INTEGER NOT NULL,
+     BLOCK_UNTIL INTEGER
+   );
+
+   -- Optional: Create indexes for better performance
+   CREATE INDEX idx_last_window_time ON IP_LIMIT_TABLE(LAST_WINDOW_TIME);
+   CREATE INDEX idx_block_until ON IP_LIMIT_TABLE(BLOCK_UNTIL) WHERE BLOCK_UNTIL IS NOT NULL;
+   ```
+
+3. Verify the table exists:
+   ```sql
+   \dt IP_LIMIT_TABLE
+   -- or
+   SELECT * FROM IP_LIMIT_TABLE LIMIT 0;
+   ```
+
+4. If using a custom table name, ensure `POSTGREST_TABLE_NAME` environment variable matches
+
+5. Reload PostgREST schema cache:
+   ```bash
+   # Send SIGUSR1 to reload schema cache (if using systemd)
+   sudo systemctl reload postgrest
+
+   # Or restart PostgREST
+   sudo systemctl restart postgrest
+   ```
+
+**Note:** Unlike D1/Neon modes, PostgREST cannot auto-create tables. This is a one-time manual setup.
+
+---
 
 ### Error: "sign algorithm mismatch"
 - This means the recalculated signature doesn't match the provided one

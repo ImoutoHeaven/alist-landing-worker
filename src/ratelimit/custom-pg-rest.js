@@ -47,6 +47,23 @@ const executeQuery = async (postgrestUrl, verifyHeader, verifySecret, tableName,
 
   if (!response.ok) {
     const errorText = await response.text();
+
+    // Check if table doesn't exist (PGRST205 error)
+    if (response.status === 404 && errorText.includes('PGRST205')) {
+      throw new Error(
+        `PostgREST table not found: "${tableName}". ` +
+        `Please create the table manually in your PostgreSQL database:\n` +
+        `CREATE TABLE ${tableName} (\n` +
+        `  IP_HASH TEXT PRIMARY KEY,\n` +
+        `  IP_RANGE TEXT NOT NULL,\n` +
+        `  IP_ADDR TEXT NOT NULL,\n` +
+        `  ACCESS_COUNT INTEGER NOT NULL,\n` +
+        `  LAST_WINDOW_TIME INTEGER NOT NULL,\n` +
+        `  BLOCK_UNTIL INTEGER\n` +
+        `);`
+      );
+    }
+
     throw new Error(`PostgREST API error (${response.status}): ${errorText}`);
   }
 

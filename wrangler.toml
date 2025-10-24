@@ -29,7 +29,7 @@ persist = true
 # EXCEPT_ACTION = "block-except"
 #
 # # Database Mode for IP Rate Limiting
-# # Options: "neon" (PostgreSQL), "firebase" (Firestore), "d1" (Cloudflare D1 Binding), "d1-rest" (Cloudflare D1 REST API)
+# # Options: "neon" (PostgreSQL), "firebase" (Firestore), "d1" (Cloudflare D1 Binding), "d1-rest" (Cloudflare D1 REST API), "custom-pg-rest" (Custom PostgreSQL + PostgREST)
 # # If not set, rate limiting is completely disabled
 # DB_MODE = ""
 #
@@ -61,6 +61,12 @@ persist = true
 # D1_DATABASE_ID = "your-d1-database-id"
 # D1_API_TOKEN = "your-cloudflare-api-token"
 # D1_TABLE_NAME = "IP_LIMIT_TABLE"  # Optional, defaults to IP_LIMIT_TABLE
+#
+# # Custom PostgreSQL + PostgREST Rate Limiting - requires DB_MODE="custom-pg-rest"
+# # Use this mode when you have self-hosted PostgreSQL with PostgREST REST API
+# POSTGREST_URL = "https://your-domain.com/postgrest"  # PostgREST API endpoint (without table name)
+# POSTGREST_TABLE_NAME = "IP_LIMIT_TABLE"  # Optional, defaults to IP_LIMIT_TABLE
+# # Note: VERIFY_HEADER and VERIFY_SECRET (already defined above) are used for PostgREST authentication
 
 # D1 Database Binding (for DB_MODE="d1")
 # Uncomment and configure this section if using D1 binding mode
