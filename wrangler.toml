@@ -32,9 +32,6 @@ persist = true
 # # Options: "neon" (PostgreSQL), "firebase" (Firestore), "d1" (Cloudflare D1 Binding), "d1-rest" (Cloudflare D1 REST API), "custom-pg-rest" (Custom PostgreSQL + PostgREST)
 # # If not set, rate limiting is completely disabled
 # DB_MODE = ""
-#
-# # Neon (PostgreSQL) Rate Limiting - requires DB_MODE="neon"
-# POSTGRES_URL = "postgresql://user:password@host/database?sslmode=require"
 # IPSUBNET_WINDOWTIME_LIMIT = "100"
 # WINDOW_TIME = "24h"
 # IPV4_SUFFIX = "/32"
@@ -42,6 +39,9 @@ persist = true
 # PG_ERROR_HANDLE = "fail-closed"
 # CLEANUP_PERCENTAGE = "1"  # 0-100 inclusive, decimals allowed (e.g., "0.1" = 0.1%)
 # BLOCK_TIME = "10m"
+#
+# # Neon (PostgreSQL) Rate Limiting - requires DB_MODE="neon"
+# POSTGRES_URL = "postgresql://user:password@host/database?sslmode=require"
 #
 # # Firebase (Firestore) Rate Limiting - requires DB_MODE="firebase"
 # FIREBASE_PROJECT_ID = "your-project-id"
