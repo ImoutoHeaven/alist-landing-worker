@@ -1,19 +1,6 @@
 import { calculateIPSubnet, sha256Hash } from '../utils.js';
 
 /**
- * Sleep for a random duration (exponential backoff with jitter)
- * @param {number} attempt - Current retry attempt number (0-indexed)
- * @returns {Promise<void>}
- */
-const randomBackoff = async (attempt) => {
-  // Linear backoff with jitter: delay = random(1, min(attempt * 5, 50)) ms
-  // attempt 0: 1-5ms, attempt 1: 1-10ms, attempt 2: 1-15ms, ..., max 1-50ms
-  const maxDelay = Math.min((attempt + 1) * 5, 50);
-  const delay = Math.floor(Math.random() * maxDelay) + 1;
-  await new Promise(resolve => setTimeout(resolve, delay));
-};
-
-/**
  * Execute query via PostgREST API
  * @param {string} postgrestUrl - PostgREST API base URL
  * @param {string} verifyHeader - Authentication header name
@@ -52,15 +39,15 @@ const executeQuery = async (postgrestUrl, verifyHeader, verifySecret, tableName,
     if (response.status === 404 && errorText.includes('PGRST205')) {
       throw new Error(
         `PostgREST table not found: "${tableName}". ` +
-        `Please create the table manually in your PostgreSQL database:\n` +
+        `Please create the table manually using init.sql:\n` +
         `CREATE TABLE ${tableName} (\n` +
         `  IP_HASH TEXT PRIMARY KEY,\n` +
         `  IP_RANGE TEXT NOT NULL,\n` +
-        `  IP_ADDR TEXT NOT NULL,\n` +
         `  ACCESS_COUNT INTEGER NOT NULL,\n` +
         `  LAST_WINDOW_TIME INTEGER NOT NULL,\n` +
         `  BLOCK_UNTIL INTEGER\n` +
-        `);`
+        `);\n` +
+        `\nAlso run: CREATE OR REPLACE FUNCTION upsert_rate_limit(...) (see init.sql)`
       );
     }
 
@@ -106,13 +93,17 @@ const executeQuery = async (postgrestUrl, verifyHeader, verifySecret, tableName,
 };
 
 /**
- * Check and update rate limit for an IP address using PostgREST API
+ * Check and update rate limit for an IP address using PostgREST RPC
+ *
+ * Uses the upsert_rate_limit stored procedure for atomic rate limit operations.
+ * No optimistic locking or retry loops needed - the database handles all concurrency.
+ *
  * @param {string} ip - Client IP address
  * @param {Object} config - Rate limit configuration
  * @param {string} config.postgrestUrl - PostgREST API base URL
  * @param {string} config.verifyHeader - Authentication header name
  * @param {string} config.verifySecret - Authentication header value
- * @param {string} config.tableName - Table name (defaults to 'IP_LIMIT_TABLE')
+ * @param {string} config.tableName - Table name (defaults to 'IP_LIMIT_TABLE', used for cleanup only)
  * @param {number} config.windowTimeSeconds - Time window in seconds
  * @param {number} config.limit - Request limit per window
  * @param {string} config.ipv4Suffix - IPv4 subnet suffix
@@ -154,12 +145,10 @@ export const checkRateLimit = async (ip, config) => {
 
     // Probabilistic cleanup helper
     const triggerCleanup = () => {
-      // Use configured cleanup probability (default 1% = 0.01)
       const probability = config.cleanupProbability || 0.01;
       if (Math.random() < probability) {
         console.log(`[Rate Limit Cleanup] Triggered cleanup (probability: ${probability * 100}%)`);
 
-        // Use ctx.waitUntil to ensure cleanup completes even after response is sent
         const cleanupPromise = cleanupExpiredRecords(postgrestUrl, verifyHeader, verifySecret, tableName, config.windowTimeSeconds)
           .then((deletedCount) => {
             console.log(`[Rate Limit Cleanup] Background cleanup finished: ${deletedCount} records deleted`);
@@ -170,221 +159,77 @@ export const checkRateLimit = async (ip, config) => {
           });
 
         if (config.ctx && config.ctx.waitUntil) {
-          // Cloudflare Workers context available, use waitUntil
           config.ctx.waitUntil(cleanupPromise);
           console.log(`[Rate Limit Cleanup] Cleanup scheduled in background (using ctx.waitUntil)`);
         } else {
-          // No context available, cleanup may be interrupted
           console.warn(`[Rate Limit Cleanup] No ctx.waitUntil available, cleanup may be interrupted`);
         }
       }
     };
 
-    // Try to insert new record (ignore if exists)
-    const insertResult = await executeQuery(
-      postgrestUrl,
-      verifyHeader,
-      verifySecret,
-      tableName,
-      'POST',
-      '',
-      {
-        IP_HASH: ipHash,
-        IP_RANGE: ipSubnet,
-        IP_ADDR: JSON.stringify([ip]),
-        ACCESS_COUNT: 1,
-        LAST_WINDOW_TIME: now,
-        BLOCK_UNTIL: null,
+    // Call atomic RPC stored procedure - single database round-trip
+    // The stored procedure handles all concurrency via ON CONFLICT internally
+    const rpcUrl = `${postgrestUrl}/rpc/upsert_rate_limit`;
+    const rpcBody = {
+      p_ip_hash: ipHash,
+      p_ip_range: ipSubnet,
+      p_now: now,
+      p_window_seconds: config.windowTimeSeconds,
+      p_limit: config.limit,
+      p_block_seconds: config.blockTimeSeconds || 0,
+    };
+
+    const rpcResponse = await fetch(rpcUrl, {
+      method: 'POST',
+      headers: {
+        [verifyHeader]: verifySecret,
+        'Content-Type': 'application/json',
       },
-      { 'Prefer': 'resolution=ignore-duplicates' }
-    );
+      body: JSON.stringify(rpcBody),
+    });
 
-    const inserted = insertResult.affectedRows > 0;
-    if (inserted) {
-      triggerCleanup();
-      return { allowed: true };
+    if (!rpcResponse.ok) {
+      const errorText = await rpcResponse.text();
+      throw new Error(`PostgREST RPC error (${rpcResponse.status}): ${errorText}`);
     }
 
-    // Record exists, use optimistic locking with retry
-    const maxAttempts = 15; // Increased from 5 to handle high concurrency
-    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-      // Add random backoff before retry (except first attempt)
-      if (attempt > 0) {
-        await randomBackoff(attempt - 1);
-      }
-      // Fetch current record
-      const selectFilters = `IP_HASH=eq.${ipHash}&select=IP_HASH,IP_RANGE,IP_ADDR,ACCESS_COUNT,LAST_WINDOW_TIME,BLOCK_UNTIL`;
-      const queryResult = await executeQuery(
-        postgrestUrl,
-        verifyHeader,
-        verifySecret,
-        tableName,
-        'GET',
-        selectFilters
-      );
+    // Parse RPC result (returns array with single row)
+    const rpcResult = await rpcResponse.json();
+    if (!rpcResult || rpcResult.length === 0) {
+      throw new Error('RPC upsert_rate_limit returned no rows');
+    }
 
-      const records = queryResult.data || [];
+    const row = rpcResult[0];
+    const accessCount = Number.parseInt(row.ACCESS_COUNT, 10);
+    const lastWindowTime = Number.parseInt(row.LAST_WINDOW_TIME, 10);
+    const blockUntil = row.BLOCK_UNTIL ? Number.parseInt(row.BLOCK_UNTIL, 10) : null;
 
-      if (!records || records.length === 0) {
-        // Record disappeared (race condition), try insert again
-        const retryInsert = await executeQuery(
-          postgrestUrl,
-          verifyHeader,
-          verifySecret,
-          tableName,
-          'POST',
-          '',
-          {
-            IP_HASH: ipHash,
-            IP_RANGE: ipSubnet,
-            IP_ADDR: JSON.stringify([ip]),
-            ACCESS_COUNT: 1,
-            LAST_WINDOW_TIME: now,
-            BLOCK_UNTIL: null,
-          },
-          { 'Prefer': 'resolution=ignore-duplicates' }
-        );
-        if (retryInsert.affectedRows > 0) {
-          triggerCleanup();
-          return { allowed: true };
-        }
-        console.warn(`[Rate Limit] PostgREST insert race on attempt ${attempt + 1} for hash ${ipHash}`);
-        continue;
-      }
+    // Trigger cleanup probabilistically
+    triggerCleanup();
 
-      const record = records[0];
-      const lastWindowTime = Number.parseInt(record.LAST_WINDOW_TIME, 10);
-      const currentCount = Number.parseInt(record.ACCESS_COUNT, 10);
+    // Check if currently blocked
+    if (blockUntil && blockUntil > now) {
+      const retryAfter = blockUntil - now;
+      return {
+        allowed: false,
+        ipSubnet,
+        retryAfter: Math.max(1, retryAfter),
+      };
+    }
+
+    // Check if limit exceeded (without block time configured)
+    if (accessCount > config.limit) {
       const diff = now - lastWindowTime;
-      const blockUntil = record.BLOCK_UNTIL ? Number.parseInt(record.BLOCK_UNTIL, 10) : null;
-      const ipAddrJson = record.IP_ADDR || '[]';
-
-      let existingIPs = [];
-      try {
-        const parsed = JSON.parse(ipAddrJson);
-        if (Array.isArray(parsed)) {
-          existingIPs = parsed;
-        }
-      } catch (error) {
-        existingIPs = [];
-      }
-
-      // Check if currently blocked
-      if (blockUntil && blockUntil > now) {
-        const retryAfter = blockUntil - now;
-        return {
-          allowed: false,
-          ipSubnet,
-          retryAfter: Math.max(1, retryAfter),
-        };
-      }
-
-      // Build optimistic lock filters (match all current field values)
-      const buildOptimisticLockFilters = () => {
-        const filters = [
-          `IP_HASH=eq.${ipHash}`,
-          `ACCESS_COUNT=eq.${currentCount}`,
-          `LAST_WINDOW_TIME=eq.${lastWindowTime}`,
-          `IP_ADDR=eq.${encodeURIComponent(ipAddrJson)}`,
-        ];
-        if (blockUntil === null) {
-          filters.push('BLOCK_UNTIL=is.null');
-        } else {
-          filters.push(`BLOCK_UNTIL=eq.${blockUntil}`);
-        }
-        return filters.join('&');
+      const retryAfter = config.windowTimeSeconds - diff;
+      return {
+        allowed: false,
+        ipSubnet,
+        retryAfter: Math.max(1, retryAfter),
       };
-
-      const updateAndReturn = async (filters, updateBody, cleanupNeeded, responsePayload, debugContext) => {
-        const updateResult = await executeQuery(
-          postgrestUrl,
-          verifyHeader,
-          verifySecret,
-          tableName,
-          'PATCH',
-          filters,
-          updateBody,
-          { 'Prefer': 'return=representation' }
-        );
-        if (updateResult.affectedRows > 0) {
-          if (cleanupNeeded) {
-            triggerCleanup();
-          }
-          return responsePayload;
-        }
-        console.warn(`[Rate Limit] PostgREST ${debugContext} concurrency retry ${attempt + 1} for hash ${ipHash}`);
-        return null;
-      };
-
-      // Case 1: Block expired, reset to new window
-      if (blockUntil && blockUntil <= now) {
-        const filters = buildOptimisticLockFilters();
-        const updateBody = {
-          ACCESS_COUNT: 1,
-          LAST_WINDOW_TIME: now,
-          IP_ADDR: JSON.stringify([ip]),
-          BLOCK_UNTIL: null,
-        };
-        const result = await updateAndReturn(filters, updateBody, true, { allowed: true }, 'block reset');
-        if (result) return result;
-        continue;
-      }
-
-      // Case 2: Window expired, reset to new window
-      if (diff >= config.windowTimeSeconds) {
-        const filters = buildOptimisticLockFilters();
-        const updateBody = {
-          ACCESS_COUNT: 1,
-          LAST_WINDOW_TIME: now,
-          IP_ADDR: JSON.stringify([ip]),
-          BLOCK_UNTIL: null,
-        };
-        const result = await updateAndReturn(filters, updateBody, true, { allowed: true }, 'window reset');
-        if (result) return result;
-        continue;
-      }
-
-      // Case 3: Limit exceeded
-      if (currentCount >= config.limit) {
-        const blockTimeSeconds = config.blockTimeSeconds || 0;
-        if (blockTimeSeconds > 0) {
-          const newBlockUntil = now + blockTimeSeconds;
-          const filters = buildOptimisticLockFilters();
-          const updateBody = {
-            BLOCK_UNTIL: newBlockUntil,
-          };
-          const result = await updateAndReturn(filters, updateBody, false, {
-            allowed: false,
-            ipSubnet,
-            retryAfter: Math.max(1, blockTimeSeconds),
-          }, 'block time set');
-          if (result) return result;
-          continue;
-        }
-
-        // No block time configured, just return rate limit exceeded
-        const retryAfter = config.windowTimeSeconds - diff;
-        return {
-          allowed: false,
-          ipSubnet,
-          retryAfter: Math.max(1, retryAfter),
-        };
-      }
-
-      // Case 4: Increment counter
-      const shouldUpdateIPs = !existingIPs.includes(ip);
-      const nextIPs = shouldUpdateIPs ? [...existingIPs, ip] : existingIPs;
-      const newIPJson = JSON.stringify(nextIPs);
-      const filters = buildOptimisticLockFilters();
-      const updateBody = {
-        ACCESS_COUNT: currentCount + 1,
-        IP_ADDR: newIPJson,
-      };
-      const result = await updateAndReturn(filters, updateBody, true, { allowed: true }, 'counter increment');
-      if (result) return result;
     }
 
-    throw new Error('PostgREST concurrency retry limit exceeded');
+    // Request allowed
+    return { allowed: true };
   } catch (error) {
     // Handle errors based on pgErrorHandle strategy
     const errorMessage = error instanceof Error ? error.message : String(error);

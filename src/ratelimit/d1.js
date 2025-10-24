@@ -11,7 +11,6 @@ const ensureTable = async (db, tableName) => {
     CREATE TABLE IF NOT EXISTS ${tableName} (
       IP_HASH TEXT PRIMARY KEY,
       IP_RANGE TEXT NOT NULL,
-      IP_ADDR TEXT NOT NULL,
       ACCESS_COUNT INTEGER NOT NULL,
       LAST_WINDOW_TIME INTEGER NOT NULL,
       BLOCK_UNTIL INTEGER
@@ -103,139 +102,81 @@ export const checkRateLimit = async (ip, config) => {
       }
     };
 
-    const insertStmt = db.prepare(
-      `INSERT OR IGNORE INTO ${tableName} (IP_HASH, IP_RANGE, IP_ADDR, ACCESS_COUNT, LAST_WINDOW_TIME, BLOCK_UNTIL)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    );
-    const insertResult = await insertStmt.bind(ipHash, ipSubnet, JSON.stringify([ip]), 1, now, null).run();
-    if (insertResult.meta?.changes > 0) {
-      triggerCleanup();
-      return { allowed: true };
+    // Atomic UPSERT with RETURNING - single database round-trip, no locks needed
+    // D1 (SQLite) supports RETURNING since SQLite 3.35.0
+    const upsertSql = `
+      INSERT INTO ${tableName} (IP_HASH, IP_RANGE, ACCESS_COUNT, LAST_WINDOW_TIME, BLOCK_UNTIL)
+      VALUES (?, ?, 1, ?, NULL)
+      ON CONFLICT (IP_HASH) DO UPDATE SET
+        ACCESS_COUNT = CASE
+          WHEN ? - ${tableName}.LAST_WINDOW_TIME >= ? THEN 1
+          WHEN ${tableName}.BLOCK_UNTIL IS NOT NULL AND ${tableName}.BLOCK_UNTIL <= ? THEN 1
+          WHEN ${tableName}.ACCESS_COUNT >= ? THEN ${tableName}.ACCESS_COUNT
+          ELSE ${tableName}.ACCESS_COUNT + 1
+        END,
+        LAST_WINDOW_TIME = CASE
+          WHEN ? - ${tableName}.LAST_WINDOW_TIME >= ? THEN ?
+          WHEN ${tableName}.BLOCK_UNTIL IS NOT NULL AND ${tableName}.BLOCK_UNTIL <= ? THEN ?
+          ELSE ${tableName}.LAST_WINDOW_TIME
+        END,
+        BLOCK_UNTIL = CASE
+          WHEN ? - ${tableName}.LAST_WINDOW_TIME >= ? THEN NULL
+          WHEN ${tableName}.BLOCK_UNTIL IS NOT NULL AND ${tableName}.BLOCK_UNTIL <= ? THEN NULL
+          WHEN ${tableName}.ACCESS_COUNT >= ? AND ? > 0
+            THEN ? + ?
+          ELSE ${tableName}.BLOCK_UNTIL
+        END
+      RETURNING ACCESS_COUNT, LAST_WINDOW_TIME, BLOCK_UNTIL
+    `;
+
+    const blockTimeSeconds = config.blockTimeSeconds || 0;
+    const stmt = db.prepare(upsertSql);
+    const result = await stmt.bind(
+      // INSERT VALUES
+      ipHash, ipSubnet, now,
+      // ACCESS_COUNT CASE parameters
+      now, config.windowTimeSeconds, now, config.limit,
+      // LAST_WINDOW_TIME CASE parameters
+      now, config.windowTimeSeconds, now, now, now,
+      // BLOCK_UNTIL CASE parameters
+      now, config.windowTimeSeconds, now, config.limit, blockTimeSeconds, now, blockTimeSeconds
+    ).first();
+
+    if (!result) {
+      throw new Error('D1 UPSERT returned no rows');
     }
 
-    const maxAttempts = 5;
-    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-      const stmt = db.prepare(
-        `SELECT IP_HASH, IP_RANGE, IP_ADDR, ACCESS_COUNT, LAST_WINDOW_TIME, BLOCK_UNTIL
-         FROM ${tableName}
-         WHERE IP_HASH = ?`
-      );
-      const result = await stmt.bind(ipHash).first();
+    // Parse RETURNING result
+    const accessCount = Number.parseInt(result.ACCESS_COUNT, 10);
+    const lastWindowTime = Number.parseInt(result.LAST_WINDOW_TIME, 10);
+    const blockUntil = result.BLOCK_UNTIL ? Number.parseInt(result.BLOCK_UNTIL, 10) : null;
 
-      if (!result) {
-        const retryInsert = await insertStmt.bind(ipHash, ipSubnet, JSON.stringify([ip]), 1, now, null).run();
-        if (retryInsert.meta?.changes > 0) {
-          triggerCleanup();
-          return { allowed: true };
-        }
-        console.warn(`[Rate Limit] D1 insert race on attempt ${attempt + 1} for hash ${ipHash}`);
-        continue;
-      }
+    // Trigger cleanup probabilistically
+    triggerCleanup();
 
-      const lastWindowTime = Number.parseInt(result.LAST_WINDOW_TIME, 10);
-      const currentCount = Number.parseInt(result.ACCESS_COUNT, 10);
-      const diff = now - lastWindowTime;
-      const blockUntil = result.BLOCK_UNTIL ? Number.parseInt(result.BLOCK_UNTIL, 10) : null;
-
-      let existingIPs = [];
-      try {
-        const parsed = JSON.parse(result.IP_ADDR || '[]');
-        if (Array.isArray(parsed)) {
-          existingIPs = parsed;
-        }
-      } catch (error) {
-        existingIPs = [];
-      }
-
-      if (blockUntil && blockUntil > now) {
-        const retryAfter = blockUntil - now;
-        return {
-          allowed: false,
-          ipSubnet,
-          retryAfter: Math.max(1, retryAfter),
-        };
-      }
-
-      const baseParams = [ipHash, currentCount, lastWindowTime, result.IP_ADDR || '[]'];
-      const whereClause = blockUntil === null
-        ? 'IP_HASH = ? AND ACCESS_COUNT = ? AND LAST_WINDOW_TIME = ? AND IP_ADDR = ? AND BLOCK_UNTIL IS NULL'
-        : 'IP_HASH = ? AND ACCESS_COUNT = ? AND LAST_WINDOW_TIME = ? AND IP_ADDR = ? AND BLOCK_UNTIL = ?';
-      const whereParams = blockUntil === null ? baseParams : [...baseParams, blockUntil];
-
-      const runConditionalUpdate = async (sql, params, cleanupNeeded, responsePayload, debugContext) => {
-        const updateStmt = db.prepare(sql);
-        const updateResult = await updateStmt.bind(...params).run();
-        if (updateResult.meta?.changes > 0) {
-          if (cleanupNeeded) {
-            triggerCleanup();
-          }
-          return responsePayload;
-        }
-        console.warn(`[Rate Limit] D1 ${debugContext} concurrency retry ${attempt + 1} for hash ${ipHash}`);
-        return null;
+    // Check if currently blocked
+    if (blockUntil && blockUntil > now) {
+      const retryAfter = blockUntil - now;
+      return {
+        allowed: false,
+        ipSubnet,
+        retryAfter: Math.max(1, retryAfter),
       };
-
-      if (blockUntil && blockUntil <= now) {
-        const sql = `UPDATE ${tableName}
-                     SET ACCESS_COUNT = ?, LAST_WINDOW_TIME = ?, IP_ADDR = ?, BLOCK_UNTIL = NULL
-                     WHERE ${whereClause}`;
-        const params = [1, now, JSON.stringify([ip]), ...whereParams];
-        const resultUpdate = await runConditionalUpdate(sql, params, true, { allowed: true }, 'block reset');
-        if (resultUpdate) return resultUpdate;
-        continue;
-      }
-
-      if (diff >= config.windowTimeSeconds) {
-        const sql = `UPDATE ${tableName}
-                     SET ACCESS_COUNT = ?, LAST_WINDOW_TIME = ?, IP_ADDR = ?, BLOCK_UNTIL = NULL
-                     WHERE ${whereClause}`;
-        const params = [1, now, JSON.stringify([ip]), ...whereParams];
-        const resultUpdate = await runConditionalUpdate(sql, params, true, { allowed: true }, 'window reset');
-        if (resultUpdate) return resultUpdate;
-        continue;
-      }
-
-      if (currentCount >= config.limit) {
-        const blockTimeSeconds = config.blockTimeSeconds || 0;
-        if (blockTimeSeconds > 0) {
-          const newBlockUntil = now + blockTimeSeconds;
-          const sql = `UPDATE ${tableName}
-                       SET BLOCK_UNTIL = ?
-                       WHERE ${whereClause}`;
-          const params = [newBlockUntil, ...whereParams];
-          const resultUpdate = await runConditionalUpdate(sql, params, false, {
-            allowed: false,
-            ipSubnet,
-            retryAfter: Math.max(1, blockTimeSeconds),
-          }, 'block time set');
-          if (resultUpdate) return resultUpdate;
-          continue;
-        }
-        const retryAfter = config.windowTimeSeconds - diff;
-        return {
-          allowed: false,
-          ipSubnet,
-          retryAfter: Math.max(1, retryAfter),
-        };
-      }
-
-      const shouldUpdateIPs = !existingIPs.includes(ip);
-      const nextIPs = shouldUpdateIPs ? [...existingIPs, ip] : existingIPs;
-      const sql = `UPDATE ${tableName}
-                   SET ACCESS_COUNT = ?, LAST_WINDOW_TIME = ?, IP_ADDR = ?, BLOCK_UNTIL = ?
-                   WHERE ${whereClause}`;
-      const params = [
-        currentCount + 1,
-        lastWindowTime,
-        JSON.stringify(nextIPs),
-        blockUntil,
-        ...whereParams,
-      ];
-      const resultUpdate = await runConditionalUpdate(sql, params, true, { allowed: true }, 'counter increment');
-      if (resultUpdate) return resultUpdate;
     }
 
-    throw new Error('D1 concurrency retry limit exceeded');
+    // Check if limit exceeded (without block time configured)
+    if (accessCount > config.limit) {
+      const diff = now - lastWindowTime;
+      const retryAfter = config.windowTimeSeconds - diff;
+      return {
+        allowed: false,
+        ipSubnet,
+        retryAfter: Math.max(1, retryAfter),
+      };
+    }
+
+    // Request allowed
+    return { allowed: true };
   } catch (error) {
     // Handle errors based on pgErrorHandle strategy
     const errorMessage = error instanceof Error ? error.message : String(error);

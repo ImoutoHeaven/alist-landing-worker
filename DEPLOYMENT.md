@@ -529,12 +529,38 @@ npm run deploy
 
 #### Option 3: Neon (PostgreSQL)
 
-**Configuration:**
+**Step 1: Create Neon Database**
+
+**Setup:**
+1. Visit https://neon.tech
+2. Create a new project
+3. Copy the connection string
+4. **Run init.sql** to create table and indexes:
+   ```bash
+   # Download or locate init.sql from the project
+   psql "postgresql://user:password@ep-xxx.neon.tech/neondb?sslmode=require" < init.sql
+   ```
+   This creates:
+   - `IP_LIMIT_TABLE` table (without `IP_ADDR` field)
+   - Performance indexes
+
+**Step 2: Set Environment Variables**
+
+For local development (`.dev.vars`):
 ```env
 DB_MODE=neon
 POSTGRES_URL=postgresql://user:password@ep-xxx.neon.tech/neondb?sslmode=require
 IPSUBNET_WINDOWTIME_LIMIT=100
 WINDOW_TIME=24h
+```
+
+For production (Cloudflare Dashboard):
+- Add `POSTGRES_URL` as an encrypted secret
+- Add other variables as plain text
+
+**Step 3: Deploy**
+```bash
+npm run deploy
 ```
 
 ### Time Window Format
@@ -572,19 +598,27 @@ WINDOW_TIME=24h
 
 ### Database Schema
 
-The worker automatically creates the following table (all database modes use the same schema):
+**⚠️ IMPORTANT: After v2.0 atomic refactoring, the `IP_ADDR` field has been removed for simplified atomic operations.**
 
-**For SQL databases (D1, Neon):**
+**For SQL databases (D1, Neon, custom-pg-rest):**
+
+Use `init.sql` to create the table:
+
 ```sql
-CREATE TABLE IF NOT EXISTS IP_LIMIT_TABLE (
-  IP_HASH TEXT PRIMARY KEY,        -- SHA256 hash of IP subnet
-  IP_RANGE TEXT NOT NULL,           -- Original IP subnet (e.g., "192.168.1.0/24")
-  IP_ADDR TEXT NOT NULL,            -- JSON array of unique IPs in this subnet
-  ACCESS_COUNT INTEGER NOT NULL,    -- Number of requests in current window
-  LAST_WINDOW_TIME INTEGER NOT NULL,-- Unix timestamp of window start
-  BLOCK_UNTIL INTEGER               -- Unix timestamp when block expires (NULL if not blocked)
+CREATE TABLE IF NOT EXISTS "IP_LIMIT_TABLE" (
+  "IP_HASH" TEXT PRIMARY KEY,        -- SHA256 hash of IP subnet
+  "IP_RANGE" TEXT NOT NULL,          -- Original IP subnet (e.g., "192.168.1.0/24")
+  "ACCESS_COUNT" INTEGER NOT NULL,   -- Number of requests in current window
+  "LAST_WINDOW_TIME" INTEGER NOT NULL, -- Unix timestamp of window start
+  "BLOCK_UNTIL" INTEGER              -- Unix timestamp when block expires (NULL if not blocked)
 );
+
+-- Indexes for performance
+CREATE INDEX IF NOT EXISTS idx_last_window_time ON "IP_LIMIT_TABLE"("LAST_WINDOW_TIME");
+CREATE INDEX IF NOT EXISTS idx_block_until ON "IP_LIMIT_TABLE"("BLOCK_UNTIL") WHERE "BLOCK_UNTIL" IS NOT NULL;
 ```
+
+**For custom-pg-rest only**: `init.sql` also creates the `upsert_rate_limit()` stored procedure required for atomic operations.
 
 **For NoSQL databases (Firebase):**
 Collection: `IP_LIMIT_TABLE` (configurable)
@@ -598,6 +632,8 @@ Document structure:
   "BLOCK_UNTIL": 1234567890  // or null
 }
 ```
+
+**Note**: Firebase still uses `IP_ADDR` field. Only SQL database implementations (Neon, D1, custom-pg-rest) have removed it.
 
 ### How It Works
 
@@ -632,15 +668,6 @@ Content-Type: application/json
 ```
 
 **Note:** The `retry-after` field (in seconds) is included in both the response body and the `Retry-After` HTTP header for client convenience.
-
-**Setup:**
-1. Visit https://neon.tech
-2. Create a new project
-3. Copy the connection string
-4. Add to environment variables
-5. Deploy: `npm run deploy`
-
-The worker will automatically create the `IP_LIMIT_TABLE` on first request.
 
 ---
 
@@ -689,34 +716,34 @@ WINDOW_TIME=24h
 3. Reverse proxy with authentication (e.g., nginx with custom headers)
 
 **⚠️ Before you start:**
-- Unlike D1/Neon/Firebase modes, this mode **does NOT auto-create tables**
-- You MUST manually run SQL to create the `IP_LIMIT_TABLE` (see Step 1 below)
-- Failure to create the table will result in `PGRST205` errors
+- Unlike D1/Neon/Firebase modes, this mode **does NOT auto-create tables or stored procedures**
+- You MUST manually run `init.sql` on your PostgreSQL database (see Step 1 below)
+- Failure to run init.sql will result in `PGRST205` errors or RPC function not found errors
 
-**Step 1: Create Database Table**
+**Step 1: Run init.sql on Your PostgreSQL Database**
 
-**⚠️ CRITICAL: You MUST create this table manually before deployment!**
+**⚠️ CRITICAL: You MUST run init.sql before deployment!**
 
-Unlike D1/Neon modes, PostgREST cannot execute DDL commands via REST API. The worker will fail with `PGRST205` error if the table doesn't exist.
+PostgREST cannot execute DDL commands via REST API. Connect to your PostgreSQL database and run the provided `init.sql`:
 
-Connect to your PostgreSQL database and run:
+```bash
+# Method 1: Using psql
+psql "postgres://username:password@localhost:5432/database" < init.sql
 
-```sql
--- ⚠️ IMPORTANT: Use double quotes to preserve uppercase table name!
--- PostgreSQL converts unquoted identifiers to lowercase automatically.
-CREATE TABLE "IP_LIMIT_TABLE" (
-  IP_HASH TEXT PRIMARY KEY,
-  IP_RANGE TEXT NOT NULL,
-  IP_ADDR TEXT NOT NULL,
-  ACCESS_COUNT INTEGER NOT NULL,
-  LAST_WINDOW_TIME INTEGER NOT NULL,
-  BLOCK_UNTIL INTEGER
-);
-
--- (Optional) Create indexes for faster cleanup queries
-CREATE INDEX idx_last_window_time ON "IP_LIMIT_TABLE"(LAST_WINDOW_TIME);
-CREATE INDEX idx_block_until ON "IP_LIMIT_TABLE"(BLOCK_UNTIL) WHERE BLOCK_UNTIL IS NOT NULL;
+# Method 2: Using psql interactive mode
+psql -h localhost -U username -d database
+\i /path/to/init.sql
 ```
+
+**What init.sql creates:**
+1. **`IP_LIMIT_TABLE` table** (without `IP_ADDR` field)
+2. **`upsert_rate_limit()` stored procedure** - Required for atomic rate limiting operations
+3. **Indexes** for performance optimization
+
+**⚠️ Important Notes:**
+- Table name is **uppercase** (`"IP_LIMIT_TABLE"`) - double quotes preserve case
+- The stored procedure is **essential** - worker will fail without it
+- See `init.sql` in project root for full SQL code
 
 **⚠️ PostgreSQL Table Name Case Sensitivity:**
 - Without quotes: `CREATE TABLE IP_LIMIT_TABLE` → creates `ip_limit_table` (lowercase)
@@ -965,22 +992,17 @@ Rate limit check failed (fail-open): PostgREST API error (404):
    psql -h your-host -U your-user -d your-database
    ```
 
-2. Create the table manually (use **double quotes** to preserve uppercase):
-   ```sql
-   -- PostgreSQL converts unquoted names to lowercase!
-   -- Use quotes to create uppercase table name
-   CREATE TABLE "IP_LIMIT_TABLE" (
-     IP_HASH TEXT PRIMARY KEY,
-     IP_RANGE TEXT NOT NULL,
-     IP_ADDR TEXT NOT NULL,
-     ACCESS_COUNT INTEGER NOT NULL,
-     LAST_WINDOW_TIME INTEGER NOT NULL,
-     BLOCK_UNTIL INTEGER
-   );
+2. Run `init.sql` from the project root:
+   ```bash
+   psql -h your-host -U your-user -d your-database < init.sql
+   ```
 
-   -- Optional: Create indexes for better performance
-   CREATE INDEX idx_last_window_time ON "IP_LIMIT_TABLE"(LAST_WINDOW_TIME);
-   CREATE INDEX idx_block_until ON "IP_LIMIT_TABLE"(BLOCK_UNTIL) WHERE BLOCK_UNTIL IS NOT NULL;
+   Or create the table and stored procedure manually:
+   ```sql
+   -- See init.sql for full SQL
+   -- Creates IP_LIMIT_TABLE (without IP_ADDR field)
+   -- Creates upsert_rate_limit() stored procedure
+   -- Creates performance indexes
    ```
 
 3. Verify the table exists with correct case:

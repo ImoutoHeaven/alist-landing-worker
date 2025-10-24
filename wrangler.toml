@@ -64,6 +64,9 @@ persist = true
 #
 # # Custom PostgreSQL + PostgREST Rate Limiting - requires DB_MODE="custom-pg-rest"
 # # Use this mode when you have self-hosted PostgreSQL with PostgREST REST API
+# # ⚠️ IMPORTANT: You MUST run init.sql on your PostgreSQL database first!
+# #   - Creates IP_LIMIT_TABLE table (without IP_ADDR column)
+# #   - Creates upsert_rate_limit() stored procedure (required for atomic operations)
 # POSTGREST_URL = "https://your-domain.com/postgrest"  # PostgREST API endpoint (without table name)
 # POSTGREST_TABLE_NAME = "IP_LIMIT_TABLE"  # Optional, defaults to IP_LIMIT_TABLE
 # # Note: VERIFY_HEADER and VERIFY_SECRET (already defined above) are used for PostgREST authentication
