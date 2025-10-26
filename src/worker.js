@@ -484,6 +484,7 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
     }
   }
 
+  const encodedPath = path;
   let decodedPath;
   try {
     decodedPath = decodeURIComponent(path);
@@ -517,7 +518,7 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
   const ipSignData = JSON.stringify({ path: decodedPath, ip: clientIP });
   const ipSign = await hmacSha256Sign(config.signSecret, ipSignData, expire);
 
-  const downloadURLObj = new URL(decodedPath, workerBaseURL);
+  const downloadURLObj = new URL(encodedPath, workerBaseURL);
   downloadURLObj.searchParams.set('sign', sign);
   downloadURLObj.searchParams.set('hashSign', hashSign);
   downloadURLObj.searchParams.set('workerSign', workerSign);
@@ -580,6 +581,7 @@ const handleFileRequest = async (request, config, rateLimiter, ctx) => {
   // Fast redirect logic
   if (shouldRedirect) {
     const sign = url.searchParams.get('sign') || '';
+    const encodedPath = url.pathname;
     let decodedPath;
     try {
       decodedPath = decodeURIComponent(url.pathname);
@@ -629,7 +631,7 @@ const handleFileRequest = async (request, config, rateLimiter, ctx) => {
     const ipSignData = JSON.stringify({ path: decodedPath, ip: clientIP });
     const ipSign = await hmacSha256Sign(config.signSecret, ipSignData, expire);
 
-    const downloadURLObj = new URL(decodedPath, workerBaseURL);
+    const downloadURLObj = new URL(encodedPath, workerBaseURL);
     downloadURLObj.searchParams.set('sign', sign);
     downloadURLObj.searchParams.set('hashSign', hashSign);
     downloadURLObj.searchParams.set('workerSign', workerSign);
