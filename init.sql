@@ -196,6 +196,9 @@ $$ LANGUAGE plpgsql;
 -- ========================================
 -- Stored Procedure: Unified Check (Rate Limit + Filesize Cache)
 -- ========================================
+-- FIXED: Removed FOUND check in cache validation as it's unreliable after EXECUTE INTO.
+-- PostgreSQL FOUND variable behavior is undefined after dynamic SQL execution (EXECUTE).
+-- The cache_rec will have values even if FOUND is false, so we only check TIMESTAMP IS NOT NULL.
 
 CREATE OR REPLACE FUNCTION landing_unified_check(
   p_path_hash TEXT,
@@ -230,7 +233,9 @@ BEGIN
 
   EXECUTE cache_sql INTO cache_rec USING p_path_hash;
 
-  IF FOUND AND cache_rec."TIMESTAMP" IS NOT NULL AND (p_now - cache_rec."TIMESTAMP") <= p_cache_ttl THEN
+  -- FIXED: Removed "FOUND AND" check - FOUND is unreliable after EXECUTE INTO
+  -- If no record exists, cache_rec."TIMESTAMP" will be NULL anyway
+  IF cache_rec."TIMESTAMP" IS NOT NULL AND (p_now - cache_rec."TIMESTAMP") <= p_cache_ttl THEN
     cache_size := cache_rec."SIZE";
     cache_timestamp := cache_rec."TIMESTAMP";
   ELSE
