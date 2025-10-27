@@ -14,6 +14,11 @@ export const unifiedCheck = async (path, clientIP, config) => {
   const rateLimitTableName = config.rateLimitTableName || 'IP_LIMIT_TABLE';
   const ipv4Suffix = config.ipv4Suffix || '/32';
   const ipv6Suffix = config.ipv6Suffix || '/60';
+  const tokenBindingEnabled = config.turnstileTokenBinding !== false;
+  const tokenHash = tokenBindingEnabled ? (config.tokenHash || null) : null;
+  const tokenIP = tokenBindingEnabled ? (config.tokenIP || clientIP || null) : null;
+  const tokenTTLSeconds = Number(config.tokenTTLSeconds) || 0;
+  const tokenTableName = config.tokenTableName || 'TURNSTILE_TOKEN_BINDING';
 
   if (cacheTTL <= 0) {
     throw new Error('[Unified Check] sizeTTL must be greater than zero');
@@ -51,6 +56,10 @@ export const unifiedCheck = async (path, clientIP, config) => {
     p_limit: limit,
     p_block_seconds: blockSeconds,
     p_ratelimit_table_name: rateLimitTableName,
+    p_token_hash: tokenHash,
+    p_token_ip: tokenIP,
+    p_token_ttl: tokenTTLSeconds,
+    p_token_table_name: tokenTableName,
   };
 
   console.log('[Unified Check] Calling landing_unified_check with params:', JSON.stringify(rpcBody));
@@ -93,6 +102,13 @@ export const unifiedCheck = async (path, clientIP, config) => {
   const accessCount = Number.parseInt(row.rate_access_count, 10);
   const lastWindowTime = Number.parseInt(row.rate_last_window_time, 10);
   const blockUntil = row.rate_block_until !== null ? Number.parseInt(row.rate_block_until, 10) : null;
+  const tokenErrorRaw = row.token_error_code === null || typeof row.token_error_code === 'undefined'
+    ? 0
+    : Number.parseInt(row.token_error_code, 10);
+  const tokenAccessRaw = row.token_access_count === null || typeof row.token_access_count === 'undefined'
+    ? 0
+    : Number.parseInt(row.token_access_count, 10);
+  const tokenAllowedRaw = row.token_allowed;
 
   let allowed = true;
   let retryAfter = 0;
@@ -121,6 +137,13 @@ export const unifiedCheck = async (path, clientIP, config) => {
       retryAfter,
       lastWindowTime: safeLastWindow,
       blockUntil,
+    },
+    token: {
+      allowed: tokenBindingEnabled ? tokenAllowedRaw !== false : true,
+      errorCode: Number.isFinite(tokenErrorRaw) ? tokenErrorRaw : 0,
+      accessCount: Number.isFinite(tokenAccessRaw) ? tokenAccessRaw : 0,
+      clientIp: typeof row.token_client_ip === 'string' ? row.token_client_ip : null,
+      expiresAt: row.token_expires_at !== null ? Number.parseInt(row.token_expires_at, 10) : null,
     },
   };
 };

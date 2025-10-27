@@ -19,6 +19,11 @@ const REQUIRED_ENV = ['TOKEN', 'WORKER_ADDRESS_DOWNLOAD'];
 
 const TURNSTILE_VERIFY_ENDPOINT = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
 const TURNSTILE_HEADER = 'cf-turnstile-response';
+const TOKEN_BINDING_ERROR_MESSAGES = {
+  1: 'turnstile token ip mismatch',
+  2: 'turnstile token expired',
+  3: 'turnstile token already used',
+};
 
 const VALID_ACTIONS = new Set(['block', 'verify', 'pass-web', 'pass-server', 'pass-asis']);
 
@@ -51,6 +56,17 @@ const resolveConfig = (env = {}) => {
   if (underAttack && (!turnstileSiteKey || !turnstileSecretKey)) {
     throw new Error('environment variables TURNSTILE_SITE_KEY and TURNSTILE_SECRET_KEY are required when UNDER_ATTACK is true');
   }
+  let turnstileTokenBindingEnabled = parseBoolean(env.TURNSTILE_TOKEN_BINDING, true);
+  const rawTurnstileTokenTTL = env.TURNSTILE_TOKEN_TTL && typeof env.TURNSTILE_TOKEN_TTL === 'string'
+    ? env.TURNSTILE_TOKEN_TTL.trim()
+    : '10m';
+  let turnstileTokenTTLSeconds = parseWindowTime(rawTurnstileTokenTTL);
+  if (turnstileTokenTTLSeconds <= 0) {
+    turnstileTokenTTLSeconds = parseWindowTime('10m');
+  }
+  const turnstileTokenTableName = env.TURNSTILE_TOKEN_TABLE && typeof env.TURNSTILE_TOKEN_TABLE === 'string'
+    ? env.TURNSTILE_TOKEN_TABLE.trim()
+    : 'TURNSTILE_TOKEN_BINDING';
 
   // Parse prefix lists (comma-separated)
   const parsePrefixList = (value) => {
@@ -97,6 +113,13 @@ const resolveConfig = (env = {}) => {
 
   // Parse database mode for rate limiting
   const dbMode = env.DB_MODE && typeof env.DB_MODE === 'string' ? env.DB_MODE.trim() : '';
+
+  if (!dbMode) {
+    if (turnstileTokenBindingEnabled) {
+      console.log('[CONFIG] Turnstile token binding disabled because DB_MODE is empty');
+    }
+    turnstileTokenBindingEnabled = false;
+  }
 
   // Parse common rate limit configuration
   const windowTime = env.WINDOW_TIME && typeof env.WINDOW_TIME === 'string' ? env.WINDOW_TIME.trim() : '';
@@ -307,6 +330,10 @@ const resolveConfig = (env = {}) => {
     fastRedirect: parseBoolean(env.FAST_REDIRECT, false),
     turnstileSiteKey,
     turnstileSecretKey,
+    turnstileTokenBindingEnabled,
+    turnstileTokenTTL: rawTurnstileTokenTTL,
+    turnstileTokenTTLSeconds,
+    turnstileTokenTableName,
     blacklistPrefixes,
     whitelistPrefixes,
     blacklistAction,
@@ -673,6 +700,12 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
   }
 
   const clientIP = extractClientIP(request);
+  const rawTurnstileToken =
+    request.headers.get(TURNSTILE_HEADER) ||
+    request.headers.get('x-turnstile-token') ||
+    url.searchParams.get(TURNSTILE_HEADER) ||
+    url.searchParams.get('turnstile_token') ||
+    '';
 
   // Check blacklist/whitelist
   const action = checkPathListAction(path, config);
@@ -687,19 +720,264 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
   const skipVerify = action === 'pass-web' || action === 'pass-server' || action === 'pass-asis';
   const needVerify = forceVerify || (config.underAttack && !skipVerify);
 
+  const hasDbMode = typeof config.dbMode === 'string'
+    ? config.dbMode.length > 0
+    : Boolean(config.dbMode);
+  const tokenTTLSeconds = Number(config.turnstileTokenTTLSeconds) || 0;
+  const tokenTableName = config.turnstileTokenTableName || 'TURNSTILE_TOKEN_BINDING';
+
+  let tokenHash = null;
+  if (config.turnstileTokenBindingEnabled && rawTurnstileToken) {
+    try {
+      tokenHash = await sha256Hash(rawTurnstileToken);
+    } catch (error) {
+      console.error('[Turnstile Binding] Failed to hash token:', error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  const shouldBindToken = Boolean(
+    config.turnstileTokenBindingEnabled &&
+    tokenHash &&
+    clientIP &&
+    tokenTTLSeconds > 0 &&
+    hasDbMode
+  );
+  let tokenBindingAllowed = !shouldBindToken;
+  let tokenBindingErrorCode = 0;
+  let shouldRecordTokenBinding = false;
+
+  const scheduleTokenBindingInsert = () => {
+    if (!shouldBindToken || !tokenHash || !clientIP) {
+      return;
+    }
+    if (!Number.isFinite(tokenTTLSeconds) || tokenTTLSeconds <= 0) {
+      console.warn('[Turnstile Binding] Skipping token insert due to invalid TTL:', tokenTTLSeconds);
+      return;
+    }
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const expiresAt = nowSeconds + tokenTTLSeconds;
+
+    if (config.dbMode === 'custom-pg-rest') {
+      const postgrestUrl = config.rateLimitConfig?.postgrestUrl;
+      if (!postgrestUrl) {
+        console.error('[Turnstile Binding] PostgREST URL missing; cannot insert token binding');
+        return;
+      }
+      const headers = {
+        'Content-Type': 'application/json',
+        Prefer: 'return=minimal,resolution=ignore-duplicates',
+      };
+      applyVerifyHeaders(headers, config.verifyHeader, config.verifySecret);
+      const payload = {
+        TOKEN_HASH: tokenHash,
+        CLIENT_IP: clientIP,
+        ACCESS_COUNT: 0,
+        CREATED_AT: nowSeconds,
+        UPDATED_AT: nowSeconds,
+        EXPIRES_AT: expiresAt,
+      };
+      ctx.waitUntil((async () => {
+        try {
+          const endpoint = new URL(`${postgrestUrl}/${tokenTableName}`);
+          const response = await fetch(endpoint.toString(), {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(payload),
+          });
+          if (!response.ok && response.status !== 409) {
+            const errorText = await response.text().catch(() => '');
+            console.error('[Turnstile Binding] PostgREST insert failed:', response.status, errorText);
+          }
+        } catch (error) {
+          console.error('[Turnstile Binding] PostgREST insert error:', error instanceof Error ? error.message : String(error));
+        }
+      })());
+    } else if (config.dbMode === 'd1') {
+      const envSource = config.cacheConfig?.env || config.rateLimitConfig?.env;
+      const bindingName = config.cacheConfig?.databaseBinding || config.rateLimitConfig?.databaseBinding || 'DB';
+      const db = envSource ? envSource[bindingName] : null;
+      if (!db) {
+        console.error('[Turnstile Binding] D1 binding not available; cannot insert token binding');
+        return;
+      }
+      const statement = db.prepare(`
+        INSERT INTO ${tokenTableName} (TOKEN_HASH, CLIENT_IP, ACCESS_COUNT, CREATED_AT, UPDATED_AT, EXPIRES_AT)
+        VALUES (?, ?, 0, ?, ?, ?)
+        ON CONFLICT(TOKEN_HASH) DO NOTHING
+      `).bind(tokenHash, clientIP, nowSeconds, nowSeconds, expiresAt);
+      ctx.waitUntil((async () => {
+        try {
+          await statement.run();
+        } catch (error) {
+          console.error('[Turnstile Binding] D1 insert failed:', error instanceof Error ? error.message : String(error));
+        }
+      })());
+    } else if (config.dbMode === 'd1-rest') {
+      const accountId = config.rateLimitConfig?.accountId || config.cacheConfig?.accountId;
+      const databaseId = config.rateLimitConfig?.databaseId || config.cacheConfig?.databaseId;
+      const apiToken = config.rateLimitConfig?.apiToken || config.cacheConfig?.apiToken;
+      if (!accountId || !databaseId || !apiToken) {
+        console.error('[Turnstile Binding] D1 REST credentials missing; cannot insert token binding');
+        return;
+      }
+      const sql = `
+        INSERT INTO ${tokenTableName} (TOKEN_HASH, CLIENT_IP, ACCESS_COUNT, CREATED_AT, UPDATED_AT, EXPIRES_AT)
+        VALUES (?, ?, 0, ?, ?, ?)
+        ON CONFLICT(TOKEN_HASH) DO NOTHING
+      `;
+      const body = {
+        sql,
+        params: [tokenHash, clientIP, nowSeconds, nowSeconds, expiresAt],
+      };
+      ctx.waitUntil((async () => {
+        try {
+          const response = await fetch(
+            `https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database/${databaseId}/query`,
+            {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${apiToken}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify(body),
+            }
+          );
+          if (!response.ok) {
+            const text = await response.text().catch(() => '');
+            console.error('[Turnstile Binding] D1 REST insert failed:', response.status, text);
+          }
+        } catch (error) {
+          console.error('[Turnstile Binding] D1 REST insert error:', error instanceof Error ? error.message : String(error));
+        }
+      })());
+    }
+  };
+
+  const scheduleTokenBindingWrite = () => {
+    if (!shouldRecordTokenBinding || !tokenHash || !clientIP) {
+      return;
+    }
+    if (!Number.isFinite(tokenTTLSeconds) || tokenTTLSeconds <= 0) {
+      console.warn('[Turnstile Binding] Skipping token update due to invalid TTL:', tokenTTLSeconds);
+      return;
+    }
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const expiresAt = nowSeconds + tokenTTLSeconds;
+
+    if (config.dbMode === 'custom-pg-rest') {
+      const postgrestUrl = config.rateLimitConfig?.postgrestUrl;
+      if (!postgrestUrl) {
+        console.error('[Turnstile Binding] PostgREST URL missing; cannot update token binding');
+        return;
+      }
+      const headers = {
+        'Content-Type': 'application/json',
+        Prefer: 'return=minimal',
+      };
+      applyVerifyHeaders(headers, config.verifyHeader, config.verifySecret);
+      ctx.waitUntil((async () => {
+        try {
+          const endpoint = new URL(`${postgrestUrl}/${tokenTableName}`);
+          endpoint.searchParams.set('TOKEN_HASH', `eq.${tokenHash}`);
+          endpoint.searchParams.set('CLIENT_IP', `eq.${clientIP}`);
+          const response = await fetch(endpoint.toString(), {
+            method: 'PATCH',
+            headers,
+            body: JSON.stringify({
+              ACCESS_COUNT: 1,
+              UPDATED_AT: nowSeconds,
+              EXPIRES_AT: expiresAt,
+            }),
+          });
+          if (!response.ok) {
+            const errorText = await response.text().catch(() => '');
+            console.error('[Turnstile Binding] PostgREST update failed:', response.status, errorText);
+          }
+        } catch (error) {
+          console.error('[Turnstile Binding] PostgREST update error:', error instanceof Error ? error.message : String(error));
+        }
+      })());
+    } else if (config.dbMode === 'd1') {
+      const envSource = config.cacheConfig?.env || config.rateLimitConfig?.env;
+      const bindingName = config.cacheConfig?.databaseBinding || config.rateLimitConfig?.databaseBinding || 'DB';
+      const db = envSource ? envSource[bindingName] : null;
+      if (!db) {
+        console.error('[Turnstile Binding] D1 binding not available; cannot update token binding');
+        return;
+      }
+      const statement = db.prepare(`
+        UPDATE ${tokenTableName}
+        SET ACCESS_COUNT = MIN(ACCESS_COUNT + 1, 2147483647),
+            UPDATED_AT = ?,
+            EXPIRES_AT = CASE
+              WHEN EXPIRES_AT IS NULL OR EXPIRES_AT < ? THEN ?
+              ELSE EXPIRES_AT
+            END
+        WHERE TOKEN_HASH = ? AND CLIENT_IP = ?
+      `).bind(nowSeconds, expiresAt, expiresAt, tokenHash, clientIP);
+      ctx.waitUntil((async () => {
+        try {
+          await statement.run();
+        } catch (error) {
+          console.error('[Turnstile Binding] D1 update failed:', error instanceof Error ? error.message : String(error));
+        }
+      })());
+    } else if (config.dbMode === 'd1-rest') {
+      const accountId = config.rateLimitConfig?.accountId || config.cacheConfig?.accountId;
+      const databaseId = config.rateLimitConfig?.databaseId || config.cacheConfig?.databaseId;
+      const apiToken = config.rateLimitConfig?.apiToken || config.cacheConfig?.apiToken;
+      if (!accountId || !databaseId || !apiToken) {
+        console.error('[Turnstile Binding] D1 REST credentials missing; cannot update token binding');
+        return;
+      }
+      const sql = `
+        UPDATE ${tokenTableName}
+        SET ACCESS_COUNT = MIN(ACCESS_COUNT + 1, 2147483647),
+            UPDATED_AT = ?,
+            EXPIRES_AT = CASE
+              WHEN EXPIRES_AT IS NULL OR EXPIRES_AT < ? THEN ?
+              ELSE EXPIRES_AT
+            END
+        WHERE TOKEN_HASH = ? AND CLIENT_IP = ?
+      `;
+      const body = {
+        sql,
+        params: [nowSeconds, expiresAt, expiresAt, tokenHash, clientIP],
+      };
+      ctx.waitUntil((async () => {
+        try {
+          const response = await fetch(
+            `https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database/${databaseId}/query`,
+            {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${apiToken}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify(body),
+            }
+          );
+          if (!response.ok) {
+            const text = await response.text().catch(() => '');
+            console.error('[Turnstile Binding] D1 REST update failed:', response.status, text);
+          }
+        } catch (error) {
+          console.error('[Turnstile Binding] D1 REST update error:', error instanceof Error ? error.message : String(error));
+        }
+      })());
+    }
+  };
+
   if (needVerify) {
-    const token =
-      request.headers.get(TURNSTILE_HEADER) ||
-      request.headers.get('x-turnstile-token') ||
-      url.searchParams.get(TURNSTILE_HEADER) ||
-      url.searchParams.get('turnstile_token') ||
-      '';
-    if (!token) {
+    if (!rawTurnstileToken) {
       return respondJson(origin, { code: 461, message: 'turnstile token required' }, 403);
     }
-    const verification = await verifyTurnstileToken(config.turnstileSecretKey, token, clientIP);
+    const verification = await verifyTurnstileToken(config.turnstileSecretKey, rawTurnstileToken, clientIP);
     if (!verification.ok) {
       return respondJson(origin, { code: 462, message: verification.message || 'turnstile verification failed' }, 403);
+    }
+    if (shouldBindToken) {
+      scheduleTokenBindingInsert();
     }
   }
 
@@ -738,12 +1016,12 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
     cacheConfigKeys: cacheConfigWithCtx ? Object.keys(cacheConfigWithCtx) : [],
   });
 
+  const hasCacheSupport = Boolean(cacheManager && config.cacheEnabled);
   const canUseUnified = Boolean(
-    cacheManager &&
-    config.cacheEnabled &&
     config.rateLimitEnabled &&
-    config.dbMode &&
-    clientIP
+    hasDbMode &&
+    clientIP &&
+    (hasCacheSupport || shouldBindToken)
   );
 
   console.log('[CACHE] Unified check eligibility:', {
@@ -753,7 +1031,13 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
     rateLimitEnabled: config.rateLimitEnabled,
     dbMode: config.dbMode,
     hasClientIP: !!clientIP,
+    shouldBindToken,
   });
+
+  if (shouldBindToken && !canUseUnified) {
+    console.error('[Turnstile Binding] Token binding enabled but unified check is unavailable');
+    return respondJson(origin, { code: 500, message: 'turnstile token binding unavailable' }, 500);
+  }
 
   let unifiedResult = null;
   let cacheHit = false;
@@ -778,6 +1062,11 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
           rateLimitTableName: config.rateLimitConfig.tableName || 'IP_LIMIT_TABLE',
           ipv4Suffix: config.rateLimitConfig.ipv4Suffix,
           ipv6Suffix: config.rateLimitConfig.ipv6Suffix,
+          turnstileTokenBinding: shouldBindToken,
+          tokenHash,
+          tokenIP: clientIP,
+          tokenTTLSeconds: config.turnstileTokenTTLSeconds,
+          tokenTableName: config.turnstileTokenTableName,
         };
         console.log('[Unified Check] Config for custom-pg-rest:', {
           postgrestUrl: unifiedConfig.postgrestUrl,
@@ -799,6 +1088,11 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
           rateLimitTableName: config.rateLimitConfig.tableName || 'IP_LIMIT_TABLE',
           ipv4Suffix: config.rateLimitConfig.ipv4Suffix,
           ipv6Suffix: config.rateLimitConfig.ipv6Suffix,
+          turnstileTokenBinding: shouldBindToken,
+          tokenHash,
+          tokenIP: clientIP,
+          tokenTTLSeconds: config.turnstileTokenTTLSeconds,
+          tokenTableName: config.turnstileTokenTableName,
         });
       } else if (config.dbMode === 'd1-rest') {
         unifiedResult = await unifiedCheckD1Rest(decodedPath, clientIP, {
@@ -813,6 +1107,11 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
           rateLimitTableName: config.rateLimitConfig.tableName || 'IP_LIMIT_TABLE',
           ipv4Suffix: config.rateLimitConfig.ipv4Suffix,
           ipv6Suffix: config.rateLimitConfig.ipv6Suffix,
+          turnstileTokenBinding: shouldBindToken,
+          tokenHash,
+          tokenIP: clientIP,
+          tokenTTLSeconds: config.turnstileTokenTTLSeconds,
+          tokenTableName: config.turnstileTokenTableName,
         });
       } else {
         console.log('[Unified Check] Unsupported DB mode for unified check, falling back');
@@ -820,6 +1119,27 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
       }
 
       if (unifiedResult) {
+        if (shouldBindToken) {
+          const tokenResult = unifiedResult.token || { allowed: true, errorCode: 0, accessCount: 0 };
+          tokenBindingAllowed = tokenResult.allowed !== false;
+          tokenBindingErrorCode = Number.isFinite(tokenResult.errorCode) ? tokenResult.errorCode : 0;
+
+          if (!tokenBindingAllowed) {
+            const tokenMessage = TOKEN_BINDING_ERROR_MESSAGES[tokenBindingErrorCode] || 'turnstile token binding failed';
+            console.warn('[Turnstile Binding] Token rejected:', tokenMessage);
+            return respondJson(origin, { code: 463, message: tokenMessage }, 403);
+          }
+
+          shouldRecordTokenBinding = true;
+          console.log('[Turnstile Binding] Token accepted:', {
+            accessCount: Number.isFinite(unifiedResult.token?.accessCount) ? unifiedResult.token.accessCount : null,
+            errorCode: tokenBindingErrorCode,
+          });
+        } else {
+          tokenBindingAllowed = true;
+          tokenBindingErrorCode = 0;
+        }
+
         if (!unifiedResult.rateLimit.allowed) {
           return respondRateLimitExceeded(
             origin,
@@ -841,7 +1161,7 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
     } catch (error) {
       console.error('[Unified Check] Failed:', error instanceof Error ? error.message : String(error));
       const pgHandle = config.rateLimitConfig?.pgErrorHandle || 'fail-closed';
-      if (pgHandle === 'fail-open') {
+      if (pgHandle === 'fail-open' && !shouldBindToken) {
         console.warn('[Unified Check] fail-open: continuing with standalone checks');
         unifiedResult = null;
         cacheHit = false;
@@ -851,6 +1171,13 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
       }
     }
   }
+
+  if (shouldBindToken && !tokenBindingAllowed) {
+    console.error('[Turnstile Binding] Token binding could not be validated');
+    return respondJson(origin, { code: 500, message: 'turnstile token binding unavailable' }, 500);
+  }
+
+  shouldRecordTokenBinding = shouldBindToken && tokenBindingAllowed;
 
   if (!canUseUnified || !unifiedResult) {
     if (rateLimiter && clientIP) {
@@ -946,6 +1273,7 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
       },
     },
   };
+  scheduleTokenBindingWrite();
   return respondJson(origin, responsePayload, 200);
 };
 

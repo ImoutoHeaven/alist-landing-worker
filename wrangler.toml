@@ -17,6 +17,78 @@ persist = true
 # FAST_REDIRECT = "false"
 # TURNSTILE_SITE_KEY = ""
 # TURNSTILE_SECRET_KEY = ""
+#
+# # ═══════════════════════════════════════════════════════════════
+# # ⚠️ NEW: Turnstile Token Binding (防止打码平台 Token 转移攻击)
+# # ═══════════════════════════════════════════════════════════════
+# #
+# # Purpose: Bind Cloudflare Turnstile tokens to the IP address that passed verification
+# # Security: Prevents attackers from using proxy IPs to pass Turnstile, then transferring
+# #           the token to their own high-speed IP for downloading
+# #
+# # Attack Scenario (WITHOUT token binding):
+# # 1. Attacker uses paid proxy IP (1.1.1.1) → passes Turnstile → gets token_abc
+# # 2. Attacker intercepts the /info request
+# # 3. Attacker uses own IP (2.2.2.2) + token_abc → gets download link
+# # 4. Result: Bypassed Turnstile with low cost (proxy IPs are expensive, own IPs are cheap)
+# #
+# # Protection (WITH token binding):
+# # 1. Proxy IP (1.1.1.1) passes Turnstile → token_abc recorded with IP 1.1.1.1
+# # 2. Attacker tries to use IP (2.2.2.2) + token_abc
+# # 3. Worker detects IP mismatch (2.2.2.2 ≠ 1.1.1.1) → returns 403 Forbidden
+# # 4. Token can only be used once (access_count limit)
+# #
+# # Requirements:
+# # - DB_MODE must be set (d1, d1-rest, or custom-pg-rest)
+# # - For custom-pg-rest: Run init.sql to create TURNSTILE_TOKEN_BINDING table and functions
+# # - Token binding is automatically disabled if DB_MODE is empty (fallback to stateless mode)
+# #
+# # Configuration:
+# TURNSTILE_TOKEN_BINDING = "true"             # Enable/disable token binding
+#                                               # Default: "true"
+#                                               # Set to "false" to disable (use stateless Turnstile)
+#                                               # Automatically disabled if DB_MODE=""
+#
+# TURNSTILE_TOKEN_TTL = "10m"                  # Token validity duration
+#                                               # Format: {number}{unit} where unit is h/m/s
+#                                               # Examples: "10m", "600s", "0.16h"
+#                                               # Default: "10m" (10 minutes)
+#                                               # Should match Cloudflare Turnstile token expiry
+#
+# TURNSTILE_TOKEN_TABLE = "TURNSTILE_TOKEN_BINDING"  # Database table name
+#                                                      # Default: "TURNSTILE_TOKEN_BINDING"
+#                                                      # Must match table created by init.sql
+#
+# # How it works:
+# # 1. User passes Turnstile verification (Cloudflare siteVerify) → Worker records token hash + IP (access_count=0)
+# # 2. User calls /info → Worker checks: token exists? IP matches? access_count < 1?
+# # 3. If all checks pass → signs download link → asynchronously updates access_count=1
+# # 4. Subsequent requests with same token → rejected (access_count >= 1)
+# #
+# # Error Codes:
+# # - 463: Turnstile token IP mismatch (token used from different IP)
+# # - 464: Turnstile token already used (access_count limit exceeded)
+# # - 465: Turnstile token expired (TTL exceeded)
+# #
+# # Performance Notes:
+# # - Token binding check is integrated into unified check (single RTT for cache + rate + token)
+# # - Token INSERT happens immediately after siteVerify (records first IP that passed)
+# # - Token UPDATE happens asynchronously after response (no blocking)
+# # - PostgreSQL: 3 RTT → 1 RTT (unified check with token binding)
+# # - D1 Binding: 3 RTT → 1-2 RTT (batch read + async write)
+# # - D1 REST: 3 RTT → 3 RTT (sequential, no optimization possible)
+# #
+# # Example Configuration:
+# #   UNDER_ATTACK = "true"
+# #   TURNSTILE_SITE_KEY = "your-site-key"
+# #   TURNSTILE_SECRET_KEY = "your-secret-key"
+# #   TURNSTILE_TOKEN_BINDING = "true"
+# #   TURNSTILE_TOKEN_TTL = "10m"
+# #   DB_MODE = "custom-pg-rest"
+# #   POSTGREST_URL = "https://postgrest.example.com"
+# #   VERIFY_HEADER = "X-Auth-Token"
+# #   VERIFY_SECRET = "your-secret"
+#
 # SIGN_SECRET = ""
 # IPV4_ONLY = "false"
 # VERIFY_HEADER = ""
@@ -70,11 +142,14 @@ persist = true
 # # Custom PostgreSQL + PostgREST Rate Limiting - requires DB_MODE="custom-pg-rest"
 # # Use this mode when you have self-hosted PostgreSQL with PostgREST REST API
 # # ⚠️ IMPORTANT: You MUST run init.sql on your PostgreSQL database first!
-# #   - Creates IP_LIMIT_TABLE table
-# #   - Creates FILESIZE_CACHE_TABLE table (for filesize caching)
+# #   - Creates IP_LIMIT_TABLE table (rate limiting)
+# #   - Creates FILESIZE_CACHE_TABLE table (filesize caching)
+# #   - Creates TURNSTILE_TOKEN_BINDING table (Turnstile token binding)
 # #   - Creates landing_upsert_rate_limit() stored procedure (atomic rate limit)
 # #   - Creates landing_upsert_filesize_cache() stored procedure (atomic cache)
-# #   - Creates landing_unified_check() stored procedure (single RTT optimization)
+# #   - Creates landing_upsert_token_binding() stored procedure (atomic token binding)
+# #   - Creates landing_cleanup_expired_tokens() stored procedure (token cleanup)
+# #   - Creates landing_unified_check() stored procedure (single RTT: cache + rate + token)
 # POSTGREST_URL = "https://your-domain.com/postgrest"  # PostgREST API endpoint (without table name)
 # POSTGREST_TABLE_NAME = "IP_LIMIT_TABLE"  # Optional, defaults to IP_LIMIT_TABLE
 # # Note: VERIFY_HEADER and VERIFY_SECRET (already defined above) are used for PostgREST authentication

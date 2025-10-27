@@ -1,9 +1,9 @@
 -- ========================================
 -- PostgreSQL Infrastructure for alist-landing-worker
 -- ========================================
--- This script provisions rate limit + filesize cache helpers that mirror the
--- Cloudflare Workers runtime expectations. Apply it to the backing database
--- before enabling custom-pg-rest mode.
+-- This script provisions rate limit, filesize cache, and Turnstile token binding
+-- helpers that mirror the Cloudflare Workers runtime expectations. Apply it to the
+-- backing database before enabling custom-pg-rest mode.
 
 
 -- ========================================
@@ -194,11 +194,96 @@ $$ LANGUAGE plpgsql;
 
 
 -- ========================================
--- Stored Procedure: Unified Check (Rate Limit + Filesize Cache)
+-- Turnstile Token Binding Schema
 -- ========================================
--- FIXED: Removed FOUND check in cache validation as it's unreliable after EXECUTE INTO.
+
+CREATE TABLE IF NOT EXISTS "TURNSTILE_TOKEN_BINDING" (
+  "TOKEN_HASH" TEXT PRIMARY KEY,
+  "CLIENT_IP" TEXT NOT NULL,
+  "ACCESS_COUNT" INTEGER NOT NULL,
+  "CREATED_AT" INTEGER NOT NULL,
+  "UPDATED_AT" INTEGER NOT NULL,
+  "EXPIRES_AT" INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_turnstile_token_expires
+  ON "TURNSTILE_TOKEN_BINDING" ("EXPIRES_AT");
+
+
+-- ========================================
+-- Stored Procedure: Turnstile Token UPSERT
+-- ========================================
+
+CREATE OR REPLACE FUNCTION landing_upsert_token_binding(
+  p_token_hash TEXT,
+  p_client_ip TEXT,
+  p_now INTEGER,
+  p_ttl_seconds INTEGER,
+  p_table_name TEXT DEFAULT 'TURNSTILE_TOKEN_BINDING'
+)
+RETURNS TABLE(
+  "TOKEN_HASH" TEXT,
+  "CLIENT_IP" TEXT,
+  "ACCESS_COUNT" INTEGER,
+  "CREATED_AT" INTEGER,
+  "UPDATED_AT" INTEGER,
+  "EXPIRES_AT" INTEGER
+) AS $$
+DECLARE
+  sql TEXT;
+BEGIN
+  sql := format(
+    'INSERT INTO %1$I ("TOKEN_HASH", "CLIENT_IP", "ACCESS_COUNT", "CREATED_AT", "UPDATED_AT", "EXPIRES_AT")
+     VALUES ($1, $2, 1, $3, $3, $3 + $4)
+     ON CONFLICT ("TOKEN_HASH") DO UPDATE SET
+       "ACCESS_COUNT" = LEAST(%1$I."ACCESS_COUNT" + 1, 2147483647),
+       "UPDATED_AT" = $3,
+       "EXPIRES_AT" = CASE
+         WHEN %1$I."EXPIRES_AT" IS NULL OR %1$I."EXPIRES_AT" < $3 THEN $3 + $4
+         ELSE %1$I."EXPIRES_AT"
+       END
+     WHERE %1$I."CLIENT_IP" = $2
+     RETURNING "TOKEN_HASH", "CLIENT_IP", "ACCESS_COUNT", "CREATED_AT", "UPDATED_AT", "EXPIRES_AT"',
+    p_table_name
+  );
+
+  RETURN QUERY EXECUTE sql USING p_token_hash, p_client_ip, p_now, p_ttl_seconds;
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- ========================================
+-- Stored Procedure: Cleanup Expired Turnstile Tokens
+-- ========================================
+
+CREATE OR REPLACE FUNCTION landing_cleanup_expired_tokens(
+  p_now INTEGER,
+  p_table_name TEXT DEFAULT 'TURNSTILE_TOKEN_BINDING'
+)
+RETURNS INTEGER AS $$
+DECLARE
+  sql TEXT;
+  deleted_count INTEGER := 0;
+BEGIN
+  sql := format(
+    'DELETE FROM %1$I
+     WHERE "EXPIRES_AT" <= $1',
+    p_table_name
+  );
+
+  EXECUTE sql USING p_now;
+  GET DIAGNOSTICS deleted_count = ROW_COUNT;
+
+  RETURN deleted_count;
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- ========================================
+-- Stored Procedure: Unified Check (Cache + Rate Limit + Token Binding)
+-- ========================================
 -- PostgreSQL FOUND variable behavior is undefined after dynamic SQL execution (EXECUTE).
--- The cache_rec will have values even if FOUND is false, so we only check TIMESTAMP IS NOT NULL.
+-- Instead of relying on FOUND, we check record fields for NULL values directly.
 
 CREATE OR REPLACE FUNCTION landing_unified_check(
   p_path_hash TEXT,
@@ -210,19 +295,35 @@ CREATE OR REPLACE FUNCTION landing_unified_check(
   p_window_seconds INTEGER,
   p_limit INTEGER,
   p_block_seconds INTEGER,
-  p_ratelimit_table_name TEXT
+  p_ratelimit_table_name TEXT,
+  p_token_hash TEXT,
+  p_token_ip TEXT,
+  p_token_ttl INTEGER,
+  p_token_table_name TEXT DEFAULT 'TURNSTILE_TOKEN_BINDING'
 )
 RETURNS TABLE(
   cache_size BIGINT,
   cache_timestamp INTEGER,
   rate_access_count INTEGER,
   rate_last_window_time INTEGER,
-  rate_block_until INTEGER
+  rate_block_until INTEGER,
+  token_allowed BOOLEAN,
+  token_error_code INTEGER,
+  token_access_count INTEGER,
+  token_client_ip TEXT,
+  token_expires_at INTEGER
 ) AS $$
 DECLARE
   cache_sql TEXT;
   cache_rec RECORD;
   rate_rec RECORD;
+  token_sql TEXT;
+  token_rec RECORD;
+  token_allowed_local BOOLEAN := TRUE;
+  token_error_local INTEGER := 0;
+  token_access_local INTEGER := 0;
+  token_client_local TEXT := NULL;
+  token_expires_local INTEGER := NULL;
 BEGIN
   cache_sql := format(
     'SELECT "SIZE", "TIMESTAMP"
@@ -233,8 +334,6 @@ BEGIN
 
   EXECUTE cache_sql INTO cache_rec USING p_path_hash;
 
-  -- FIXED: Removed "FOUND AND" check - FOUND is unreliable after EXECUTE INTO
-  -- If no record exists, cache_rec."TIMESTAMP" will be NULL anyway
   IF cache_rec."TIMESTAMP" IS NOT NULL AND (p_now - cache_rec."TIMESTAMP") <= p_cache_ttl THEN
     cache_size := cache_rec."SIZE";
     cache_timestamp := cache_rec."TIMESTAMP";
@@ -258,6 +357,50 @@ BEGIN
   rate_access_count := rate_rec."ACCESS_COUNT";
   rate_last_window_time := rate_rec."LAST_WINDOW_TIME";
   rate_block_until := rate_rec."BLOCK_UNTIL";
+
+  IF p_token_hash IS NOT NULL AND length(p_token_hash) > 0 THEN
+    token_sql := format(
+      'SELECT "CLIENT_IP", "ACCESS_COUNT", "EXPIRES_AT"
+       FROM %1$I
+       WHERE "TOKEN_HASH" = $1',
+      p_token_table_name
+    );
+
+    EXECUTE token_sql INTO token_rec USING p_token_hash;
+
+    IF token_rec."CLIENT_IP" IS NOT NULL THEN
+      token_access_local := COALESCE(token_rec."ACCESS_COUNT", 0);
+      token_client_local := token_rec."CLIENT_IP";
+      token_expires_local := token_rec."EXPIRES_AT";
+
+      IF token_rec."CLIENT_IP" <> p_token_ip THEN
+        token_allowed_local := FALSE;
+        token_error_local := 1; -- IP mismatch
+      ELSIF token_rec."EXPIRES_AT" IS NULL OR token_rec."EXPIRES_AT" < p_now THEN
+        token_allowed_local := FALSE;
+        token_error_local := 2; -- Token expired
+      ELSIF token_access_local >= 1 THEN
+        token_allowed_local := FALSE;
+        token_error_local := 3; -- Token already consumed
+      END IF;
+    ELSE
+      token_access_local := 0;
+      token_client_local := NULL;
+      token_expires_local := NULL;
+    END IF;
+  ELSE
+    token_allowed_local := TRUE;
+    token_error_local := 0;
+    token_access_local := 0;
+    token_client_local := NULL;
+    token_expires_local := NULL;
+  END IF;
+
+  token_allowed := token_allowed_local;
+  token_error_code := token_error_local;
+  token_access_count := token_access_local;
+  token_client_ip := token_client_local;
+  token_expires_at := token_expires_local;
 
   RETURN NEXT;
 END;

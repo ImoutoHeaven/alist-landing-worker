@@ -29,7 +29,7 @@ const executeQuery = async (accountId, databaseId, apiToken, sql, params = []) =
   return payload.result?.[0] || { results: [], success: true };
 };
 
-const ensureTables = async (accountId, databaseId, apiToken, { cacheTableName, rateLimitTableName }) => {
+const ensureTables = async (accountId, databaseId, apiToken, { cacheTableName, rateLimitTableName, tokenTableName }) => {
   await executeQuery(accountId, databaseId, apiToken, `
     CREATE TABLE IF NOT EXISTS ${cacheTableName} (
       PATH_HASH TEXT PRIMARY KEY,
@@ -49,6 +49,17 @@ const ensureTables = async (accountId, databaseId, apiToken, { cacheTableName, r
       BLOCK_UNTIL INTEGER
     )
   `);
+  await executeQuery(accountId, databaseId, apiToken, `
+    CREATE TABLE IF NOT EXISTS ${tokenTableName} (
+      TOKEN_HASH TEXT PRIMARY KEY,
+      CLIENT_IP TEXT NOT NULL,
+      ACCESS_COUNT INTEGER NOT NULL,
+      CREATED_AT INTEGER NOT NULL,
+      UPDATED_AT INTEGER NOT NULL,
+      EXPIRES_AT INTEGER NOT NULL
+    )
+  `);
+  await executeQuery(accountId, databaseId, apiToken, `CREATE INDEX IF NOT EXISTS idx_turnstile_token_expires ON ${tokenTableName}(EXPIRES_AT)`);
 };
 
 export const unifiedCheckD1Rest = async (path, clientIP, config) => {
@@ -66,6 +77,10 @@ export const unifiedCheckD1Rest = async (path, clientIP, config) => {
   const rateLimitTableName = config.rateLimitTableName || 'IP_LIMIT_TABLE';
   const ipv4Suffix = config.ipv4Suffix || '/32';
   const ipv6Suffix = config.ipv6Suffix || '/60';
+  const tokenBindingEnabled = config.turnstileTokenBinding !== false;
+  const tokenHash = tokenBindingEnabled ? (config.tokenHash || null) : null;
+  const tokenIP = tokenBindingEnabled ? (config.tokenIP || clientIP || null) : null;
+  const tokenTableName = config.tokenTableName || 'TURNSTILE_TOKEN_BINDING';
 
   if (cacheTTL <= 0) {
     throw new Error('[Unified Check D1-REST] sizeTTL must be greater than zero');
@@ -74,7 +89,7 @@ export const unifiedCheckD1Rest = async (path, clientIP, config) => {
     throw new Error('[Unified Check D1-REST] windowTimeSeconds and limit are required');
   }
 
-  await ensureTables(accountId, databaseId, apiToken, { cacheTableName, rateLimitTableName });
+  await ensureTables(accountId, databaseId, apiToken, { cacheTableName, rateLimitTableName, tokenTableName });
 
   console.log('[Unified Check D1-REST] Starting unified check for path:', path);
 
@@ -130,6 +145,10 @@ export const unifiedCheckD1Rest = async (path, clientIP, config) => {
   ];
   const rateLimitResult = await executeQuery(accountId, databaseId, apiToken, rateLimitSql, rateLimitParams);
 
+  console.log('[Unified Check D1-REST] Executing token lookup');
+  const tokenSql = `SELECT CLIENT_IP, ACCESS_COUNT, EXPIRES_AT FROM ${tokenTableName} WHERE TOKEN_HASH = ?`;
+  const tokenResult = await executeQuery(accountId, databaseId, apiToken, tokenSql, [tokenHash]);
+
   const cacheRow = cacheResult.results?.[0];
   const cacheData = {
     hit: false,
@@ -182,6 +201,35 @@ export const unifiedCheckD1Rest = async (path, clientIP, config) => {
     console.log('[Unified Check D1-REST] Rate limit OK:', safeAccess, '/', limit);
   }
 
+  const tokenRow = tokenResult.results?.[0];
+  let tokenAllowed = true;
+  let tokenErrorCode = 0;
+  let tokenAccessCount = 0;
+  let tokenClientBinding = null;
+  let tokenExpiresAt = null;
+
+  if (tokenBindingEnabled && tokenHash) {
+    if (tokenRow) {
+      tokenClientBinding = typeof tokenRow.CLIENT_IP === 'string' ? tokenRow.CLIENT_IP : null;
+      tokenAccessCount = Number.parseInt(tokenRow.ACCESS_COUNT, 10);
+      tokenExpiresAt = tokenRow.EXPIRES_AT !== null ? Number.parseInt(tokenRow.EXPIRES_AT, 10) : null;
+
+      if (!tokenClientBinding || tokenClientBinding !== tokenIP) {
+        tokenAllowed = false;
+        tokenErrorCode = 1;
+      } else if (!Number.isFinite(tokenExpiresAt) || tokenExpiresAt < now) {
+        tokenAllowed = false;
+        tokenErrorCode = 2;
+      } else if (Number.isFinite(tokenAccessCount) && tokenAccessCount >= 1) {
+        tokenAllowed = false;
+        tokenErrorCode = 3;
+      }
+    }
+  }
+
+  const safeTokenAccess = Number.isFinite(tokenAccessCount) ? tokenAccessCount : 0;
+  const safeTokenExpires = Number.isFinite(tokenExpiresAt) ? tokenExpiresAt : null;
+
   return {
     cache: cacheData,
     rateLimit: {
@@ -191,6 +239,13 @@ export const unifiedCheckD1Rest = async (path, clientIP, config) => {
       retryAfter,
       lastWindowTime: safeLastWindow,
       blockUntil,
+    },
+    token: {
+      allowed: tokenAllowed,
+      errorCode: Number.isFinite(tokenErrorCode) ? tokenErrorCode : 0,
+      accessCount: safeTokenAccess,
+      clientIp: tokenClientBinding,
+      expiresAt: safeTokenExpires,
     },
   };
 };

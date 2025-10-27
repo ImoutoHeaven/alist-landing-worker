@@ -1,6 +1,6 @@
 import { sha256Hash, calculateIPSubnet } from './utils.js';
 
-const ensureTables = async (db, { cacheTableName, rateLimitTableName }) => {
+const ensureTables = async (db, { cacheTableName, rateLimitTableName, tokenTableName }) => {
   await db.batch([
     db.prepare(`
       CREATE TABLE IF NOT EXISTS ${cacheTableName} (
@@ -20,6 +20,17 @@ const ensureTables = async (db, { cacheTableName, rateLimitTableName }) => {
         BLOCK_UNTIL INTEGER
       )
     `),
+    db.prepare(`
+      CREATE TABLE IF NOT EXISTS ${tokenTableName} (
+        TOKEN_HASH TEXT PRIMARY KEY,
+        CLIENT_IP TEXT NOT NULL,
+        ACCESS_COUNT INTEGER NOT NULL,
+        CREATED_AT INTEGER NOT NULL,
+        UPDATED_AT INTEGER NOT NULL,
+        EXPIRES_AT INTEGER NOT NULL
+      )
+    `),
+    db.prepare(`CREATE INDEX IF NOT EXISTS idx_turnstile_token_expires ON ${tokenTableName}(EXPIRES_AT)`),
   ]);
 };
 
@@ -42,6 +53,10 @@ export const unifiedCheckD1 = async (path, clientIP, config) => {
   const rateLimitTableName = config.rateLimitTableName || 'IP_LIMIT_TABLE';
   const ipv4Suffix = config.ipv4Suffix || '/32';
   const ipv6Suffix = config.ipv6Suffix || '/60';
+  const tokenBindingEnabled = config.turnstileTokenBinding !== false;
+  const tokenHash = tokenBindingEnabled ? (config.tokenHash || null) : null;
+  const tokenIP = tokenBindingEnabled ? (config.tokenIP || clientIP || null) : null;
+  const tokenTableName = config.tokenTableName || 'TURNSTILE_TOKEN_BINDING';
 
   if (cacheTTL <= 0) {
     throw new Error('[Unified Check D1] sizeTTL must be greater than zero');
@@ -50,7 +65,7 @@ export const unifiedCheckD1 = async (path, clientIP, config) => {
     throw new Error('[Unified Check D1] windowTimeSeconds and limit are required');
   }
 
-  await ensureTables(db, { cacheTableName, rateLimitTableName });
+  await ensureTables(db, { cacheTableName, rateLimitTableName, tokenTableName });
 
   console.log('[Unified Check D1] Starting unified check for path:', path);
 
@@ -99,11 +114,12 @@ export const unifiedCheckD1 = async (path, clientIP, config) => {
       now, windowSeconds, now, now, now,
       now, windowSeconds, now, limit, blockSeconds, now, blockSeconds
     ),
+    db.prepare(`SELECT CLIENT_IP, ACCESS_COUNT, EXPIRES_AT FROM ${tokenTableName} WHERE TOKEN_HASH = ?`).bind(tokenHash),
   ];
 
-  console.log('[Unified Check D1] Executing batch (cache + rate limit)');
+  console.log('[Unified Check D1] Executing batch (cache + rate limit + token binding)');
   const results = await db.batch(statements);
-  if (!results || results.length < 2) {
+  if (!results || results.length < 3) {
     throw new Error('[Unified Check D1] Batch returned incomplete results');
   }
 
@@ -159,6 +175,50 @@ export const unifiedCheckD1 = async (path, clientIP, config) => {
     console.log('[Unified Check D1] Rate limit OK:', safeAccess, '/', limit);
   }
 
+  const tokenRow = results[2].results?.[0];
+  let tokenAllowed = true;
+  let tokenErrorCode = 0;
+  let tokenAccessCount = 0;
+  let tokenClientBinding = null;
+  let tokenExpiresAt = null;
+
+  if (tokenBindingEnabled && tokenHash) {
+    if (tokenRow) {
+      tokenClientBinding = typeof tokenRow.CLIENT_IP === 'string' ? tokenRow.CLIENT_IP : null;
+      tokenAccessCount = Number.parseInt(tokenRow.ACCESS_COUNT, 10);
+      tokenExpiresAt = tokenRow.EXPIRES_AT !== null ? Number.parseInt(tokenRow.EXPIRES_AT, 10) : null;
+
+      if (!tokenClientBinding || tokenClientBinding !== tokenIP) {
+        tokenAllowed = false;
+        tokenErrorCode = 1;
+      } else if (!Number.isFinite(tokenExpiresAt) || tokenExpiresAt < now) {
+        tokenAllowed = false;
+        tokenErrorCode = 2;
+      } else if (Number.isFinite(tokenAccessCount) && tokenAccessCount >= 1) {
+        tokenAllowed = false;
+        tokenErrorCode = 3;
+      } else {
+        tokenAllowed = true;
+        tokenErrorCode = 0;
+      }
+    } else {
+      tokenAllowed = true;
+      tokenErrorCode = 0;
+      tokenAccessCount = 0;
+      tokenClientBinding = null;
+      tokenExpiresAt = null;
+    }
+  } else {
+    tokenAllowed = true;
+    tokenErrorCode = 0;
+    tokenAccessCount = 0;
+    tokenClientBinding = null;
+    tokenExpiresAt = null;
+  }
+
+  const safeTokenAccess = Number.isFinite(tokenAccessCount) ? tokenAccessCount : 0;
+  const safeTokenExpires = Number.isFinite(tokenExpiresAt) ? tokenExpiresAt : null;
+
   return {
     cache: cacheResult,
     rateLimit: {
@@ -168,6 +228,13 @@ export const unifiedCheckD1 = async (path, clientIP, config) => {
       retryAfter,
       lastWindowTime: safeLastWindow,
       blockUntil,
+    },
+    token: {
+      allowed: tokenAllowed,
+      errorCode: Number.isFinite(tokenErrorCode) ? tokenErrorCode : 0,
+      accessCount: safeTokenAccess,
+      clientIp: tokenClientBinding,
+      expiresAt: safeTokenExpires,
     },
   };
 };
