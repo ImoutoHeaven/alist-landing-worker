@@ -5,6 +5,7 @@ import {
   parseInteger,
   parseNumber,
   parseWindowTime,
+  sha256Hash,
 } from './utils.js';
 import { renderLandingPage } from './frontend.js';
 import { createRateLimiter } from './ratelimit/factory.js';
@@ -198,6 +199,28 @@ const resolveConfig = (env = {}) => {
     }
   }
 
+  const appendAdditional = parseBoolean(env.IF_APPEND_ADDITIONAL, true);
+  const addressCandidates = [
+    typeof env.ALIST_ADDRESS === 'string' ? env.ALIST_ADDRESS.trim() : '',
+    typeof env.ALIST_BASE_URL === 'string' ? env.ALIST_BASE_URL.trim() : '',
+    typeof env.ADDRESS === 'string' ? env.ADDRESS.trim() : '',
+  ];
+  const rawAlistAddress = addressCandidates.find((value) => value) || '';
+  const normalizedAlistAddress = rawAlistAddress.replace(/\/$/, '');
+  const minBandwidthMbps = parseNumber(env.MIN_ALLOWED_BANDWIDTH, 10);
+  const bandwidthBytesPerSecond = minBandwidthMbps > 0
+    ? (minBandwidthMbps * 1_000_000) / 8
+    : (10 * 1_000_000) / 8;
+  const minDurationLabel = env.MIN_DURATION_TIME && typeof env.MIN_DURATION_TIME === 'string'
+    ? env.MIN_DURATION_TIME.trim()
+    : '';
+  const parsedMinDurationSeconds = parseWindowTime(minDurationLabel);
+  const minDurationSeconds = parsedMinDurationSeconds > 0 ? parsedMinDurationSeconds : 3600;
+
+  if (appendAdditional && !normalizedAlistAddress) {
+    throw new Error('ALIST_ADDRESS (or ADDRESS) is required when IF_APPEND_ADDITIONAL is true');
+  }
+
   return {
     token: env.TOKEN,
     workerAddresses: env.WORKER_ADDRESS_DOWNLOAD,
@@ -221,6 +244,10 @@ const resolveConfig = (env = {}) => {
     rateLimitConfig,
     windowTime,
     ipSubnetLimit,
+    appendAdditional,
+    alistAddress: normalizedAlistAddress,
+    minBandwidthBytesPerSecond: bandwidthBytesPerSecond,
+    minDurationSeconds,
   };
 };
 
@@ -263,7 +290,7 @@ const verifyTurnstileToken = async (secretKey, token, remoteIP) => {
   return { ok: true };
 };
 
-const hmacSha256Sign = async (secret, data, expire) => {
+const computeHmac = async (secret, payload) => {
   const key = await crypto.subtle.importKey(
     'raw',
     new TextEncoder().encode(secret),
@@ -271,15 +298,22 @@ const hmacSha256Sign = async (secret, data, expire) => {
     false,
     ['sign'],
   );
-  const payload = `${data}:${expire}`;
   const buf = await crypto.subtle.sign(
     { name: 'HMAC', hash: 'SHA-256' },
     key,
     new TextEncoder().encode(payload),
   );
-  return btoa(String.fromCharCode(...new Uint8Array(buf)))
+  return new Uint8Array(buf);
+};
+
+const encodeUrlSafeBase64 = (bytes) =>
+  btoa(String.fromCharCode(...bytes))
     .replace(/\+/g, '-')
-    .replace(/\//g, '_') + `:${expire}`;
+    .replace(/\//g, '_');
+
+const hmacSha256Sign = async (secret, data, expire) => {
+  const bytes = await computeHmac(secret, `${data}:${expire}`);
+  return `${encodeUrlSafeBase64(bytes)}:${expire}`;
 };
 
 const verifySignature = async (secret, data, signature) => {
@@ -373,6 +407,117 @@ const selectRandomWorker = (workerAddresses) => {
 
   const selected = addresses[Math.floor(Math.random() * addresses.length)];
   return selected.replace(/\/$/, '');
+};
+
+const encodeTextToBase64 = (text) => {
+  const bytes = new TextEncoder().encode(text);
+  return uint8ToBase64(bytes);
+};
+
+const parseFileSize = (rawSize) => {
+  if (typeof rawSize === 'number' && Number.isFinite(rawSize)) {
+    return rawSize;
+  }
+  if (typeof rawSize === 'string') {
+    const parsed = Number.parseInt(rawSize, 10);
+    return Number.isNaN(parsed) ? 0 : parsed;
+  }
+  return 0;
+};
+
+const calculateExpireTimestamp = (sizeBytes, minDurationSeconds, bandwidthBytesPerSecond) => {
+  const safeMinDuration = minDurationSeconds > 0 ? minDurationSeconds : 3600;
+  const safeBandwidth = bandwidthBytesPerSecond > 0 ? bandwidthBytesPerSecond : (10 * 1_000_000) / 8;
+  const estimatedDuration = sizeBytes > 0 ? Math.ceil(sizeBytes / safeBandwidth) : 0;
+  const totalDuration = Math.max(safeMinDuration, estimatedDuration);
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  return nowSeconds + totalDuration;
+};
+
+const fetchAlistFileInfo = async (config, path, clientIP) => {
+  if (!config.alistAddress) {
+    throw new Error('alist address is not configured');
+  }
+
+  const headers = {
+    'content-type': 'application/json;charset=UTF-8',
+    Authorization: config.token,
+  };
+  if (clientIP) {
+    headers['CF-Connecting-IP-WORKERS'] = clientIP;
+  }
+  if (config.verifyHeader && config.verifySecret) {
+    headers[config.verifyHeader] = config.verifySecret;
+  }
+
+  const response = await fetch(`${config.alistAddress}/api/fs/get`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      path,
+    }),
+  });
+
+  const contentType = response.headers.get('content-type') || '';
+  if (!contentType.includes('application/json')) {
+    throw new Error('alist fs/get response is not json');
+  }
+
+  const payload = await response.json();
+  if (!response.ok || payload.code !== 200 || !payload.data) {
+    const message = payload && typeof payload.message === 'string' && payload.message.trim() !== ''
+      ? payload.message
+      : `alist fs/get failed with http ${response.status}`;
+    throw new Error(message);
+  }
+
+  return payload.data;
+};
+
+const createAdditionalParams = async (config, decodedPath, clientIP) => {
+  if (!config.appendAdditional) return null;
+  const fileInfo = await fetchAlistFileInfo(config, decodedPath, clientIP);
+  const sizeBytes = parseFileSize(fileInfo?.size);
+  const expireTime = calculateExpireTimestamp(sizeBytes, config.minDurationSeconds, config.minBandwidthBytesPerSecond);
+  const pathHash = await sha256Hash(decodedPath);
+  const payload = JSON.stringify({
+    pathHash,
+    expireTime,
+  });
+  const additionalInfo = encodeTextToBase64(payload);
+  const additionalInfoSign = await hmacSha256Sign(config.signSecret, additionalInfo, expireTime);
+  return { additionalInfo, additionalInfoSign };
+};
+
+const createDownloadURL = async (config, { encodedPath, decodedPath, sign, clientIP }) => {
+  const expire = extractExpireFromSign(sign);
+
+  const pathBytes = new TextEncoder().encode(decodedPath);
+  const base64Path = uint8ToBase64(pathBytes);
+  const hashSign = await hmacSha256Sign(config.signSecret, base64Path, expire);
+
+  const workerBaseURL = selectRandomWorker(config.workerAddresses);
+  const workerSignData = JSON.stringify({ path: decodedPath, worker_addr: workerBaseURL });
+  const workerSign = await hmacSha256Sign(config.signSecret, workerSignData, expire);
+
+  const ipSignData = JSON.stringify({ path: decodedPath, ip: clientIP });
+  const ipSign = await hmacSha256Sign(config.signSecret, ipSignData, expire);
+
+  const downloadURLObj = new URL(encodedPath, workerBaseURL);
+  downloadURLObj.searchParams.set('sign', sign);
+  downloadURLObj.searchParams.set('hashSign', hashSign);
+  downloadURLObj.searchParams.set('workerSign', workerSign);
+  downloadURLObj.searchParams.set('ipSign', ipSign);
+
+  if (config.appendAdditional) {
+    const additionalParams = await createAdditionalParams(config, decodedPath, clientIP);
+    if (additionalParams) {
+      downloadURLObj.searchParams.set('additionalInfo', additionalParams.additionalInfo);
+      downloadURLObj.searchParams.set('additionalInfoSign', additionalParams.additionalInfoSign);
+    }
+  }
+
+  return downloadURLObj.toString();
 };
 
 const checkPathListAction = (path, config) => {
@@ -507,23 +652,12 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
     );
   }
 
-  const pathBytes = new TextEncoder().encode(decodedPath);
-  const base64Path = uint8ToBase64(pathBytes);
-  const hashSign = await hmacSha256Sign(config.signSecret, base64Path, expire);
-
-  const workerBaseURL = selectRandomWorker(config.workerAddresses);
-  const workerSignData = JSON.stringify({ path: decodedPath, worker_addr: workerBaseURL });
-  const workerSign = await hmacSha256Sign(config.signSecret, workerSignData, expire);
-
-  const ipSignData = JSON.stringify({ path: decodedPath, ip: clientIP });
-  const ipSign = await hmacSha256Sign(config.signSecret, ipSignData, expire);
-
-  const downloadURLObj = new URL(encodedPath, workerBaseURL);
-  downloadURLObj.searchParams.set('sign', sign);
-  downloadURLObj.searchParams.set('hashSign', hashSign);
-  downloadURLObj.searchParams.set('workerSign', workerSign);
-  downloadURLObj.searchParams.set('ipSign', ipSign);
-  const downloadURL = downloadURLObj.toString();
+  const downloadURL = await createDownloadURL(config, {
+    encodedPath,
+    decodedPath,
+    sign,
+    clientIP,
+  });
 
   const responsePayload = {
     code: 200,
@@ -620,23 +754,12 @@ const handleFileRequest = async (request, config, rateLimiter, ctx) => {
     // Generate download URL using URL object for proper encoding
     const expire = extractExpireFromSign(sign);
 
-    const pathBytes = new TextEncoder().encode(decodedPath);
-    const base64Path = uint8ToBase64(pathBytes);
-    const hashSign = await hmacSha256Sign(config.signSecret, base64Path, expire);
-
-    const workerBaseURL = selectRandomWorker(config.workerAddresses);
-    const workerSignData = JSON.stringify({ path: decodedPath, worker_addr: workerBaseURL });
-    const workerSign = await hmacSha256Sign(config.signSecret, workerSignData, expire);
-
-    const ipSignData = JSON.stringify({ path: decodedPath, ip: clientIP });
-    const ipSign = await hmacSha256Sign(config.signSecret, ipSignData, expire);
-
-    const downloadURLObj = new URL(encodedPath, workerBaseURL);
-    downloadURLObj.searchParams.set('sign', sign);
-    downloadURLObj.searchParams.set('hashSign', hashSign);
-    downloadURLObj.searchParams.set('workerSign', workerSign);
-    downloadURLObj.searchParams.set('ipSign', ipSign);
-    const downloadURL = downloadURLObj.toString();
+    const downloadURL = await createDownloadURL(config, {
+      encodedPath,
+      decodedPath,
+      sign,
+      clientIP,
+    });
 
     // Return 302 redirect
     return new Response(null, {
