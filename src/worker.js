@@ -484,7 +484,8 @@ const createAdditionalParams = async (config, decodedPath, clientIP) => {
     pathHash,
     expireTime,
   });
-  const additionalInfo = encodeTextToBase64(payload);
+  const rawAdditionalInfo = encodeTextToBase64(payload);
+  const additionalInfo = rawAdditionalInfo.replace(/=+$/, '');
   const additionalInfoSign = await hmacSha256Sign(config.signSecret, additionalInfo, expireTime);
   return { additionalInfo, additionalInfoSign };
 };
