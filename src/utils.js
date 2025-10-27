@@ -164,3 +164,42 @@ export const sha256Hash = async (text) => {
   const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
   return hashHex;
 };
+
+/**
+ * Apply verify header/secret pairs to a headers object.
+ * Supports single values (string) and arrays of header/value pairs.
+ * @param {Object} targetHeaders - Headers map to mutate
+ * @param {string|string[]} verifyHeader - Header name(s)
+ * @param {string|string[]} verifySecret - Header value(s)
+ */
+export const applyVerifyHeaders = (targetHeaders, verifyHeader, verifySecret) => {
+  if (!targetHeaders || typeof targetHeaders !== 'object') return;
+
+  if (Array.isArray(verifyHeader) && Array.isArray(verifySecret)) {
+    verifyHeader.forEach((headerName, index) => {
+      if (!headerName || typeof headerName !== 'string') return;
+      const secretValue = verifySecret[index];
+      if (typeof secretValue === 'undefined' || secretValue === null) return;
+      targetHeaders[headerName] = secretValue;
+    });
+    return;
+  }
+
+  if (typeof verifyHeader === 'string' && typeof verifySecret === 'string' && verifyHeader && verifySecret) {
+    targetHeaders[verifyHeader] = verifySecret;
+  }
+};
+
+/**
+ * Determine if verify header/secret values are present.
+ * Works with both string and array formats.
+ * @param {string|string[]} verifyHeader
+ * @param {string|string[]} verifySecret
+ * @returns {boolean}
+ */
+export const hasVerifyCredentials = (verifyHeader, verifySecret) => {
+  if (Array.isArray(verifyHeader) && Array.isArray(verifySecret)) {
+    return verifyHeader.length > 0 && verifySecret.length > 0;
+  }
+  return Boolean(verifyHeader) && Boolean(verifySecret);
+};

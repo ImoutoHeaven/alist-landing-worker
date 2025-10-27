@@ -6,9 +6,14 @@ import {
   parseNumber,
   parseWindowTime,
   sha256Hash,
+  applyVerifyHeaders,
 } from './utils.js';
 import { renderLandingPage } from './frontend.js';
 import { createRateLimiter } from './ratelimit/factory.js';
+import { createCacheManager } from './cache/factory.js';
+import { unifiedCheck } from './unified-check.js';
+import { unifiedCheckD1 } from './unified-check-d1.js';
+import { unifiedCheckD1Rest } from './unified-check-d1-rest.js';
 
 const REQUIRED_ENV = ['TOKEN', 'WORKER_ADDRESS_DOWNLOAD'];
 
@@ -112,12 +117,42 @@ const resolveConfig = (env = {}) => {
   // Convert to probability (0.0 to 1.0)
   const cleanupProbability = validCleanupPercentage / 100;
 
+  // Filesize cache configuration
+  const rawSizeTTL = env.SIZE_TTL && typeof env.SIZE_TTL === 'string' ? env.SIZE_TTL.trim() : '24h';
+  let sizeTTLSeconds = parseWindowTime(rawSizeTTL);
+  if (sizeTTLSeconds <= 0) {
+    sizeTTLSeconds = parseWindowTime('24h');
+  }
+  const sizeTTL = rawSizeTTL && rawSizeTTL.length > 0 ? rawSizeTTL : '24h';
+  const filesizeCacheTableName = env.FILESIZE_CACHE_TABLE && typeof env.FILESIZE_CACHE_TABLE === 'string'
+    ? env.FILESIZE_CACHE_TABLE.trim()
+    : 'FILESIZE_CACHE_TABLE';
+
   // Validate PG_ERROR_HANDLE value
   const validPgErrorHandle = pgErrorHandle === 'fail-open' ? 'fail-open' : 'fail-closed';
+
+  const parseVerifyValues = (value) => {
+    if (!value || typeof value !== 'string') {
+      return [];
+    }
+    return value
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
+  };
+
+  const verifyHeaders = parseVerifyValues(env.VERIFY_HEADER);
+  const verifySecrets = parseVerifyValues(env.VERIFY_SECRET);
+
+  if (verifyHeaders.length > 0 && verifySecrets.length > 0 && verifyHeaders.length !== verifySecrets.length) {
+    throw new Error('VERIFY_HEADER and VERIFY_SECRET must have the same number of comma-separated entries');
+  }
 
   // Parse database-specific configuration
   let rateLimitEnabled = false;
   let rateLimitConfig = {};
+  let cacheEnabled = false;
+  let cacheConfig = {};
 
   if (dbMode) {
     const normalizedDbMode = dbMode.toLowerCase();
@@ -141,6 +176,16 @@ const resolveConfig = (env = {}) => {
           cleanupProbability,
           blockTimeSeconds,
         };
+        if (sizeTTLSeconds > 0) {
+          cacheEnabled = true;
+          cacheConfig = {
+            env,
+            databaseBinding: d1DatabaseBinding,
+            tableName: filesizeCacheTableName,
+            sizeTTL: sizeTTLSeconds,
+            cleanupProbability,
+          };
+        }
       } else {
         throw new Error('DB_MODE is set to "d1" but required environment variables are missing: WINDOW_TIME, IPSUBNET_WINDOWTIME_LIMIT');
       }
@@ -166,6 +211,17 @@ const resolveConfig = (env = {}) => {
           cleanupProbability,
           blockTimeSeconds,
         };
+        if (sizeTTLSeconds > 0) {
+          cacheEnabled = true;
+          cacheConfig = {
+            accountId: d1AccountId,
+            databaseId: d1DatabaseId,
+            apiToken: d1ApiToken,
+            tableName: filesizeCacheTableName,
+            sizeTTL: sizeTTLSeconds,
+            cleanupProbability,
+          };
+        }
       } else {
         throw new Error('DB_MODE is set to "d1-rest" but required environment variables are missing: D1_ACCOUNT_ID, D1_DATABASE_ID, D1_API_TOKEN, WINDOW_TIME, IPSUBNET_WINDOWTIME_LIMIT');
       }
@@ -173,15 +229,13 @@ const resolveConfig = (env = {}) => {
       // Custom PostgreSQL REST API (PostgREST) configuration
       const postgrestUrl = env.POSTGREST_URL && typeof env.POSTGREST_URL === 'string' ? env.POSTGREST_URL.trim() : '';
       const postgrestTableName = env.POSTGREST_TABLE_NAME && typeof env.POSTGREST_TABLE_NAME === 'string' ? env.POSTGREST_TABLE_NAME.trim() : '';
-      const verifyHeader = env.VERIFY_HEADER && typeof env.VERIFY_HEADER === 'string' ? env.VERIFY_HEADER.trim() : '';
-      const verifySecret = env.VERIFY_SECRET && typeof env.VERIFY_SECRET === 'string' ? env.VERIFY_SECRET.trim() : '';
 
-      if (postgrestUrl && verifyHeader && verifySecret && windowTimeSeconds > 0 && ipSubnetLimit > 0) {
+      if (postgrestUrl && verifyHeaders.length > 0 && verifySecrets.length > 0 && windowTimeSeconds > 0 && ipSubnetLimit > 0) {
         rateLimitEnabled = true;
         rateLimitConfig = {
           postgrestUrl,
-          verifyHeader,
-          verifySecret,
+          verifyHeader: verifyHeaders,
+          verifySecret: verifySecrets,
           tableName: postgrestTableName || 'IP_LIMIT_TABLE',
           windowTimeSeconds,
           limit: ipSubnetLimit,
@@ -191,6 +245,17 @@ const resolveConfig = (env = {}) => {
           cleanupProbability,
           blockTimeSeconds,
         };
+        if (sizeTTLSeconds > 0) {
+          cacheEnabled = true;
+          cacheConfig = {
+            postgrestUrl,
+            verifyHeader: verifyHeaders,
+            verifySecret: verifySecrets,
+            tableName: filesizeCacheTableName,
+            sizeTTL: sizeTTLSeconds,
+            cleanupProbability,
+          };
+        }
       } else {
         throw new Error('DB_MODE is set to "custom-pg-rest" but required environment variables are missing: POSTGREST_URL, VERIFY_HEADER, VERIFY_SECRET, WINDOW_TIME, IPSUBNET_WINDOWTIME_LIMIT');
       }
@@ -224,8 +289,8 @@ const resolveConfig = (env = {}) => {
   return {
     token: env.TOKEN,
     workerAddresses: env.WORKER_ADDRESS_DOWNLOAD,
-    verifyHeader: env.VERIFY_HEADER || '',
-    verifySecret: env.VERIFY_SECRET || '',
+    verifyHeader: verifyHeaders,
+    verifySecret: verifySecrets,
     ipv4Only: parseBoolean(env.IPV4_ONLY, false),
     signSecret: env.SIGN_SECRET && env.SIGN_SECRET.trim() !== '' ? env.SIGN_SECRET : env.TOKEN,
     underAttack,
@@ -242,6 +307,11 @@ const resolveConfig = (env = {}) => {
     dbMode,
     rateLimitEnabled,
     rateLimitConfig,
+    cacheEnabled,
+    cacheConfig,
+    sizeTTL,
+    sizeTTLSeconds,
+    filesizeCacheTableName,
     windowTime,
     ipSubnetLimit,
     appendAdditional,
@@ -446,9 +516,7 @@ const fetchAlistFileInfo = async (config, path, clientIP) => {
   if (clientIP) {
     headers['CF-Connecting-IP-WORKERS'] = clientIP;
   }
-  if (config.verifyHeader && config.verifySecret) {
-    headers[config.verifyHeader] = config.verifySecret;
-  }
+  applyVerifyHeaders(headers, config.verifyHeader, config.verifySecret);
 
   const response = await fetch(`${config.alistAddress}/api/fs/get`, {
     method: 'POST',
@@ -474,11 +542,21 @@ const fetchAlistFileInfo = async (config, path, clientIP) => {
   return payload.data;
 };
 
-const createAdditionalParams = async (config, decodedPath, clientIP) => {
+const createAdditionalParams = async (config, decodedPath, clientIP, options = {}) => {
   if (!config.appendAdditional) return null;
-  const fileInfo = await fetchAlistFileInfo(config, decodedPath, clientIP);
-  const sizeBytes = parseFileSize(fileInfo?.size);
-  const expireTime = calculateExpireTimestamp(sizeBytes, config.minDurationSeconds, config.minBandwidthBytesPerSecond);
+  let { sizeBytes, expireTime, fileInfo } = options;
+
+  if (!Number.isFinite(sizeBytes) || sizeBytes < 0) {
+    if (!fileInfo) {
+      fileInfo = await fetchAlistFileInfo(config, decodedPath, clientIP);
+    }
+    sizeBytes = parseFileSize(fileInfo?.size);
+  }
+
+  if (!Number.isFinite(expireTime) || expireTime <= 0) {
+    expireTime = calculateExpireTimestamp(sizeBytes, config.minDurationSeconds, config.minBandwidthBytesPerSecond);
+  }
+
   const pathHash = await sha256Hash(decodedPath);
   const payload = JSON.stringify({
     pathHash,
@@ -490,7 +568,7 @@ const createAdditionalParams = async (config, decodedPath, clientIP) => {
   return { additionalInfo, additionalInfoSign };
 };
 
-const createDownloadURL = async (config, { encodedPath, decodedPath, sign, clientIP }) => {
+const createDownloadURL = async (config, { encodedPath, decodedPath, sign, clientIP, sizeBytes, expireTime, fileInfo }) => {
   const expire = extractExpireFromSign(sign);
 
   const pathBytes = new TextEncoder().encode(decodedPath);
@@ -511,7 +589,11 @@ const createDownloadURL = async (config, { encodedPath, decodedPath, sign, clien
   downloadURLObj.searchParams.set('ipSign', ipSign);
 
   if (config.appendAdditional) {
-    const additionalParams = await createAdditionalParams(config, decodedPath, clientIP);
+    const additionalParams = await createAdditionalParams(config, decodedPath, clientIP, {
+      sizeBytes,
+      expireTime,
+      fileInfo,
+    });
     if (additionalParams) {
       downloadURLObj.searchParams.set('additionalInfo', additionalParams.additionalInfo);
       downloadURLObj.searchParams.set('additionalInfoSign', additionalParams.additionalInfoSign);
@@ -580,26 +662,7 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
     return respondJson(origin, { code: 400, message: 'path is required' }, 400);
   }
 
-  // Check rate limit
   const clientIP = extractClientIP(request);
-  if (rateLimiter && clientIP) {
-    const rateLimitResult = await rateLimiter.checkRateLimit(clientIP, { ...config.rateLimitConfig, ctx });
-
-    if (!rateLimitResult.allowed) {
-      if (rateLimitResult.error) {
-        // Database error with fail-closed
-        return respondJson(origin, { code: 500, message: rateLimitResult.error }, 500);
-      }
-      // Rate limit exceeded
-      return respondRateLimitExceeded(
-        origin,
-        rateLimitResult.ipSubnet,
-        config.ipSubnetLimit,
-        config.windowTime,
-        rateLimitResult.retryAfter
-      );
-    }
-  }
 
   // Check blacklist/whitelist
   const action = checkPathListAction(path, config);
@@ -653,11 +716,168 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
     );
   }
 
+  const cacheManager = config.cacheEnabled ? createCacheManager(config.dbMode) : null;
+  const cacheConfigWithCtx = cacheManager && config.cacheEnabled
+    ? { ...config.cacheConfig, ctx }
+    : null;
+  const canUseUnified = Boolean(
+    cacheManager &&
+    config.cacheEnabled &&
+    config.rateLimitEnabled &&
+    config.dbMode &&
+    clientIP
+  );
+
+  let unifiedResult = null;
+  let cacheHit = false;
+  let sizeBytes = 0;
+  let fileInfo = null;
+
+  if (canUseUnified) {
+    try {
+      console.log(`[Unified Check] Using unified check for mode=${config.dbMode}`);
+      const limitValue = config.rateLimitConfig?.limit ?? config.ipSubnetLimit;
+
+      if (config.dbMode === 'custom-pg-rest') {
+        unifiedResult = await unifiedCheck(decodedPath, clientIP, {
+          postgrestUrl: config.rateLimitConfig.postgrestUrl,
+          verifyHeader: config.rateLimitConfig.verifyHeader,
+          verifySecret: config.rateLimitConfig.verifySecret,
+          sizeTTL: config.cacheConfig.sizeTTL ?? config.sizeTTLSeconds,
+          cacheTableName: config.cacheConfig.tableName || config.filesizeCacheTableName || 'FILESIZE_CACHE_TABLE',
+          windowTimeSeconds: config.rateLimitConfig.windowTimeSeconds,
+          limit: limitValue,
+          blockTimeSeconds: config.rateLimitConfig.blockTimeSeconds,
+          rateLimitTableName: config.rateLimitConfig.tableName || 'IP_LIMIT_TABLE',
+          ipv4Suffix: config.rateLimitConfig.ipv4Suffix,
+          ipv6Suffix: config.rateLimitConfig.ipv6Suffix,
+        });
+      } else if (config.dbMode === 'd1') {
+        unifiedResult = await unifiedCheckD1(decodedPath, clientIP, {
+          env: config.cacheConfig.env || config.rateLimitConfig.env,
+          databaseBinding: config.cacheConfig.databaseBinding || config.rateLimitConfig.databaseBinding || 'DB',
+          sizeTTL: config.cacheConfig.sizeTTL ?? config.sizeTTLSeconds,
+          cacheTableName: config.cacheConfig.tableName || config.filesizeCacheTableName || 'FILESIZE_CACHE_TABLE',
+          windowTimeSeconds: config.rateLimitConfig.windowTimeSeconds,
+          limit: limitValue,
+          blockTimeSeconds: config.rateLimitConfig.blockTimeSeconds,
+          rateLimitTableName: config.rateLimitConfig.tableName || 'IP_LIMIT_TABLE',
+          ipv4Suffix: config.rateLimitConfig.ipv4Suffix,
+          ipv6Suffix: config.rateLimitConfig.ipv6Suffix,
+        });
+      } else if (config.dbMode === 'd1-rest') {
+        unifiedResult = await unifiedCheckD1Rest(decodedPath, clientIP, {
+          accountId: config.rateLimitConfig.accountId || config.cacheConfig.accountId,
+          databaseId: config.rateLimitConfig.databaseId || config.cacheConfig.databaseId,
+          apiToken: config.rateLimitConfig.apiToken || config.cacheConfig.apiToken,
+          sizeTTL: config.cacheConfig.sizeTTL ?? config.sizeTTLSeconds,
+          cacheTableName: config.cacheConfig.tableName || config.filesizeCacheTableName || 'FILESIZE_CACHE_TABLE',
+          windowTimeSeconds: config.rateLimitConfig.windowTimeSeconds,
+          limit: limitValue,
+          blockTimeSeconds: config.rateLimitConfig.blockTimeSeconds,
+          rateLimitTableName: config.rateLimitConfig.tableName || 'IP_LIMIT_TABLE',
+          ipv4Suffix: config.rateLimitConfig.ipv4Suffix,
+          ipv6Suffix: config.rateLimitConfig.ipv6Suffix,
+        });
+      } else {
+        console.log('[Unified Check] Unsupported DB mode for unified check, falling back');
+        unifiedResult = null;
+      }
+
+      if (unifiedResult) {
+        if (!unifiedResult.rateLimit.allowed) {
+          return respondRateLimitExceeded(
+            origin,
+            unifiedResult.rateLimit.ipSubnet || clientIP,
+            config.ipSubnetLimit,
+            config.windowTime,
+            unifiedResult.rateLimit.retryAfter
+          );
+        }
+
+        if (unifiedResult.cache.hit && Number.isFinite(unifiedResult.cache.size)) {
+          sizeBytes = Number(unifiedResult.cache.size);
+          cacheHit = true;
+          console.log('[Filesize Cache] HIT via unified check');
+        } else {
+          console.log('[Filesize Cache] MISS via unified check');
+        }
+      }
+    } catch (error) {
+      console.error('[Unified Check] Failed:', error instanceof Error ? error.message : String(error));
+      const pgHandle = config.rateLimitConfig?.pgErrorHandle || 'fail-closed';
+      if (pgHandle === 'fail-open') {
+        console.warn('[Unified Check] fail-open: continuing with standalone checks');
+        unifiedResult = null;
+        cacheHit = false;
+      } else {
+        const message = error instanceof Error ? error.message : String(error);
+        return respondJson(origin, { code: 500, message: `unified check failed: ${message}` }, 500);
+      }
+    }
+  }
+
+  if (!canUseUnified || !unifiedResult) {
+    if (rateLimiter && clientIP) {
+      const rateLimitResult = await rateLimiter.checkRateLimit(clientIP, { ...config.rateLimitConfig, ctx });
+
+      if (!rateLimitResult.allowed) {
+        if (rateLimitResult.error) {
+          return respondJson(origin, { code: 500, message: rateLimitResult.error }, 500);
+        }
+        return respondRateLimitExceeded(
+          origin,
+          rateLimitResult.ipSubnet,
+          config.ipSubnetLimit,
+          config.windowTime,
+          rateLimitResult.retryAfter
+        );
+      }
+    }
+
+    if (!cacheHit && cacheManager && cacheConfigWithCtx) {
+      try {
+        const cached = await cacheManager.checkCache(decodedPath, cacheConfigWithCtx);
+        if (cached && Number.isFinite(cached.size)) {
+          sizeBytes = Number(cached.size);
+          cacheHit = true;
+          console.log('[Filesize Cache] HIT via standalone lookup');
+        } else {
+          console.log('[Filesize Cache] MISS via standalone lookup');
+        }
+      } catch (error) {
+        console.error('[Filesize Cache] Standalone cache check failed:', error instanceof Error ? error.message : String(error));
+      }
+    }
+  }
+
+  if (!cacheHit) {
+    try {
+      fileInfo = await fetchAlistFileInfo(config, decodedPath, clientIP);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'alist fs/get failed';
+      return respondJson(origin, { code: 500, message }, 500);
+    }
+    sizeBytes = parseFileSize(fileInfo?.size);
+    if (cacheManager && cacheConfigWithCtx) {
+      try {
+        await cacheManager.saveCache(decodedPath, sizeBytes, cacheConfigWithCtx);
+        console.log('[Filesize Cache] Saved filesize to cache');
+      } catch (error) {
+        console.error('[Filesize Cache] Save failed:', error instanceof Error ? error.message : String(error));
+      }
+    }
+  }
+
+  const expireTime = calculateExpireTimestamp(sizeBytes, config.minDurationSeconds, config.minBandwidthBytesPerSecond);
   const downloadURL = await createDownloadURL(config, {
     encodedPath,
     decodedPath,
     sign,
     clientIP,
+    sizeBytes,
+    expireTime,
+    fileInfo,
   });
 
   const responsePayload = {

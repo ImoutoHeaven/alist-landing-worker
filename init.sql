@@ -1,7 +1,14 @@
 -- ========================================
--- Rate Limit Table Schema (原子化改造后)
+-- PostgreSQL Infrastructure for alist-landing-worker
 -- ========================================
--- 说明: 移除了 IP_ADDR 字段以简化原子UPSERT实现
+-- This script provisions rate limit + filesize cache helpers that mirror the
+-- Cloudflare Workers runtime expectations. Apply it to the backing database
+-- before enabling custom-pg-rest mode.
+
+
+-- ========================================
+-- Rate Limit Table Schema
+-- ========================================
 
 CREATE TABLE IF NOT EXISTS "IP_LIMIT_TABLE" (
   "IP_HASH" TEXT PRIMARY KEY,
@@ -11,23 +18,65 @@ CREATE TABLE IF NOT EXISTS "IP_LIMIT_TABLE" (
   "BLOCK_UNTIL" INTEGER
 );
 
--- 创建索引优化清理和查询性能
-CREATE INDEX IF NOT EXISTS idx_last_window_time ON "IP_LIMIT_TABLE"("LAST_WINDOW_TIME");
-CREATE INDEX IF NOT EXISTS idx_block_until ON "IP_LIMIT_TABLE"("BLOCK_UNTIL") WHERE "BLOCK_UNTIL" IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_ip_limit_last_window
+  ON "IP_LIMIT_TABLE" ("LAST_WINDOW_TIME");
+CREATE INDEX IF NOT EXISTS idx_ip_limit_block_until
+  ON "IP_LIMIT_TABLE" ("BLOCK_UNTIL")
+  WHERE "BLOCK_UNTIL" IS NOT NULL;
 
 
 -- ========================================
--- Postgres 存储过程: 原子化Rate Limit UPSERT
+-- Stored Procedure: Atomic Rate Limit UPSERT (Parametrised)
 -- ========================================
--- 仅用于 custom-pg-rest 方案，Neon方案直接使用内联SQL
---
--- 功能: 原子地插入或更新rate limit记录，处理窗口重置、阻断、递增等逻辑
--- 返回: 更新后的 ACCESS_COUNT, LAST_WINDOW_TIME, BLOCK_UNTIL 用于判断是否允许请求
---
--- 使用示例 (PostgREST):
---   POST /rpc/upsert_rate_limit
---   Body: {"p_ip_hash": "abc123", "p_ip_range": "192.168.1.0/24", "p_now": 1700000000, ...}
 
+CREATE OR REPLACE FUNCTION landing_upsert_rate_limit(
+  p_ip_hash TEXT,
+  p_ip_range TEXT,
+  p_now INTEGER,
+  p_window_seconds INTEGER,
+  p_limit INTEGER,
+  p_block_seconds INTEGER,
+  p_table_name TEXT DEFAULT 'IP_LIMIT_TABLE'
+)
+RETURNS TABLE(
+  "ACCESS_COUNT" INTEGER,
+  "LAST_WINDOW_TIME" INTEGER,
+  "BLOCK_UNTIL" INTEGER
+) AS $$
+DECLARE
+  sql TEXT;
+BEGIN
+  sql := format(
+    'INSERT INTO %1$I ("IP_HASH", "IP_RANGE", "ACCESS_COUNT", "LAST_WINDOW_TIME", "BLOCK_UNTIL")
+     VALUES ($1, $2, 1, $3, NULL)
+     ON CONFLICT ("IP_HASH") DO UPDATE SET
+       "ACCESS_COUNT" = CASE
+         WHEN $3 - %1$I."LAST_WINDOW_TIME" >= $4 THEN 1
+         WHEN %1$I."BLOCK_UNTIL" IS NOT NULL AND %1$I."BLOCK_UNTIL" <= $3 THEN 1
+         WHEN %1$I."ACCESS_COUNT" >= $5 THEN %1$I."ACCESS_COUNT"
+         ELSE %1$I."ACCESS_COUNT" + 1
+       END,
+       "LAST_WINDOW_TIME" = CASE
+         WHEN $3 - %1$I."LAST_WINDOW_TIME" >= $4 THEN $3
+         WHEN %1$I."BLOCK_UNTIL" IS NOT NULL AND %1$I."BLOCK_UNTIL" <= $3 THEN $3
+         ELSE %1$I."LAST_WINDOW_TIME"
+       END,
+       "BLOCK_UNTIL" = CASE
+         WHEN $3 - %1$I."LAST_WINDOW_TIME" >= $4 THEN NULL
+         WHEN %1$I."BLOCK_UNTIL" IS NOT NULL AND %1$I."BLOCK_UNTIL" <= $3 THEN NULL
+         WHEN %1$I."ACCESS_COUNT" >= $5 AND $6 > 0 THEN $3 + $6
+         ELSE %1$I."BLOCK_UNTIL"
+       END
+     RETURNING "ACCESS_COUNT", "LAST_WINDOW_TIME", "BLOCK_UNTIL"',
+    p_table_name
+  );
+
+  RETURN QUERY EXECUTE sql
+    USING p_ip_hash, p_ip_range, p_now, p_window_seconds, p_limit, p_block_seconds;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Backwards compatible wrapper for existing PostgREST deployment.
 CREATE OR REPLACE FUNCTION upsert_rate_limit(
   p_ip_hash TEXT,
   p_ip_range TEXT,
@@ -42,49 +91,169 @@ RETURNS TABLE(
   "BLOCK_UNTIL" INTEGER
 ) AS $$
 BEGIN
-  -- 原子 UPSERT: 插入新记录或根据复杂条件更新现有记录
   RETURN QUERY
-  INSERT INTO "IP_LIMIT_TABLE" ("IP_HASH", "IP_RANGE", "ACCESS_COUNT", "LAST_WINDOW_TIME", "BLOCK_UNTIL")
-  VALUES (p_ip_hash, p_ip_range, 1, p_now, NULL)
-  ON CONFLICT ("IP_HASH") DO UPDATE SET
-    -- 计数逻辑: 窗口过期/阻断过期则重置为1, 达到限流则保持, 否则递增
-    "ACCESS_COUNT" = CASE
-      -- Case 1: 窗口过期，重置计数
-      WHEN p_now - "IP_LIMIT_TABLE"."LAST_WINDOW_TIME" >= p_window_seconds THEN 1
-      -- Case 2: 阻断已过期，重置计数
-      WHEN "IP_LIMIT_TABLE"."BLOCK_UNTIL" IS NOT NULL AND "IP_LIMIT_TABLE"."BLOCK_UNTIL" <= p_now THEN 1
-      -- Case 3: 已达限流上限，不再递增
-      WHEN "IP_LIMIT_TABLE"."ACCESS_COUNT" >= p_limit THEN "IP_LIMIT_TABLE"."ACCESS_COUNT"
-      -- Case 4: 正常递增
-      ELSE "IP_LIMIT_TABLE"."ACCESS_COUNT" + 1
-    END,
-
-    -- 窗口时间逻辑: 窗口过期或阻断过期时更新为当前时间
-    "LAST_WINDOW_TIME" = CASE
-      WHEN p_now - "IP_LIMIT_TABLE"."LAST_WINDOW_TIME" >= p_window_seconds THEN p_now
-      WHEN "IP_LIMIT_TABLE"."BLOCK_UNTIL" IS NOT NULL AND "IP_LIMIT_TABLE"."BLOCK_UNTIL" <= p_now THEN p_now
-      ELSE "IP_LIMIT_TABLE"."LAST_WINDOW_TIME"
-    END,
-
-    -- 阻断逻辑: 窗口/阻断过期时清除，达到限流且配置了block_seconds时设置阻断时间
-    "BLOCK_UNTIL" = CASE
-      WHEN p_now - "IP_LIMIT_TABLE"."LAST_WINDOW_TIME" >= p_window_seconds THEN NULL
-      WHEN "IP_LIMIT_TABLE"."BLOCK_UNTIL" IS NOT NULL AND "IP_LIMIT_TABLE"."BLOCK_UNTIL" <= p_now THEN NULL
-      WHEN "IP_LIMIT_TABLE"."ACCESS_COUNT" >= p_limit AND p_block_seconds > 0 THEN p_now + p_block_seconds
-      ELSE "IP_LIMIT_TABLE"."BLOCK_UNTIL"
-    END
-
-  -- 返回更新后的记录供应用层判断是否允许请求
-  RETURNING "IP_LIMIT_TABLE"."ACCESS_COUNT", "IP_LIMIT_TABLE"."LAST_WINDOW_TIME", "IP_LIMIT_TABLE"."BLOCK_UNTIL";
+  SELECT *
+  FROM landing_upsert_rate_limit(
+    p_ip_hash,
+    p_ip_range,
+    p_now,
+    p_window_seconds,
+    p_limit,
+    p_block_seconds,
+    'IP_LIMIT_TABLE'
+  );
 END;
 $$ LANGUAGE plpgsql;
 
 
 -- ========================================
--- 迁移说明 (Migration Notes)
+-- Filesize Cache Table Schema
 -- ========================================
--- 如果已有包含 IP_ADDR 字段的旧表，执行以下迁移:
---
--- ALTER TABLE "IP_LIMIT_TABLE" DROP COLUMN IF EXISTS "IP_ADDR";
---
--- 警告: 此操作不可逆，执行前请备份数据
+
+CREATE TABLE IF NOT EXISTS "FILESIZE_CACHE_TABLE" (
+  "PATH_HASH" TEXT PRIMARY KEY,
+  "PATH" TEXT NOT NULL,
+  "SIZE" INTEGER NOT NULL,
+  "TIMESTAMP" INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_filesize_cache_timestamp
+  ON "FILESIZE_CACHE_TABLE" ("TIMESTAMP");
+
+
+-- ========================================
+-- Stored Procedure: Atomic UPSERT (Filesize Cache)
+-- ========================================
+
+CREATE OR REPLACE FUNCTION landing_upsert_filesize_cache(
+  p_path_hash TEXT,
+  p_path TEXT,
+  p_size INTEGER,
+  p_timestamp INTEGER,
+  p_table_name TEXT DEFAULT 'FILESIZE_CACHE_TABLE'
+)
+RETURNS TABLE(
+  "PATH_HASH" TEXT,
+  "PATH" TEXT,
+  "SIZE" INTEGER,
+  "TIMESTAMP" INTEGER
+) AS $$
+DECLARE
+  sql TEXT;
+BEGIN
+  sql := format(
+    'INSERT INTO %1$I ("PATH_HASH", "PATH", "SIZE", "TIMESTAMP")
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT ("PATH_HASH") DO UPDATE SET
+       "PATH" = EXCLUDED."PATH",
+       "SIZE" = EXCLUDED."SIZE",
+       "TIMESTAMP" = EXCLUDED."TIMESTAMP"
+     RETURNING "PATH_HASH", "PATH", "SIZE", "TIMESTAMP"',
+    p_table_name
+  );
+
+  RETURN QUERY EXECUTE sql USING p_path_hash, p_path, p_size, p_timestamp;
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- ========================================
+-- Stored Procedure: Cleanup Expired Cache Records
+-- ========================================
+
+CREATE OR REPLACE FUNCTION landing_cleanup_expired_cache(
+  p_ttl_seconds INTEGER,
+  p_table_name TEXT DEFAULT 'FILESIZE_CACHE_TABLE'
+)
+RETURNS INTEGER AS $$
+DECLARE
+  deleted_count INTEGER := 0;
+  cutoff INTEGER;
+  now_ts INTEGER;
+  sql TEXT;
+BEGIN
+  IF p_ttl_seconds IS NULL OR p_ttl_seconds <= 0 THEN
+    RETURN 0;
+  END IF;
+
+  now_ts := EXTRACT(EPOCH FROM NOW())::INTEGER;
+  cutoff := now_ts - (p_ttl_seconds * 2);
+
+  sql := format(
+    'DELETE FROM %1$I
+     WHERE "TIMESTAMP" < $1',
+    p_table_name
+  );
+
+  EXECUTE sql USING cutoff;
+  GET DIAGNOSTICS deleted_count = ROW_COUNT;
+
+  RETURN deleted_count;
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- ========================================
+-- Stored Procedure: Unified Check (Rate Limit + Filesize Cache)
+-- ========================================
+
+CREATE OR REPLACE FUNCTION landing_unified_check(
+  p_path_hash TEXT,
+  p_cache_ttl INTEGER,
+  p_cache_table_name TEXT,
+  p_ip_hash TEXT,
+  p_ip_range TEXT,
+  p_now INTEGER,
+  p_window_seconds INTEGER,
+  p_limit INTEGER,
+  p_block_seconds INTEGER,
+  p_ratelimit_table_name TEXT
+)
+RETURNS TABLE(
+  cache_size INTEGER,
+  cache_timestamp INTEGER,
+  rate_access_count INTEGER,
+  rate_last_window_time INTEGER,
+  rate_block_until INTEGER
+) AS $$
+DECLARE
+  cache_sql TEXT;
+  cache_rec RECORD;
+  rate_rec RECORD;
+BEGIN
+  cache_sql := format(
+    'SELECT "SIZE", "TIMESTAMP"
+     FROM %1$I
+     WHERE "PATH_HASH" = $1',
+    p_cache_table_name
+  );
+
+  EXECUTE cache_sql INTO cache_rec USING p_path_hash;
+
+  IF FOUND AND cache_rec."TIMESTAMP" IS NOT NULL AND (p_now - cache_rec."TIMESTAMP") <= p_cache_ttl THEN
+    cache_size := cache_rec."SIZE";
+    cache_timestamp := cache_rec."TIMESTAMP";
+  ELSE
+    cache_size := NULL;
+    cache_timestamp := NULL;
+  END IF;
+
+  SELECT *
+  INTO rate_rec
+  FROM landing_upsert_rate_limit(
+    p_ip_hash,
+    p_ip_range,
+    p_now,
+    p_window_seconds,
+    p_limit,
+    p_block_seconds,
+    p_ratelimit_table_name
+  );
+
+  rate_access_count := rate_rec."ACCESS_COUNT";
+  rate_last_window_time := rate_rec."LAST_WINDOW_TIME";
+  rate_block_until := rate_rec."BLOCK_UNTIL";
+
+  RETURN NEXT;
+END;
+$$ LANGUAGE plpgsql;

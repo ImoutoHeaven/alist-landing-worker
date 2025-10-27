@@ -1,10 +1,10 @@
-import { calculateIPSubnet, sha256Hash } from '../utils.js';
+import { calculateIPSubnet, sha256Hash, applyVerifyHeaders, hasVerifyCredentials } from '../utils.js';
 
 /**
  * Execute query via PostgREST API
  * @param {string} postgrestUrl - PostgREST API base URL
- * @param {string} verifyHeader - Authentication header name
- * @param {string} verifySecret - Authentication header value
+ * @param {string|string[]} verifyHeader - Authentication header name(s)
+ * @param {string|string[]} verifySecret - Authentication header value(s)
  * @param {string} tableName - Table name
  * @param {string} method - HTTP method (GET, POST, PATCH, DELETE)
  * @param {string} filters - URL query filters (for GET/PATCH/DELETE)
@@ -16,10 +16,10 @@ const executeQuery = async (postgrestUrl, verifyHeader, verifySecret, tableName,
   const url = `${postgrestUrl}/${tableName}${filters ? `?${filters}` : ''}`;
 
   const headers = {
-    [verifyHeader]: verifySecret,
     'Content-Type': 'application/json',
     ...extraHeaders,
   };
+  applyVerifyHeaders(headers, verifyHeader, verifySecret);
 
   const options = {
     method,
@@ -101,8 +101,8 @@ const executeQuery = async (postgrestUrl, verifyHeader, verifySecret, tableName,
  * @param {string} ip - Client IP address
  * @param {Object} config - Rate limit configuration
  * @param {string} config.postgrestUrl - PostgREST API base URL
- * @param {string} config.verifyHeader - Authentication header name
- * @param {string} config.verifySecret - Authentication header value
+ * @param {string|string[]} config.verifyHeader - Authentication header name(s)
+ * @param {string|string[]} config.verifySecret - Authentication header value(s)
  * @param {string} config.tableName - Table name (defaults to 'IP_LIMIT_TABLE', used for cleanup only)
  * @param {number} config.windowTimeSeconds - Time window in seconds
  * @param {number} config.limit - Request limit per window
@@ -116,7 +116,7 @@ const executeQuery = async (postgrestUrl, verifyHeader, verifySecret, tableName,
  */
 export const checkRateLimit = async (ip, config) => {
   // If any required config is missing, skip rate limiting
-  if (!config.postgrestUrl || !config.verifyHeader || !config.verifySecret || !config.windowTimeSeconds || !config.limit) {
+  if (!config.postgrestUrl || !hasVerifyCredentials(config.verifyHeader, config.verifySecret) || !config.windowTimeSeconds || !config.limit) {
     return { allowed: true };
   }
 
@@ -179,12 +179,14 @@ export const checkRateLimit = async (ip, config) => {
       p_block_seconds: config.blockTimeSeconds || 0,
     };
 
+    const rpcHeaders = {
+      'Content-Type': 'application/json',
+    };
+    applyVerifyHeaders(rpcHeaders, verifyHeader, verifySecret);
+
     const rpcResponse = await fetch(rpcUrl, {
       method: 'POST',
-      headers: {
-        [verifyHeader]: verifySecret,
-        'Content-Type': 'application/json',
-      },
+      headers: rpcHeaders,
       body: JSON.stringify(rpcBody),
     });
 
@@ -253,8 +255,8 @@ export const checkRateLimit = async (ip, config) => {
  * Removes records older than windowTimeSeconds * 2 (double buffer)
  * Respects BLOCK_UNTIL: does NOT delete records that are still blocked
  * @param {string} postgrestUrl - PostgREST API base URL
- * @param {string} verifyHeader - Authentication header name
- * @param {string} verifySecret - Authentication header value
+ * @param {string|string[]} verifyHeader - Authentication header name(s)
+ * @param {string|string[]} verifySecret - Authentication header value(s)
  * @param {string} tableName - Table name
  * @param {number} windowTimeSeconds - Time window in seconds
  * @returns {Promise<number>} - Number of deleted records
@@ -281,7 +283,7 @@ const cleanupExpiredRecords = async (postgrestUrl, verifyHeader, verifySecret, t
       'DELETE',
       filters,
       null,
-      { 'Prefer': 'return=representation' }
+      { Prefer: 'return=representation' }
     );
 
     const deletedCount = result.affectedRows || 0;
