@@ -21,6 +21,17 @@ persist = true
 # IPV4_ONLY = "false"
 # VERIFY_HEADER = ""
 # VERIFY_SECRET = ""
+# # ⚠️ NEW: Multi-Authentication Header Support (comma-separated format)
+# # You can now specify multiple authentication header/secret pairs for different services
+# # Format: "header1,header2,header3"
+# # Example for AList + PostgREST:
+# #   VERIFY_HEADER = "X-Auth-Token,X-Postgrest-Auth"
+# #   VERIFY_SECRET = "alist-secret-key,postgrest-secret-key"
+# # Requirements:
+# #   - Both arrays must have the same length (if non-empty)
+# #   - No spaces between commas: "header1,header2" (spaces will be trimmed automatically)
+# #   - All header/secret pairs will be sent in requests to AList /api/fs/get and PostgREST
+# # Backward Compatible: Single value still works: VERIFY_HEADER = "X-Auth-Token"
 # IF_APPEND_ADDITIONAL = "true"           # Append additionalInfo parameters to download URLs
 # ALIST_ADDRESS = "https://alist.example.com"  # Fallback AList base URL when appending expiry (ADDRESS/ALIST_BASE_URL also supported)
 # MIN_ALLOWED_BANDWIDTH = "10"            # Minimum allowed download bandwidth (Mbps)
@@ -59,11 +70,58 @@ persist = true
 # # Custom PostgreSQL + PostgREST Rate Limiting - requires DB_MODE="custom-pg-rest"
 # # Use this mode when you have self-hosted PostgreSQL with PostgREST REST API
 # # ⚠️ IMPORTANT: You MUST run init.sql on your PostgreSQL database first!
-# #   - Creates IP_LIMIT_TABLE table (without IP_ADDR column)
-# #   - Creates upsert_rate_limit() stored procedure (required for atomic operations)
+# #   - Creates IP_LIMIT_TABLE table
+# #   - Creates FILESIZE_CACHE_TABLE table (for filesize caching)
+# #   - Creates landing_upsert_rate_limit() stored procedure (atomic rate limit)
+# #   - Creates landing_upsert_filesize_cache() stored procedure (atomic cache)
+# #   - Creates landing_unified_check() stored procedure (single RTT optimization)
 # POSTGREST_URL = "https://your-domain.com/postgrest"  # PostgREST API endpoint (without table name)
 # POSTGREST_TABLE_NAME = "IP_LIMIT_TABLE"  # Optional, defaults to IP_LIMIT_TABLE
 # # Note: VERIFY_HEADER and VERIFY_SECRET (already defined above) are used for PostgREST authentication
+#
+# # ═══════════════════════════════════════════════════════════════
+# # ⚠️ NEW: Filesize Cache System (Reduce /api/fs/get API Calls)
+# # ═══════════════════════════════════════════════════════════════
+# #
+# # Purpose: Cache file sizes from AList /api/fs/get to reduce API calls
+# # Benefits:
+# #   - Reduces latency for repeated requests (cache hit = no API call)
+# #   - Reduces load on AList server
+# #   - Performance optimization: Single RTT for rate limit + cache (unified check)
+# #
+# # How it works:
+# # 1. First request: Calls /api/fs/get, extracts file size, caches it
+# # 2. Subsequent requests: Uses cached size (within TTL), skips /api/fs/get
+# # 3. TTL expires: Re-fetches from /api/fs/get, updates cache
+# #
+# # Requirements:
+# # - DB_MODE must be set (d1, d1-rest, or custom-pg-rest)
+# # - For custom-pg-rest: Run init.sql to create FILESIZE_CACHE_TABLE and stored procedures
+# #
+# # Configuration:
+# FILESIZE_CACHE_TABLE = "FILESIZE_CACHE_TABLE"  # Table name for filesize cache
+#                                                 # Default: "FILESIZE_CACHE_TABLE"
+#                                                 # This is independent from rate limit table
+#
+# SIZE_TTL = "24h"                                # Cache TTL (Time To Live)
+#                                                 # Format: {number}{unit} where unit is h/m/s
+#                                                 # Examples: "24h", "1440m", "86400s"
+#                                                 # Default: "24h" (24 hours)
+#                                                 # Rationale: File sizes rarely change
+#
+# # Note: When both rate limiting and caching are enabled, the worker uses
+# #       "unified check" to query both in a single database round-trip (RTT optimization).
+# #       This reduces latency from 3 RTT → 1 RTT (cache hit) or 2 RTT (cache miss).
+#
+# # Example Configuration (custom-pg-rest with cache):
+# #   DB_MODE = "custom-pg-rest"
+# #   POSTGREST_URL = "https://postgrest.example.com"
+# #   VERIFY_HEADER = "X-Auth-Token,X-Postgrest-Auth"
+# #   VERIFY_SECRET = "alist-secret,postgrest-secret"
+# #   FILESIZE_CACHE_TABLE = "FILESIZE_CACHE_TABLE"
+# #   SIZE_TTL = "24h"
+# #   WINDOW_TIME = "24h"
+# #   IPSUBNET_WINDOWTIME_LIMIT = "100"
 
 # D1 Database Binding (for DB_MODE="d1")
 # Uncomment and configure this section if using D1 binding mode
