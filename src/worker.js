@@ -127,6 +127,7 @@ const resolveConfig = (env = {}) => {
   const filesizeCacheTableName = env.FILESIZE_CACHE_TABLE && typeof env.FILESIZE_CACHE_TABLE === 'string'
     ? env.FILESIZE_CACHE_TABLE.trim()
     : 'FILESIZE_CACHE_TABLE';
+  console.log('[CONFIG] Filesize cache config:', { rawSizeTTL, sizeTTLSeconds, filesizeCacheTableName });
 
   // Validate PG_ERROR_HANDLE value
   const validPgErrorHandle = pgErrorHandle === 'fail-open' ? 'fail-open' : 'fail-closed';
@@ -255,6 +256,15 @@ const resolveConfig = (env = {}) => {
             sizeTTL: sizeTTLSeconds,
             cleanupProbability,
           };
+          console.log('[CONFIG] Cache ENABLED for custom-pg-rest:', {
+            tableName: filesizeCacheTableName,
+            sizeTTL: sizeTTLSeconds,
+            postgrestUrl,
+            hasVerifyHeader: verifyHeaders.length > 0,
+            hasVerifySecret: verifySecrets.length > 0,
+          });
+        } else {
+          console.warn('[CONFIG] Cache DISABLED: sizeTTLSeconds =', sizeTTLSeconds);
         }
       } else {
         throw new Error('DB_MODE is set to "custom-pg-rest" but required environment variables are missing: POSTGREST_URL, VERIFY_HEADER, VERIFY_SECRET, WINDOW_TIME, IPSUBNET_WINDOWTIME_LIMIT');
@@ -720,6 +730,14 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
   const cacheConfigWithCtx = cacheManager && config.cacheEnabled
     ? { ...config.cacheConfig, ctx }
     : null;
+
+  console.log('[CACHE] Cache initialization:', {
+    cacheEnabled: config.cacheEnabled,
+    hasCacheManager: !!cacheManager,
+    hasCacheConfig: !!cacheConfigWithCtx,
+    cacheConfigKeys: cacheConfigWithCtx ? Object.keys(cacheConfigWithCtx) : [],
+  });
+
   const canUseUnified = Boolean(
     cacheManager &&
     config.cacheEnabled &&
@@ -727,6 +745,15 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
     config.dbMode &&
     clientIP
   );
+
+  console.log('[CACHE] Unified check eligibility:', {
+    canUseUnified,
+    hasCacheManager: !!cacheManager,
+    cacheEnabled: config.cacheEnabled,
+    rateLimitEnabled: config.rateLimitEnabled,
+    dbMode: config.dbMode,
+    hasClientIP: !!clientIP,
+  });
 
   let unifiedResult = null;
   let cacheHit = false;
@@ -739,7 +766,7 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
       const limitValue = config.rateLimitConfig?.limit ?? config.ipSubnetLimit;
 
       if (config.dbMode === 'custom-pg-rest') {
-        unifiedResult = await unifiedCheck(decodedPath, clientIP, {
+        const unifiedConfig = {
           postgrestUrl: config.rateLimitConfig.postgrestUrl,
           verifyHeader: config.rateLimitConfig.verifyHeader,
           verifySecret: config.rateLimitConfig.verifySecret,
@@ -751,7 +778,15 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
           rateLimitTableName: config.rateLimitConfig.tableName || 'IP_LIMIT_TABLE',
           ipv4Suffix: config.rateLimitConfig.ipv4Suffix,
           ipv6Suffix: config.rateLimitConfig.ipv6Suffix,
+        };
+        console.log('[Unified Check] Config for custom-pg-rest:', {
+          postgrestUrl: unifiedConfig.postgrestUrl,
+          hasVerifyHeader: Array.isArray(unifiedConfig.verifyHeader) ? unifiedConfig.verifyHeader.length : !!unifiedConfig.verifyHeader,
+          hasVerifySecret: Array.isArray(unifiedConfig.verifySecret) ? unifiedConfig.verifySecret.length : !!unifiedConfig.verifySecret,
+          sizeTTL: unifiedConfig.sizeTTL,
+          cacheTableName: unifiedConfig.cacheTableName,
         });
+        unifiedResult = await unifiedCheck(decodedPath, clientIP, unifiedConfig);
       } else if (config.dbMode === 'd1') {
         unifiedResult = await unifiedCheckD1(decodedPath, clientIP, {
           env: config.cacheConfig.env || config.rateLimitConfig.env,
@@ -836,6 +871,7 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
     }
 
     if (!cacheHit && cacheManager && cacheConfigWithCtx) {
+      console.log('[CACHE] Starting standalone cache check for path:', decodedPath);
       try {
         const cached = await cacheManager.checkCache(decodedPath, cacheConfigWithCtx);
         if (cached && Number.isFinite(cached.size)) {
@@ -848,6 +884,12 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
       } catch (error) {
         console.error('[Filesize Cache] Standalone cache check failed:', error instanceof Error ? error.message : String(error));
       }
+    } else {
+      console.log('[CACHE] Skipping standalone cache check:', {
+        cacheHit,
+        hasCacheManager: !!cacheManager,
+        hasCacheConfig: !!cacheConfigWithCtx,
+      });
     }
   }
 
@@ -860,12 +902,22 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
     }
     sizeBytes = parseFileSize(fileInfo?.size);
     if (cacheManager && cacheConfigWithCtx) {
+      console.log('[CACHE] Attempting to save cache:', {
+        path: decodedPath,
+        size: sizeBytes,
+        configKeys: Object.keys(cacheConfigWithCtx),
+      });
       try {
         await cacheManager.saveCache(decodedPath, sizeBytes, cacheConfigWithCtx);
         console.log('[Filesize Cache] Saved filesize to cache');
       } catch (error) {
         console.error('[Filesize Cache] Save failed:', error instanceof Error ? error.message : String(error));
       }
+    } else {
+      console.log('[CACHE] Skipping cache save:', {
+        hasCacheManager: !!cacheManager,
+        hasCacheConfig: !!cacheConfigWithCtx,
+      });
     }
   }
 
@@ -935,51 +987,229 @@ const handleFileRequest = async (request, config, rateLimiter, ctx) => {
 
   // Fast redirect logic
   if (shouldRedirect) {
+    const origin = request.headers.get('origin') || '*';
     const sign = url.searchParams.get('sign') || '';
     const encodedPath = url.pathname;
     let decodedPath;
     try {
       decodedPath = decodeURIComponent(url.pathname);
     } catch (error) {
-      return respondJson(request.headers.get('origin') || '*', { code: 400, message: 'invalid path encoding' }, 400);
+      return respondJson(origin, { code: 400, message: 'invalid path encoding' }, 400);
     }
 
     // Verify signature
     const verifyResult = await verifySignature(config.signSecret, decodedPath, sign);
     if (verifyResult) {
-      return respondJson(request.headers.get('origin') || '*', { code: 401, message: verifyResult }, 401);
+      return respondJson(origin, { code: 401, message: verifyResult }, 401);
     }
 
-    // Check rate limit for fast redirect
     const clientIP = extractClientIP(request);
-    if (rateLimiter && clientIP) {
-      const rateLimitResult = await rateLimiter.checkRateLimit(clientIP, { ...config.rateLimitConfig, ctx });
 
-      if (!rateLimitResult.allowed) {
-        const origin = request.headers.get('origin') || '*';
-        if (rateLimitResult.error) {
-          // Database error with fail-closed
-          return respondJson(origin, { code: 500, message: rateLimitResult.error }, 500);
+    const cacheManager = config.cacheEnabled ? createCacheManager(config.dbMode) : null;
+    const cacheConfigWithCtx = cacheManager && config.cacheEnabled
+      ? { ...config.cacheConfig, ctx }
+      : null;
+
+    console.log('[Fast Redirect][CACHE] Cache initialization:', {
+      cacheEnabled: config.cacheEnabled,
+      hasCacheManager: !!cacheManager,
+      hasCacheConfig: !!cacheConfigWithCtx,
+      cacheConfigKeys: cacheConfigWithCtx ? Object.keys(cacheConfigWithCtx) : [],
+    });
+
+    const canUseUnified = Boolean(
+      cacheManager &&
+      config.cacheEnabled &&
+      config.rateLimitEnabled &&
+      config.dbMode &&
+      clientIP
+    );
+
+    console.log('[Fast Redirect][CACHE] Unified check eligibility:', {
+      canUseUnified,
+      hasCacheManager: !!cacheManager,
+      cacheEnabled: config.cacheEnabled,
+      rateLimitEnabled: config.rateLimitEnabled,
+      dbMode: config.dbMode,
+      hasClientIP: !!clientIP,
+    });
+
+    let unifiedResult = null;
+    let cacheHit = false;
+    let sizeBytes = 0;
+    let fileInfo = null;
+
+    if (canUseUnified) {
+      try {
+        console.log(`[Fast Redirect][Unified Check] Using unified check for mode=${config.dbMode}`);
+        const limitValue = config.rateLimitConfig?.limit ?? config.ipSubnetLimit;
+
+        if (config.dbMode === 'custom-pg-rest') {
+          const unifiedConfig = {
+            postgrestUrl: config.rateLimitConfig.postgrestUrl,
+            verifyHeader: config.rateLimitConfig.verifyHeader,
+            verifySecret: config.rateLimitConfig.verifySecret,
+            sizeTTL: config.cacheConfig.sizeTTL ?? config.sizeTTLSeconds,
+            cacheTableName: config.cacheConfig.tableName || config.filesizeCacheTableName || 'FILESIZE_CACHE_TABLE',
+            windowTimeSeconds: config.rateLimitConfig.windowTimeSeconds,
+            limit: limitValue,
+            blockTimeSeconds: config.rateLimitConfig.blockTimeSeconds,
+            rateLimitTableName: config.rateLimitConfig.tableName || 'IP_LIMIT_TABLE',
+            ipv4Suffix: config.rateLimitConfig.ipv4Suffix,
+            ipv6Suffix: config.rateLimitConfig.ipv6Suffix,
+          };
+          console.log('[Fast Redirect][Unified Check] Config for custom-pg-rest:', {
+            postgrestUrl: unifiedConfig.postgrestUrl,
+            hasVerifyHeader: Array.isArray(unifiedConfig.verifyHeader) ? unifiedConfig.verifyHeader.length : !!unifiedConfig.verifyHeader,
+            hasVerifySecret: Array.isArray(unifiedConfig.verifySecret) ? unifiedConfig.verifySecret.length : !!unifiedConfig.verifySecret,
+            sizeTTL: unifiedConfig.sizeTTL,
+            cacheTableName: unifiedConfig.cacheTableName,
+          });
+          unifiedResult = await unifiedCheck(decodedPath, clientIP, unifiedConfig);
+        } else if (config.dbMode === 'd1') {
+          unifiedResult = await unifiedCheckD1(decodedPath, clientIP, {
+            env: config.cacheConfig.env || config.rateLimitConfig.env,
+            databaseBinding: config.cacheConfig.databaseBinding || config.rateLimitConfig.databaseBinding || 'DB',
+            sizeTTL: config.cacheConfig.sizeTTL ?? config.sizeTTLSeconds,
+            cacheTableName: config.cacheConfig.tableName || config.filesizeCacheTableName || 'FILESIZE_CACHE_TABLE',
+            windowTimeSeconds: config.rateLimitConfig.windowTimeSeconds,
+            limit: limitValue,
+            blockTimeSeconds: config.rateLimitConfig.blockTimeSeconds,
+            rateLimitTableName: config.rateLimitConfig.tableName || 'IP_LIMIT_TABLE',
+            ipv4Suffix: config.rateLimitConfig.ipv4Suffix,
+            ipv6Suffix: config.rateLimitConfig.ipv6Suffix,
+          });
+        } else if (config.dbMode === 'd1-rest') {
+          unifiedResult = await unifiedCheckD1Rest(decodedPath, clientIP, {
+            accountId: config.rateLimitConfig.accountId || config.cacheConfig.accountId,
+            databaseId: config.rateLimitConfig.databaseId || config.cacheConfig.databaseId,
+            apiToken: config.rateLimitConfig.apiToken || config.cacheConfig.apiToken,
+            sizeTTL: config.cacheConfig.sizeTTL ?? config.sizeTTLSeconds,
+            cacheTableName: config.cacheConfig.tableName || config.filesizeCacheTableName || 'FILESIZE_CACHE_TABLE',
+            windowTimeSeconds: config.rateLimitConfig.windowTimeSeconds,
+            limit: limitValue,
+            blockTimeSeconds: config.rateLimitConfig.blockTimeSeconds,
+            rateLimitTableName: config.rateLimitConfig.tableName || 'IP_LIMIT_TABLE',
+            ipv4Suffix: config.rateLimitConfig.ipv4Suffix,
+            ipv6Suffix: config.rateLimitConfig.ipv6Suffix,
+          });
+        } else {
+          console.log('[Fast Redirect][Unified Check] Unsupported DB mode for unified check, falling back');
+          unifiedResult = null;
         }
-        // Rate limit exceeded
-        return respondRateLimitExceeded(
-          origin,
-          rateLimitResult.ipSubnet,
-          config.ipSubnetLimit,
-          config.windowTime,
-          rateLimitResult.retryAfter
-        );
+
+        if (unifiedResult) {
+          if (!unifiedResult.rateLimit.allowed) {
+            return respondRateLimitExceeded(
+              origin,
+              unifiedResult.rateLimit.ipSubnet || clientIP,
+              config.ipSubnetLimit,
+              config.windowTime,
+              unifiedResult.rateLimit.retryAfter
+            );
+          }
+
+          if (unifiedResult.cache.hit && Number.isFinite(unifiedResult.cache.size)) {
+            sizeBytes = Number(unifiedResult.cache.size);
+            cacheHit = true;
+            console.log('[Fast Redirect][Filesize Cache] HIT via unified check');
+          } else {
+            console.log('[Fast Redirect][Filesize Cache] MISS via unified check');
+          }
+        }
+      } catch (error) {
+        console.error('[Fast Redirect][Unified Check] Failed:', error instanceof Error ? error.message : String(error));
+        const pgHandle = config.rateLimitConfig?.pgErrorHandle || 'fail-closed';
+        if (pgHandle === 'fail-open') {
+          console.warn('[Fast Redirect][Unified Check] fail-open: continuing with standalone checks');
+          unifiedResult = null;
+          cacheHit = false;
+        } else {
+          const message = error instanceof Error ? error.message : String(error);
+          return respondJson(origin, { code: 500, message: `unified check failed: ${message}` }, 500);
+        }
       }
     }
 
-    // Generate download URL using URL object for proper encoding
-    const expire = extractExpireFromSign(sign);
+    if (!canUseUnified || !unifiedResult) {
+      if (rateLimiter && clientIP) {
+        const rateLimitResult = await rateLimiter.checkRateLimit(clientIP, { ...config.rateLimitConfig, ctx });
+
+        if (!rateLimitResult.allowed) {
+          if (rateLimitResult.error) {
+            return respondJson(origin, { code: 500, message: rateLimitResult.error }, 500);
+          }
+          return respondRateLimitExceeded(
+            origin,
+            rateLimitResult.ipSubnet,
+            config.ipSubnetLimit,
+            config.windowTime,
+            rateLimitResult.retryAfter
+          );
+        }
+      }
+
+      if (!cacheHit && cacheManager && cacheConfigWithCtx) {
+        console.log('[Fast Redirect][CACHE] Starting standalone cache check for path:', decodedPath);
+        try {
+          const cached = await cacheManager.checkCache(decodedPath, cacheConfigWithCtx);
+          if (cached && Number.isFinite(cached.size)) {
+            sizeBytes = Number(cached.size);
+            cacheHit = true;
+            console.log('[Fast Redirect][Filesize Cache] HIT via standalone lookup');
+          } else {
+            console.log('[Fast Redirect][Filesize Cache] MISS via standalone lookup');
+          }
+        } catch (error) {
+          console.error('[Fast Redirect][Filesize Cache] Standalone cache check failed:', error instanceof Error ? error.message : String(error));
+        }
+      } else {
+        console.log('[Fast Redirect][CACHE] Skipping standalone cache check:', {
+          cacheHit,
+          hasCacheManager: !!cacheManager,
+          hasCacheConfig: !!cacheConfigWithCtx,
+        });
+      }
+    }
+
+    if (!cacheHit) {
+      try {
+        fileInfo = await fetchAlistFileInfo(config, decodedPath, clientIP);
+        sizeBytes = parseFileSize(fileInfo?.size);
+      } catch (error) {
+        console.error('[Fast Redirect] Failed to fetch file info:', error instanceof Error ? error.message : String(error));
+      }
+      if (cacheManager && cacheConfigWithCtx && fileInfo) {
+        console.log('[Fast Redirect][CACHE] Attempting to save cache:', {
+          path: decodedPath,
+          size: sizeBytes,
+          configKeys: Object.keys(cacheConfigWithCtx),
+        });
+        try {
+          await cacheManager.saveCache(decodedPath, sizeBytes, cacheConfigWithCtx);
+          console.log('[Fast Redirect][Filesize Cache] Saved filesize to cache');
+        } catch (error) {
+          console.error('[Fast Redirect][Filesize Cache] Save failed:', error instanceof Error ? error.message : String(error));
+        }
+      } else {
+        console.log('[Fast Redirect][CACHE] Skipping cache save:', {
+          hasCacheManager: !!cacheManager,
+          hasCacheConfig: !!cacheConfigWithCtx,
+          hasFileInfo: !!fileInfo,
+        });
+      }
+    }
+
+    const expireTime = calculateExpireTimestamp(sizeBytes, config.minDurationSeconds, config.minBandwidthBytesPerSecond);
 
     const downloadURL = await createDownloadURL(config, {
       encodedPath,
       decodedPath,
       sign,
       clientIP,
+      sizeBytes,
+      expireTime,
+      fileInfo,
     });
 
     // Return 302 redirect

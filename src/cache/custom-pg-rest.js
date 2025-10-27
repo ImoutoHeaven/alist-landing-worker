@@ -83,17 +83,26 @@ const callRpc = async (postgrestUrl, verifyHeader, verifySecret, rpcName, payloa
 
 export const checkCache = async (path, config) => {
   if (!config?.postgrestUrl || !hasVerifyCredentials(config.verifyHeader, config.verifySecret)) {
+    console.warn('[Filesize Cache] checkCache skipped: missing postgrestUrl or credentials', {
+      hasPostgrestUrl: !!config?.postgrestUrl,
+      hasVerifyHeader: config?.verifyHeader ? (Array.isArray(config.verifyHeader) ? config.verifyHeader.length > 0 : !!config.verifyHeader) : false,
+      hasVerifySecret: config?.verifySecret ? (Array.isArray(config.verifySecret) ? config.verifySecret.length > 0 : !!config.verifySecret) : false,
+    });
     return null;
   }
 
   const sizeTTL = Number(config.sizeTTL) || 0;
   if (sizeTTL <= 0) {
+    console.warn('[Filesize Cache] checkCache skipped: invalid sizeTTL', { sizeTTL: config.sizeTTL, parsedTTL: sizeTTL });
     return null;
   }
 
   if (!path || typeof path !== 'string') {
+    console.warn('[Filesize Cache] checkCache skipped: invalid path', { path });
     return null;
   }
+
+  console.log('[Filesize Cache] checkCache starting for path:', path);
 
   try {
     const { postgrestUrl, verifyHeader, verifySecret } = config;
@@ -145,24 +154,40 @@ export const checkCache = async (path, config) => {
 };
 
 export const saveCache = async (path, size, config) => {
+  console.log('[Filesize Cache] saveCache called:', { path, size, hasConfig: !!config });
+
   if (!config?.postgrestUrl || !hasVerifyCredentials(config.verifyHeader, config.verifySecret)) {
+    console.warn('[Filesize Cache] saveCache skipped: missing postgrestUrl or credentials', {
+      hasPostgrestUrl: !!config?.postgrestUrl,
+      hasVerifyHeader: config?.verifyHeader ? (Array.isArray(config.verifyHeader) ? config.verifyHeader.length > 0 : !!config.verifyHeader) : false,
+      hasVerifySecret: config?.verifySecret ? (Array.isArray(config.verifySecret) ? config.verifySecret.length > 0 : !!config.verifySecret) : false,
+    });
     return;
   }
 
   const sizeTTL = Number(config.sizeTTL) || 0;
   if (sizeTTL <= 0) {
+    console.warn('[Filesize Cache] saveCache skipped: invalid sizeTTL', { sizeTTL: config.sizeTTL, parsedTTL: sizeTTL });
     return;
   }
 
   if (!path || typeof path !== 'string') {
+    console.warn('[Filesize Cache] saveCache skipped: invalid path', { path });
     return;
   }
 
   const normalizedSize = Number(size);
   if (!Number.isFinite(normalizedSize) || normalizedSize < 0) {
-    console.warn('[Filesize Cache] Skipping save (invalid size value)');
+    console.warn('[Filesize Cache] saveCache skipped: invalid size value', { size, normalizedSize });
     return;
   }
+
+  console.log('[Filesize Cache] saveCache proceeding with:', {
+    path,
+    size: normalizedSize,
+    tableName: config.tableName || 'FILESIZE_CACHE_TABLE',
+    postgrestUrl: config.postgrestUrl,
+  });
 
   try {
     const { postgrestUrl, verifyHeader, verifySecret } = config;
@@ -173,6 +198,7 @@ export const saveCache = async (path, size, config) => {
     }
 
     const now = Math.floor(Date.now() / 1000);
+    console.log('[Filesize Cache] Calling landing_upsert_filesize_cache RPC...');
     const rpcResult = await callRpc(
       postgrestUrl,
       verifyHeader,
@@ -187,9 +213,13 @@ export const saveCache = async (path, size, config) => {
       }
     );
 
+    console.log('[Filesize Cache] RPC result:', rpcResult);
+
     if (!rpcResult || rpcResult.length === 0) {
       throw new Error('landing_upsert_filesize_cache returned no rows');
     }
+
+    console.log('[Filesize Cache] Successfully saved to database');
 
     const triggerCleanup = () => {
       const probability = config.cleanupProbability ?? 0.01;

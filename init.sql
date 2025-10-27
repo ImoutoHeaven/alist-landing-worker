@@ -113,7 +113,7 @@ $$ LANGUAGE plpgsql;
 CREATE TABLE IF NOT EXISTS "FILESIZE_CACHE_TABLE" (
   "PATH_HASH" TEXT PRIMARY KEY,
   "PATH" TEXT NOT NULL,
-  "SIZE" INTEGER NOT NULL,
+  "SIZE" BIGINT NOT NULL,
   "TIMESTAMP" INTEGER NOT NULL
 );
 
@@ -128,14 +128,14 @@ CREATE INDEX IF NOT EXISTS idx_filesize_cache_timestamp
 CREATE OR REPLACE FUNCTION landing_upsert_filesize_cache(
   p_path_hash TEXT,
   p_path TEXT,
-  p_size INTEGER,
+  p_size BIGINT,
   p_timestamp INTEGER,
   p_table_name TEXT DEFAULT 'FILESIZE_CACHE_TABLE'
 )
 RETURNS TABLE(
   "PATH_HASH" TEXT,
   "PATH" TEXT,
-  "SIZE" INTEGER,
+  "SIZE" BIGINT,
   "TIMESTAMP" INTEGER
 ) AS $$
 DECLARE
@@ -210,7 +210,7 @@ CREATE OR REPLACE FUNCTION landing_unified_check(
   p_ratelimit_table_name TEXT
 )
 RETURNS TABLE(
-  cache_size INTEGER,
+  cache_size BIGINT,
   cache_timestamp INTEGER,
   rate_access_count INTEGER,
   rate_last_window_time INTEGER,
