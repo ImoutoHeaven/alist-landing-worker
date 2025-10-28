@@ -1182,10 +1182,15 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
     } catch (error) {
       console.error('[Unified Check] Failed:', error instanceof Error ? error.message : String(error));
       const pgHandle = config.rateLimitConfig?.pgErrorHandle || 'fail-closed';
-      if (pgHandle === 'fail-open' && !shouldBindToken) {
+      if (pgHandle === 'fail-open') {
         console.warn('[Unified Check] fail-open: continuing with standalone checks');
         unifiedResult = null;
         cacheHit = false;
+        if (shouldBindToken) {
+          console.warn('[Unified Check] Token binding DB unavailable, will fallback to stateless siteverify');
+          tokenBindingAllowed = false;
+          shouldRecordTokenBinding = false;
+        }
       } else {
         const message = error instanceof Error ? error.message : String(error);
         return respondJson(origin, { code: 500, message: `unified check failed: ${message}` }, 500);
@@ -1193,9 +1198,37 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
     }
   }
 
+  // 当 unified check 未能启用 token binding 时，尝试回落到无状态的 Turnstile siteverify
+  if (shouldBindToken && !tokenBindingAllowed && needVerify) {
+    console.log('[Turnstile] Falling back to stateless siteverify (token binding DB unavailable)');
+    const verification = await verifyTurnstileToken(
+      config.turnstileSecretKey,
+      rawTurnstileToken,
+      clientIP
+    );
+    if (!verification.ok) {
+      console.error('[Turnstile] Stateless verification failed:', verification.message);
+      const pgHandle = config.rateLimitConfig?.pgErrorHandle || 'fail-closed';
+      if (pgHandle === 'fail-closed') {
+        return respondJson(origin, {
+          code: 462,
+          message: verification.message || 'turnstile verification failed'
+        }, 403);
+      }
+      console.warn('[Turnstile] fail-open: allowing request despite verification failure');
+    } else {
+      console.log('[Turnstile] Stateless verification passed');
+    }
+  }
+
   if (shouldBindToken && !tokenBindingAllowed) {
-    console.error('[Turnstile Binding] Token binding could not be validated');
-    return respondJson(origin, { code: 500, message: 'turnstile token binding unavailable' }, 500);
+    const pgHandle = config.rateLimitConfig?.pgErrorHandle || 'fail-closed';
+    if (pgHandle === 'fail-open') {
+      console.warn('[Turnstile Binding] Token binding unavailable; continuing without binding');
+    } else {
+      console.error('[Turnstile Binding] Token binding could not be validated');
+      return respondJson(origin, { code: 500, message: 'turnstile token binding unavailable' }, 500);
+    }
   }
 
   shouldRecordTokenBinding = shouldBindToken && tokenBindingAllowed;
