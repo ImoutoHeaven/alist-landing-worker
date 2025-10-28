@@ -53,6 +53,7 @@ const ensureTables = async (accountId, databaseId, apiToken, { cacheTableName, r
     CREATE TABLE IF NOT EXISTS ${tokenTableName} (
       TOKEN_HASH TEXT PRIMARY KEY,
       CLIENT_IP TEXT NOT NULL,
+      "FILEPATH_HASH" TEXT NOT NULL,
       ACCESS_COUNT INTEGER NOT NULL,
       CREATED_AT INTEGER NOT NULL,
       UPDATED_AT INTEGER NOT NULL,
@@ -96,6 +97,10 @@ export const unifiedCheckD1Rest = async (path, clientIP, config) => {
   const pathHash = await sha256Hash(path);
   if (!pathHash) {
     throw new Error('[Unified Check D1-REST] Failed to calculate path hash');
+  }
+  const filepathHash = await sha256Hash(path);
+  if (!filepathHash) {
+    throw new Error('[Unified Check D1-REST] Failed to calculate filepath hash');
   }
 
   const ipSubnet = calculateIPSubnet(clientIP, ipv4Suffix, ipv6Suffix);
@@ -146,7 +151,7 @@ export const unifiedCheckD1Rest = async (path, clientIP, config) => {
   const rateLimitResult = await executeQuery(accountId, databaseId, apiToken, rateLimitSql, rateLimitParams);
 
   console.log('[Unified Check D1-REST] Executing token lookup');
-  const tokenSql = `SELECT CLIENT_IP, ACCESS_COUNT, EXPIRES_AT FROM ${tokenTableName} WHERE TOKEN_HASH = ?`;
+  const tokenSql = `SELECT CLIENT_IP, FILEPATH_HASH, ACCESS_COUNT, EXPIRES_AT FROM ${tokenTableName} WHERE TOKEN_HASH = ?`;
   const tokenResult = await executeQuery(accountId, databaseId, apiToken, tokenSql, [tokenHash]);
 
   const cacheRow = cacheResult.results?.[0];
@@ -206,17 +211,22 @@ export const unifiedCheckD1Rest = async (path, clientIP, config) => {
   let tokenErrorCode = 0;
   let tokenAccessCount = 0;
   let tokenClientBinding = null;
+  let tokenFilepathBinding = null;
   let tokenExpiresAt = null;
 
   if (tokenBindingEnabled && tokenHash) {
     if (tokenRow) {
       tokenClientBinding = typeof tokenRow.CLIENT_IP === 'string' ? tokenRow.CLIENT_IP : null;
+      tokenFilepathBinding = typeof tokenRow.FILEPATH_HASH === 'string' ? tokenRow.FILEPATH_HASH : null;
       tokenAccessCount = Number.parseInt(tokenRow.ACCESS_COUNT, 10);
       tokenExpiresAt = tokenRow.EXPIRES_AT !== null ? Number.parseInt(tokenRow.EXPIRES_AT, 10) : null;
 
       if (!tokenClientBinding || tokenClientBinding !== tokenIP) {
         tokenAllowed = false;
         tokenErrorCode = 1;
+      } else if (tokenClientBinding && tokenFilepathBinding && tokenFilepathBinding !== filepathHash) {
+        tokenAllowed = false;
+        tokenErrorCode = 4;
       } else if (!Number.isFinite(tokenExpiresAt) || tokenExpiresAt < now) {
         tokenAllowed = false;
         tokenErrorCode = 2;
@@ -245,6 +255,7 @@ export const unifiedCheckD1Rest = async (path, clientIP, config) => {
       errorCode: Number.isFinite(tokenErrorCode) ? tokenErrorCode : 0,
       accessCount: safeTokenAccess,
       clientIp: tokenClientBinding,
+      filepath: tokenFilepathBinding,
       expiresAt: safeTokenExpires,
     },
   };

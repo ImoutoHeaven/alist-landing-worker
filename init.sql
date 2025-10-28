@@ -200,6 +200,7 @@ $$ LANGUAGE plpgsql;
 CREATE TABLE IF NOT EXISTS "TURNSTILE_TOKEN_BINDING" (
   "TOKEN_HASH" TEXT PRIMARY KEY,
   "CLIENT_IP" TEXT NOT NULL,
+  "FILEPATH_HASH" TEXT NOT NULL,
   "ACCESS_COUNT" INTEGER NOT NULL,
   "CREATED_AT" INTEGER NOT NULL,
   "UPDATED_AT" INTEGER NOT NULL,
@@ -299,7 +300,8 @@ CREATE OR REPLACE FUNCTION landing_unified_check(
   p_token_hash TEXT,
   p_token_ip TEXT,
   p_token_ttl INTEGER,
-  p_token_table_name TEXT DEFAULT 'TURNSTILE_TOKEN_BINDING'
+  p_token_table_name TEXT DEFAULT 'TURNSTILE_TOKEN_BINDING',
+  p_filepath_hash TEXT DEFAULT NULL
 )
 RETURNS TABLE(
   cache_size BIGINT,
@@ -311,6 +313,7 @@ RETURNS TABLE(
   token_error_code INTEGER,
   token_access_count INTEGER,
   token_client_ip TEXT,
+  token_filepath TEXT,
   token_expires_at INTEGER
 ) AS $$
 DECLARE
@@ -323,6 +326,7 @@ DECLARE
   token_error_local INTEGER := 0;
   token_access_local INTEGER := 0;
   token_client_local TEXT := NULL;
+  token_filepath_local TEXT := NULL;
   token_expires_local INTEGER := NULL;
 BEGIN
   cache_sql := format(
@@ -360,7 +364,7 @@ BEGIN
 
   IF p_token_hash IS NOT NULL AND length(p_token_hash) > 0 THEN
     token_sql := format(
-      'SELECT "CLIENT_IP", "ACCESS_COUNT", "EXPIRES_AT"
+      'SELECT "CLIENT_IP", "FILEPATH_HASH", "ACCESS_COUNT", "EXPIRES_AT"
        FROM %1$I
        WHERE "TOKEN_HASH" = $1',
       p_token_table_name
@@ -371,11 +375,15 @@ BEGIN
     IF token_rec."CLIENT_IP" IS NOT NULL THEN
       token_access_local := COALESCE(token_rec."ACCESS_COUNT", 0);
       token_client_local := token_rec."CLIENT_IP";
+      token_filepath_local := token_rec."FILEPATH_HASH";
       token_expires_local := token_rec."EXPIRES_AT";
 
       IF token_rec."CLIENT_IP" <> p_token_ip THEN
         token_allowed_local := FALSE;
         token_error_local := 1; -- IP mismatch
+      ELSIF token_rec."FILEPATH_HASH" IS NOT NULL AND token_rec."FILEPATH_HASH" <> p_filepath_hash THEN
+        token_allowed_local := FALSE;
+        token_error_local := 4; -- Filepath mismatch
       ELSIF token_rec."EXPIRES_AT" IS NULL OR token_rec."EXPIRES_AT" < p_now THEN
         token_allowed_local := FALSE;
         token_error_local := 2; -- Token expired
@@ -386,6 +394,7 @@ BEGIN
     ELSE
       token_access_local := 0;
       token_client_local := NULL;
+      token_filepath_local := NULL;
       token_expires_local := NULL;
     END IF;
   ELSE
@@ -393,6 +402,7 @@ BEGIN
     token_error_local := 0;
     token_access_local := 0;
     token_client_local := NULL;
+    token_filepath_local := NULL;
     token_expires_local := NULL;
   END IF;
 
@@ -400,6 +410,7 @@ BEGIN
   token_error_code := token_error_local;
   token_access_count := token_access_local;
   token_client_ip := token_client_local;
+  token_filepath := token_filepath_local;
   token_expires_at := token_expires_local;
 
   RETURN NEXT;

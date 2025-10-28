@@ -34,6 +34,11 @@ export const unifiedCheck = async (path, clientIP, config) => {
     throw new Error('[Unified Check] Failed to calculate path hash');
   }
 
+  const filepathHash = await sha256Hash(path);
+  if (!filepathHash) {
+    throw new Error('[Unified Check] Failed to calculate filepath hash');
+  }
+
   const ipSubnet = calculateIPSubnet(clientIP, ipv4Suffix, ipv6Suffix);
   if (!ipSubnet) {
     throw new Error('[Unified Check] Failed to calculate IP subnet');
@@ -60,6 +65,7 @@ export const unifiedCheck = async (path, clientIP, config) => {
     p_token_ip: tokenIP,
     p_token_ttl: tokenTTLSeconds,
     p_token_table_name: tokenTableName,
+    p_filepath_hash: filepathHash,
   };
 
   console.log('[Unified Check] Calling landing_unified_check with params:', JSON.stringify(rpcBody));
@@ -109,6 +115,7 @@ export const unifiedCheck = async (path, clientIP, config) => {
     ? 0
     : Number.parseInt(row.token_access_count, 10);
   const tokenAllowedRaw = row.token_allowed;
+  const tokenFilepathRaw = row.token_filepath;
 
   let allowed = true;
   let retryAfter = 0;
@@ -143,6 +150,7 @@ export const unifiedCheck = async (path, clientIP, config) => {
       errorCode: Number.isFinite(tokenErrorRaw) ? tokenErrorRaw : 0,
       accessCount: Number.isFinite(tokenAccessRaw) ? tokenAccessRaw : 0,
       clientIp: typeof row.token_client_ip === 'string' ? row.token_client_ip : null,
+      filepath: typeof tokenFilepathRaw === 'string' ? tokenFilepathRaw : null,
       expiresAt: row.token_expires_at !== null ? Number.parseInt(row.token_expires_at, 10) : null,
     },
   };

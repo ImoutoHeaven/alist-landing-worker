@@ -23,6 +23,7 @@ const TOKEN_BINDING_ERROR_MESSAGES = {
   1: 'turnstile token ip mismatch',
   2: 'turnstile token expired',
   3: 'turnstile token already used',
+  4: 'turnstile token path mismatch',
 };
 
 const VALID_ACTIONS = new Set(['block', 'verify', 'pass-web', 'pass-server', 'pass-asis']);
@@ -735,6 +736,8 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
     }
   }
 
+  let filepathHash = null;
+
   const shouldBindToken = Boolean(
     config.turnstileTokenBindingEnabled &&
     tokenHash &&
@@ -742,12 +745,25 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
     tokenTTLSeconds > 0 &&
     hasDbMode
   );
+
+  if (shouldBindToken && path) {
+    try {
+      filepathHash = await sha256Hash(path);
+    } catch (error) {
+      console.error('[Turnstile Binding] Failed to hash filepath:', error instanceof Error ? error.message : String(error));
+    }
+  }
+
   let tokenBindingAllowed = !shouldBindToken;
   let tokenBindingErrorCode = 0;
   let shouldRecordTokenBinding = false;
 
-  const scheduleTokenBindingInsert = () => {
+  const scheduleTokenBindingInsert = (filepathHashValue) => {
     if (!shouldBindToken || !tokenHash || !clientIP) {
+      return;
+    }
+    if (!filepathHashValue) {
+      console.error('[Turnstile Binding] Missing filepath hash; cannot insert token binding');
       return;
     }
     if (!Number.isFinite(tokenTTLSeconds) || tokenTTLSeconds <= 0) {
@@ -771,6 +787,7 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
       const payload = {
         TOKEN_HASH: tokenHash,
         CLIENT_IP: clientIP,
+        FILEPATH_HASH: filepathHashValue,
         ACCESS_COUNT: 0,
         CREATED_AT: nowSeconds,
         UPDATED_AT: nowSeconds,
@@ -801,10 +818,10 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
         return;
       }
       const statement = db.prepare(`
-        INSERT INTO ${tokenTableName} (TOKEN_HASH, CLIENT_IP, ACCESS_COUNT, CREATED_AT, UPDATED_AT, EXPIRES_AT)
-        VALUES (?, ?, 0, ?, ?, ?)
+        INSERT INTO ${tokenTableName} (TOKEN_HASH, CLIENT_IP, FILEPATH_HASH, ACCESS_COUNT, CREATED_AT, UPDATED_AT, EXPIRES_AT)
+        VALUES (?, ?, ?, 0, ?, ?, ?)
         ON CONFLICT(TOKEN_HASH) DO NOTHING
-      `).bind(tokenHash, clientIP, nowSeconds, nowSeconds, expiresAt);
+      `).bind(tokenHash, clientIP, filepathHashValue, nowSeconds, nowSeconds, expiresAt);
       ctx.waitUntil((async () => {
         try {
           await statement.run();
@@ -821,13 +838,13 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
         return;
       }
       const sql = `
-        INSERT INTO ${tokenTableName} (TOKEN_HASH, CLIENT_IP, ACCESS_COUNT, CREATED_AT, UPDATED_AT, EXPIRES_AT)
-        VALUES (?, ?, 0, ?, ?, ?)
+        INSERT INTO ${tokenTableName} (TOKEN_HASH, CLIENT_IP, FILEPATH_HASH, ACCESS_COUNT, CREATED_AT, UPDATED_AT, EXPIRES_AT)
+        VALUES (?, ?, ?, 0, ?, ?, ?)
         ON CONFLICT(TOKEN_HASH) DO NOTHING
       `;
       const body = {
         sql,
-        params: [tokenHash, clientIP, nowSeconds, nowSeconds, expiresAt],
+        params: [tokenHash, clientIP, filepathHashValue, nowSeconds, nowSeconds, expiresAt],
       };
       ctx.waitUntil((async () => {
         try {
@@ -853,8 +870,12 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
     }
   };
 
-  const scheduleTokenBindingWrite = () => {
+  const scheduleTokenBindingWrite = (filepathHashValue) => {
     if (!shouldRecordTokenBinding || !tokenHash || !clientIP) {
+      return;
+    }
+    if (!filepathHashValue) {
+      console.error('[Turnstile Binding] Missing filepath hash; cannot update token binding');
       return;
     }
     if (!Number.isFinite(tokenTTLSeconds) || tokenTTLSeconds <= 0) {
@@ -880,6 +901,7 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
           const endpoint = new URL(`${postgrestUrl}/${tokenTableName}`);
           endpoint.searchParams.set('TOKEN_HASH', `eq.${tokenHash}`);
           endpoint.searchParams.set('CLIENT_IP', `eq.${clientIP}`);
+          endpoint.searchParams.set('FILEPATH_HASH', `eq.${filepathHashValue}`);
           const response = await fetch(endpoint.toString(), {
             method: 'PATCH',
             headers,
@@ -913,8 +935,8 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
               WHEN EXPIRES_AT IS NULL OR EXPIRES_AT < ? THEN ?
               ELSE EXPIRES_AT
             END
-        WHERE TOKEN_HASH = ? AND CLIENT_IP = ?
-      `).bind(nowSeconds, expiresAt, expiresAt, tokenHash, clientIP);
+        WHERE TOKEN_HASH = ? AND CLIENT_IP = ? AND FILEPATH_HASH = ?
+      `).bind(nowSeconds, expiresAt, expiresAt, tokenHash, clientIP, filepathHashValue);
       ctx.waitUntil((async () => {
         try {
           await statement.run();
@@ -938,11 +960,11 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
               WHEN EXPIRES_AT IS NULL OR EXPIRES_AT < ? THEN ?
               ELSE EXPIRES_AT
             END
-        WHERE TOKEN_HASH = ? AND CLIENT_IP = ?
+        WHERE TOKEN_HASH = ? AND CLIENT_IP = ? AND FILEPATH_HASH = ?
       `;
       const body = {
         sql,
-        params: [nowSeconds, expiresAt, expiresAt, tokenHash, clientIP],
+        params: [nowSeconds, expiresAt, expiresAt, tokenHash, clientIP, filepathHashValue],
       };
       ctx.waitUntil((async () => {
         try {
@@ -977,7 +999,7 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
       return respondJson(origin, { code: 462, message: verification.message || 'turnstile verification failed' }, 403);
     }
     if (shouldBindToken) {
-      scheduleTokenBindingInsert();
+      scheduleTokenBindingInsert(filepathHash);
     }
   }
 
@@ -1273,7 +1295,7 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
       },
     },
   };
-  scheduleTokenBindingWrite();
+  scheduleTokenBindingWrite(filepathHash);
   return respondJson(origin, responsePayload, 200);
 };
 
