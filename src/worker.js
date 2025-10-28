@@ -1005,9 +1005,6 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
     if (!verification.ok) {
       return respondJson(origin, { code: 462, message: verification.message || 'turnstile verification failed' }, 403);
     }
-    if (shouldBindToken) {
-      scheduleTokenBindingInsert(filepathHash);
-    }
   }
 
   const verifyResult = await verifySignature(config.signSecret, decodedPath, sign);
@@ -1255,12 +1252,16 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
         size: sizeBytes,
         configKeys: Object.keys(cacheConfigWithCtx),
       });
-      try {
-        await cacheManager.saveCache(decodedPath, sizeBytes, cacheConfigWithCtx);
-        console.log('[Filesize Cache] Saved filesize to cache');
-      } catch (error) {
-        console.error('[Filesize Cache] Save failed:', error instanceof Error ? error.message : String(error));
-      }
+      ctx.waitUntil(
+        cacheManager
+          .saveCache(decodedPath, sizeBytes, cacheConfigWithCtx)
+          .then(() => {
+            console.log('[Filesize Cache] Saved filesize to cache');
+          })
+          .catch((error) => {
+            console.error('[Filesize Cache] Save failed:', error instanceof Error ? error.message : String(error));
+          })
+      );
     } else {
       console.log('[CACHE] Skipping cache save:', {
         hasCacheManager: !!cacheManager,
@@ -1294,6 +1295,9 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
       },
     },
   };
+  if (shouldBindToken) {
+    scheduleTokenBindingInsert(filepathHash);
+  }
   scheduleTokenBindingWrite(filepathHash);
   return respondJson(origin, responsePayload, 200);
 };
@@ -1534,12 +1538,16 @@ const handleFileRequest = async (request, config, rateLimiter, ctx) => {
           size: sizeBytes,
           configKeys: Object.keys(cacheConfigWithCtx),
         });
-        try {
-          await cacheManager.saveCache(decodedPath, sizeBytes, cacheConfigWithCtx);
-          console.log('[Fast Redirect][Filesize Cache] Saved filesize to cache');
-        } catch (error) {
-          console.error('[Fast Redirect][Filesize Cache] Save failed:', error instanceof Error ? error.message : String(error));
-        }
+        ctx.waitUntil(
+          cacheManager
+            .saveCache(decodedPath, sizeBytes, cacheConfigWithCtx)
+            .then(() => {
+              console.log('[Fast Redirect][Filesize Cache] Saved filesize to cache');
+            })
+            .catch((error) => {
+              console.error('[Fast Redirect][Filesize Cache] Save failed:', error instanceof Error ? error.message : String(error));
+            })
+        );
       } else {
         console.log('[Fast Redirect][CACHE] Skipping cache save:', {
           hasCacheManager: !!cacheManager,
