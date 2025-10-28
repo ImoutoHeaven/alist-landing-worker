@@ -736,8 +736,6 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
     }
   }
 
-  let filepathHash = null;
-
   const shouldBindToken = Boolean(
     config.turnstileTokenBindingEnabled &&
     tokenHash &&
@@ -745,14 +743,6 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
     tokenTTLSeconds > 0 &&
     hasDbMode
   );
-
-  if (shouldBindToken && path) {
-    try {
-      filepathHash = await sha256Hash(path);
-    } catch (error) {
-      console.error('[Turnstile Binding] Failed to hash filepath:', error instanceof Error ? error.message : String(error));
-    }
-  }
 
   let tokenBindingAllowed = !shouldBindToken;
   let tokenBindingErrorCode = 0;
@@ -990,6 +980,23 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
     }
   };
 
+  const encodedPath = path;
+  let decodedPath;
+  try {
+    decodedPath = decodeURIComponent(path);
+  } catch (error) {
+    return respondJson(origin, { code: 400, message: 'invalid path encoding' }, 400);
+  }
+
+  let filepathHash = null;
+  if (shouldBindToken && decodedPath) {
+    try {
+      filepathHash = await sha256Hash(decodedPath);
+    } catch (error) {
+      console.error('[Turnstile Binding] Failed to hash filepath:', error instanceof Error ? error.message : String(error));
+    }
+  }
+
   if (needVerify) {
     if (!rawTurnstileToken) {
       return respondJson(origin, { code: 461, message: 'turnstile token required' }, 403);
@@ -1001,14 +1008,6 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
     if (shouldBindToken) {
       scheduleTokenBindingInsert(filepathHash);
     }
-  }
-
-  const encodedPath = path;
-  let decodedPath;
-  try {
-    decodedPath = decodeURIComponent(path);
-  } catch (error) {
-    return respondJson(origin, { code: 400, message: 'invalid path encoding' }, 400);
   }
 
   const verifyResult = await verifySignature(config.signSecret, decodedPath, sign);
