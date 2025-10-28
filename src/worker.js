@@ -1005,6 +1005,9 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
     if (!verification.ok) {
       return respondJson(origin, { code: 462, message: verification.message || 'turnstile verification failed' }, 403);
     }
+    if (shouldBindToken) {
+      scheduleTokenBindingInsert(filepathHash);
+    }
   }
 
   const verifyResult = await verifySignature(config.signSecret, decodedPath, sign);
@@ -1295,9 +1298,6 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
       },
     },
   };
-  if (shouldBindToken) {
-    scheduleTokenBindingInsert(filepathHash);
-  }
   scheduleTokenBindingWrite(filepathHash);
   return respondJson(origin, responsePayload, 200);
 };
