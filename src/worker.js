@@ -6,6 +6,7 @@ import {
   parseNumber,
   parseWindowTime,
   sha256Hash,
+  calculateIPSubnet,
   applyVerifyHeaders,
 } from './utils.js';
 import { createChallenge, verifySolution } from 'altcha-lib';
@@ -147,6 +148,12 @@ const ensureRequiredEnv = (env) => {
 
 const resolveConfig = (env = {}) => {
   ensureRequiredEnv(env);
+  const normalizeString = (value, defaultValue = '') => {
+    if (value === undefined || value === null) return defaultValue;
+    if (typeof value !== 'string') return defaultValue;
+    const trimmed = value.trim();
+    return trimmed === '' ? defaultValue : trimmed;
+  };
   const rawToken = env.TOKEN;
   const normalizedToken = typeof rawToken === 'string' ? rawToken : String(rawToken || '');
   const pageSecret = typeof env.PAGE_SECRET === 'string' && env.PAGE_SECRET.trim() !== ''
@@ -236,11 +243,10 @@ const resolveConfig = (env = {}) => {
 
   // Parse database mode for rate limiting
   const dbMode = env.DB_MODE && typeof env.DB_MODE === 'string' ? env.DB_MODE.trim() : '';
+  const enableCfRatelimiter = normalizeString(env.ENABLE_CF_RATELIMITER, 'false').toLowerCase() === 'true';
+  const cfRatelimiterBinding = normalizeString(env.CF_RATELIMITER_BINDING, 'CF_RATE_LIMITER');
 
   if (!dbMode) {
-    if (turnstileTokenBindingEnabled) {
-      console.log('[CONFIG] Turnstile token binding disabled because DB_MODE is empty');
-    }
     turnstileTokenBindingEnabled = false;
   }
 
@@ -277,7 +283,6 @@ const resolveConfig = (env = {}) => {
   const filesizeCacheTableName = env.FILESIZE_CACHE_TABLE && typeof env.FILESIZE_CACHE_TABLE === 'string'
     ? env.FILESIZE_CACHE_TABLE.trim()
     : 'FILESIZE_CACHE_TABLE';
-  console.log('[CONFIG] Filesize cache config:', { rawSizeTTL, sizeTTLSeconds, filesizeCacheTableName });
 
   // Validate PG_ERROR_HANDLE value
   const validPgErrorHandle = pgErrorHandle === 'fail-open' ? 'fail-open' : 'fail-closed';
@@ -412,13 +417,6 @@ const resolveConfig = (env = {}) => {
             sizeTTL: sizeTTLSeconds,
             cleanupProbability,
           };
-          console.log('[CONFIG] Cache ENABLED for custom-pg-rest:', {
-            tableName: filesizeCacheTableName,
-            sizeTTL: sizeTTLSeconds,
-            postgrestUrl,
-            hasVerifyHeader: verifyHeaders.length > 0,
-            hasVerifySecret: verifySecrets.length > 0,
-          });
         } else {
           console.warn('[CONFIG] Cache DISABLED: sizeTTLSeconds =', sizeTTLSeconds);
         }
@@ -450,6 +448,15 @@ const resolveConfig = (env = {}) => {
 
   if (appendAdditional && !normalizedAlistAddress) {
     throw new Error('ALIST_ADDRESS (or ADDRESS) is required when IF_APPEND_ADDITIONAL is true');
+  }
+
+  if (enableCfRatelimiter) {
+    const ratelimiter = env[cfRatelimiterBinding];
+    if (!ratelimiter || typeof ratelimiter.limit !== 'function') {
+      throw new Error(
+        `ENABLE_CF_RATELIMITER is true but binding "${cfRatelimiterBinding}" not found or invalid. Please configure [[rate_limit]] binding in wrangler.toml with name="${cfRatelimiterBinding}".`
+      );
+    }
   }
 
   return {
@@ -491,6 +498,10 @@ const resolveConfig = (env = {}) => {
     d1RestConfig,
     windowTime,
     ipSubnetLimit,
+    enableCfRatelimiter,
+    cfRatelimiterBinding,
+    ipv4Suffix,
+    ipv6Suffix,
     appendAdditional,
     alistAddress: normalizedAlistAddress,
     minBandwidthBytesPerSecond: bandwidthBytesPerSecond,
@@ -618,6 +629,29 @@ const respondRateLimitExceeded = (origin, ipSubnet, limit, windowTime, retryAfte
     'retry-after': retryAfterSeconds
   }), { status: 429, headers });
 };
+
+/**
+ * Check Cloudflare Rate Limiter
+ * @param {Object} env - Worker环境对象
+ * @param {string} clientIP - 客户端IP
+ * @param {string} ipv4Suffix - IPv4子网掩码
+ * @param {string} ipv6Suffix - IPv6子网前缀
+ * @param {string} bindingName - Rate Limiter绑定名称
+ * @returns {Promise<{allowed: boolean, ipSubnet: string}>}
+ */
+async function checkCfRatelimit(env, clientIP, ipv4Suffix, ipv6Suffix, bindingName) {
+  const ipSubnet = calculateIPSubnet(clientIP, ipv4Suffix, ipv6Suffix);
+
+  if (!ipSubnet) {
+    return { allowed: true, ipSubnet };
+  }
+
+  const ipHash = await sha256Hash(ipSubnet);
+  const ratelimiter = env[bindingName];
+  const { success } = await ratelimiter.limit({ key: ipHash });
+
+  return { allowed: success, ipSubnet };
+}
 
 const extractClientIP = (request) => {
   const raw = request.headers.get('CF-Connecting-IP');
@@ -847,6 +881,34 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
   }
 
   const clientIP = extractClientIP(request);
+
+  if (config.enableCfRatelimiter) {
+    try {
+      const cfResult = await checkCfRatelimit(
+        env,
+        clientIP,
+        config.ipv4Suffix,
+        config.ipv6Suffix,
+        config.cfRatelimiterBinding
+      );
+
+      if (!cfResult.allowed) {
+        console.error(`[CF Rate Limiter] Blocked IP subnet: ${cfResult.ipSubnet}`);
+        const headers = safeHeaders(origin);
+        headers.set('content-type', 'text/plain');
+        headers.set('Retry-After', '60');
+        return new Response('429 Too Many Requests - Rate limit exceeded', {
+          status: 429,
+          headers,
+        });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error('[CF Rate Limiter] Error during check:', message);
+      // fail-open: continue processing if rate limiter check fails
+    }
+  }
+
   const rawTurnstileToken =
     request.headers.get(TURNSTILE_HEADER) ||
     request.headers.get('x-turnstile-token') ||
@@ -1217,13 +1279,6 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
     ? { ...config.cacheConfig, ctx }
     : null;
 
-  console.log('[CACHE] Cache initialization:', {
-    cacheEnabled: config.cacheEnabled,
-    hasCacheManager: !!cacheManager,
-    hasCacheConfig: !!cacheConfigWithCtx,
-    cacheConfigKeys: cacheConfigWithCtx ? Object.keys(cacheConfigWithCtx) : [],
-  });
-
   const hasCacheSupport = Boolean(cacheManager && config.cacheEnabled);
   const requiresAltchaStateful = Boolean(needAltcha && altchaTokenHash && hasDbMode);
   const unifiedEligible = Boolean(
@@ -1232,18 +1287,6 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
     requiresAltchaStateful
   );
   const canUseUnified = Boolean(unifiedEligible && hasDbMode && clientIP);
-
-  console.log('[CACHE] Unified check eligibility:', {
-    canUseUnified,
-    unifiedEligible,
-    hasCacheManager: !!cacheManager,
-    cacheEnabled: config.cacheEnabled,
-    rateLimitEnabled: config.rateLimitEnabled,
-    dbMode: config.dbMode,
-    hasClientIP: !!clientIP,
-    shouldBindToken,
-    requiresAltchaStateful,
-  });
 
   if (requiresAltchaStateful && !filepathHash) {
     console.error('[ALTCHA] Missing filepath hash for stateful verification');
@@ -1267,7 +1310,6 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
 
   if (canUseUnified) {
     try {
-      console.log(`[Unified Check] Using unified check for mode=${config.dbMode}`);
       const limitValue = config.rateLimitConfig?.limit ?? config.ipSubnetLimit;
 
       if (config.dbMode === 'custom-pg-rest') {
@@ -1292,13 +1334,6 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
           altchaTokenIP: clientIP,
           altchaTableName,
         };
-        console.log('[Unified Check] Config for custom-pg-rest:', {
-          postgrestUrl: unifiedConfig.postgrestUrl,
-          hasVerifyHeader: Array.isArray(unifiedConfig.verifyHeader) ? unifiedConfig.verifyHeader.length : !!unifiedConfig.verifyHeader,
-          hasVerifySecret: Array.isArray(unifiedConfig.verifySecret) ? unifiedConfig.verifySecret.length : !!unifiedConfig.verifySecret,
-          sizeTTL: unifiedConfig.sizeTTL,
-          cacheTableName: unifiedConfig.cacheTableName,
-        });
         unifiedResult = await unifiedCheck(decodedPath, clientIP, config.altchaTableName, unifiedConfig);
       } else if (config.dbMode === 'd1') {
         unifiedResult = await unifiedCheckD1(decodedPath, clientIP, config.altchaTableName, {
@@ -1344,7 +1379,6 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
           altchaTableName,
         });
       } else {
-        console.log('[Unified Check] Unsupported DB mode for unified check, falling back');
         unifiedResult = null;
       }
 
@@ -1361,10 +1395,6 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
           }
 
           shouldRecordTokenBinding = true;
-          console.log('[Turnstile Binding] Token accepted:', {
-            accessCount: Number.isFinite(unifiedResult.token?.accessCount) ? unifiedResult.token.accessCount : null,
-            errorCode: tokenBindingErrorCode,
-          });
         } else {
           tokenBindingAllowed = true;
           tokenBindingErrorCode = 0;
@@ -1395,13 +1425,10 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
           );
         }
 
-        if (unifiedResult.cache.hit && Number.isFinite(unifiedResult.cache.size)) {
-          sizeBytes = Number(unifiedResult.cache.size);
-          cacheHit = true;
-          console.log('[Filesize Cache] HIT via unified check');
-        } else {
-          console.log('[Filesize Cache] MISS via unified check');
-        }
+          if (unifiedResult.cache.hit && Number.isFinite(unifiedResult.cache.size)) {
+            sizeBytes = Number(unifiedResult.cache.size);
+            cacheHit = true;
+          }
       }
     } catch (error) {
       console.error('[Unified Check] Failed:', error instanceof Error ? error.message : String(error));
@@ -1427,7 +1454,6 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
 
   // 当 unified check 未能启用 token binding 时，尝试回落到无状态的 Turnstile siteverify
   if (shouldBindToken && !tokenBindingAllowed && needTurnstile) {
-    console.log('[Turnstile] Falling back to stateless siteverify (token binding DB unavailable)');
     const verification = await verifyTurnstileToken(
       config.turnstileSecretKey,
       rawTurnstileToken,
@@ -1443,8 +1469,6 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
         }, 403);
       }
       console.warn('[Turnstile] fail-open: allowing request despite verification failure');
-    } else {
-      console.log('[Turnstile] Stateless verification passed');
     }
   }
 
@@ -1479,25 +1503,15 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
     }
 
     if (!cacheHit && cacheManager && cacheConfigWithCtx) {
-      console.log('[CACHE] Starting standalone cache check for path:', decodedPath);
       try {
         const cached = await cacheManager.checkCache(decodedPath, cacheConfigWithCtx);
         if (cached && Number.isFinite(cached.size)) {
           sizeBytes = Number(cached.size);
           cacheHit = true;
-          console.log('[Filesize Cache] HIT via standalone lookup');
-        } else {
-          console.log('[Filesize Cache] MISS via standalone lookup');
         }
       } catch (error) {
         console.error('[Filesize Cache] Standalone cache check failed:', error instanceof Error ? error.message : String(error));
       }
-    } else {
-      console.log('[CACHE] Skipping standalone cache check:', {
-        cacheHit,
-        hasCacheManager: !!cacheManager,
-        hasCacheConfig: !!cacheConfigWithCtx,
-      });
     }
   }
 
@@ -1510,26 +1524,13 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
     }
     sizeBytes = parseFileSize(fileInfo?.size);
     if (cacheManager && cacheConfigWithCtx) {
-      console.log('[CACHE] Attempting to save cache:', {
-        path: decodedPath,
-        size: sizeBytes,
-        configKeys: Object.keys(cacheConfigWithCtx),
-      });
       ctx.waitUntil(
         cacheManager
           .saveCache(decodedPath, sizeBytes, cacheConfigWithCtx)
-          .then(() => {
-            console.log('[Filesize Cache] Saved filesize to cache');
-          })
           .catch((error) => {
             console.error('[Filesize Cache] Save failed:', error instanceof Error ? error.message : String(error));
           })
       );
-    } else {
-      console.log('[CACHE] Skipping cache save:', {
-        hasCacheManager: !!cacheManager,
-        hasCacheConfig: !!cacheConfigWithCtx,
-      });
     }
   }
 
@@ -1946,8 +1947,6 @@ async function scheduleAllCleanups(config, env, ctx) {
     return;
   }
 
-  console.log(`[Cleanup Scheduler] Triggered cleanup (probability: ${config.cleanupPercentage}%)`);
-
   // Run all cleanups in parallel (Promise.allSettled ensures one failure doesn't block others)
   const cleanupTasks = [
     { name: 'Rate Limit', fn: () => cleanupExpiredRateLimits(config, env) },
@@ -1962,10 +1961,7 @@ async function scheduleAllCleanups(config, env, ctx) {
         console.error(`[Cleanup Scheduler] ${task.name} failed:`, error instanceof Error ? error.message : String(error));
       })
     )
-  ).then(results => {
-    const succeeded = results.filter(r => r.status === 'fulfilled').length;
-    console.log(`[Cleanup Scheduler] Completed: ${succeeded}/${cleanupTasks.length} tasks succeeded`);
-  });
+  );
 
   if (ctx && ctx.waitUntil) {
     ctx.waitUntil(cleanupPromise);
@@ -1976,6 +1972,37 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
   if (request.method !== 'GET' && request.method !== 'HEAD') {
     return respondJson(request.headers.get('origin') || '*', { code: 405, message: 'method not allowed' }, 405);
   }
+
+  const origin = request.headers.get('origin') || '*';
+  const clientIP = extractClientIP(request);
+
+  if (config.enableCfRatelimiter) {
+    try {
+      const cfResult = await checkCfRatelimit(
+        env,
+        clientIP,
+        config.ipv4Suffix,
+        config.ipv6Suffix,
+        config.cfRatelimiterBinding
+      );
+
+      if (!cfResult.allowed) {
+        console.error(`[CF Rate Limiter] Blocked IP subnet: ${cfResult.ipSubnet}`);
+        const headers = safeHeaders(origin);
+        headers.set('content-type', 'text/plain');
+        headers.set('Retry-After', '60');
+        return new Response('429 Too Many Requests - Rate limit exceeded', {
+          status: 429,
+          headers,
+        });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error('[CF Rate Limiter] Error during check:', message);
+      // fail-open: continue processing if rate limiter check fails
+    }
+  }
+
   // Unified cleanup scheduler (handles all tables)
   await scheduleAllCleanups(config, env, ctx);
 
@@ -1989,7 +2016,6 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
     });
   }
 
-  const origin = request.headers.get('origin') || '*';
   const url = new URL(request.url);
 
   // Check blacklist/whitelist
@@ -2035,19 +2061,10 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
       return respondJson(origin, { code: 401, message: verifyResult }, 401);
     }
 
-    const clientIP = extractClientIP(request);
-
     const cacheManager = config.cacheEnabled ? createCacheManager(config.dbMode) : null;
     const cacheConfigWithCtx = cacheManager && config.cacheEnabled
       ? { ...config.cacheConfig, ctx }
       : null;
-
-    console.log('[Fast Redirect][CACHE] Cache initialization:', {
-      cacheEnabled: config.cacheEnabled,
-      hasCacheManager: !!cacheManager,
-      hasCacheConfig: !!cacheConfigWithCtx,
-      cacheConfigKeys: cacheConfigWithCtx ? Object.keys(cacheConfigWithCtx) : [],
-    });
 
     const canUseUnified = Boolean(
       cacheManager &&
@@ -2057,15 +2074,6 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
       clientIP
     );
 
-    console.log('[Fast Redirect][CACHE] Unified check eligibility:', {
-      canUseUnified,
-      hasCacheManager: !!cacheManager,
-      cacheEnabled: config.cacheEnabled,
-      rateLimitEnabled: config.rateLimitEnabled,
-      dbMode: config.dbMode,
-      hasClientIP: !!clientIP,
-    });
-
     let unifiedResult = null;
     let cacheHit = false;
     let sizeBytes = 0;
@@ -2073,7 +2081,6 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
 
     if (canUseUnified) {
       try {
-        console.log(`[Fast Redirect][Unified Check] Using unified check for mode=${config.dbMode}`);
         const limitValue = config.rateLimitConfig?.limit ?? config.ipSubnetLimit;
 
         if (config.dbMode === 'custom-pg-rest') {
@@ -2090,13 +2097,6 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
             ipv4Suffix: config.rateLimitConfig.ipv4Suffix,
             ipv6Suffix: config.rateLimitConfig.ipv6Suffix,
           };
-          console.log('[Fast Redirect][Unified Check] Config for custom-pg-rest:', {
-            postgrestUrl: unifiedConfig.postgrestUrl,
-            hasVerifyHeader: Array.isArray(unifiedConfig.verifyHeader) ? unifiedConfig.verifyHeader.length : !!unifiedConfig.verifyHeader,
-            hasVerifySecret: Array.isArray(unifiedConfig.verifySecret) ? unifiedConfig.verifySecret.length : !!unifiedConfig.verifySecret,
-            sizeTTL: unifiedConfig.sizeTTL,
-            cacheTableName: unifiedConfig.cacheTableName,
-          });
           unifiedResult = await unifiedCheck(decodedPath, clientIP, config.altchaTableName, unifiedConfig);
         } else if (config.dbMode === 'd1') {
           unifiedResult = await unifiedCheckD1(decodedPath, clientIP, config.altchaTableName, {
@@ -2126,7 +2126,6 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
             ipv6Suffix: config.rateLimitConfig.ipv6Suffix,
           });
         } else {
-          console.log('[Fast Redirect][Unified Check] Unsupported DB mode for unified check, falling back');
           unifiedResult = null;
         }
 
@@ -2144,9 +2143,6 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
           if (unifiedResult.cache.hit && Number.isFinite(unifiedResult.cache.size)) {
             sizeBytes = Number(unifiedResult.cache.size);
             cacheHit = true;
-            console.log('[Fast Redirect][Filesize Cache] HIT via unified check');
-          } else {
-            console.log('[Fast Redirect][Filesize Cache] MISS via unified check');
           }
         }
       } catch (error) {
@@ -2182,25 +2178,15 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
       }
 
       if (!cacheHit && cacheManager && cacheConfigWithCtx) {
-        console.log('[Fast Redirect][CACHE] Starting standalone cache check for path:', decodedPath);
         try {
           const cached = await cacheManager.checkCache(decodedPath, cacheConfigWithCtx);
           if (cached && Number.isFinite(cached.size)) {
             sizeBytes = Number(cached.size);
             cacheHit = true;
-            console.log('[Fast Redirect][Filesize Cache] HIT via standalone lookup');
-          } else {
-            console.log('[Fast Redirect][Filesize Cache] MISS via standalone lookup');
           }
         } catch (error) {
           console.error('[Fast Redirect][Filesize Cache] Standalone cache check failed:', error instanceof Error ? error.message : String(error));
         }
-      } else {
-        console.log('[Fast Redirect][CACHE] Skipping standalone cache check:', {
-          cacheHit,
-          hasCacheManager: !!cacheManager,
-          hasCacheConfig: !!cacheConfigWithCtx,
-        });
       }
     }
 
@@ -2212,27 +2198,13 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
         console.error('[Fast Redirect] Failed to fetch file info:', error instanceof Error ? error.message : String(error));
       }
       if (cacheManager && cacheConfigWithCtx && fileInfo) {
-        console.log('[Fast Redirect][CACHE] Attempting to save cache:', {
-          path: decodedPath,
-          size: sizeBytes,
-          configKeys: Object.keys(cacheConfigWithCtx),
-        });
         ctx.waitUntil(
           cacheManager
             .saveCache(decodedPath, sizeBytes, cacheConfigWithCtx)
-            .then(() => {
-              console.log('[Fast Redirect][Filesize Cache] Saved filesize to cache');
-            })
             .catch((error) => {
               console.error('[Fast Redirect][Filesize Cache] Save failed:', error instanceof Error ? error.message : String(error));
             })
         );
-      } else {
-        console.log('[Fast Redirect][CACHE] Skipping cache save:', {
-          hasCacheManager: !!cacheManager,
-          hasCacheConfig: !!cacheConfigWithCtx,
-          hasFileInfo: !!fileInfo,
-        });
       }
     }
 
