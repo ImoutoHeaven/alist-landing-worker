@@ -96,6 +96,7 @@ const pageScript = String.raw`
     downloadURL: '',
     infoReady: false,
     downloadBtnMode: 'download', // 'download' or 'copy'
+    awaitingRetryUnlock: false,
     security: {
       underAttack: false,
       siteKey: '',
@@ -214,8 +215,13 @@ const pageScript = String.raw`
       callback: (token) => {
         state.security.token = token || '';
         state.security.tokenIssuedAt = Date.now();
-        setTurnstileMessage('验证完成，可以继续操作');
+        hideTurnstileContainer();
+        setTurnstileMessage('');
         fulfilTurnstileResolvers(state.security.token);
+        if (state.awaitingRetryUnlock) {
+          state.awaitingRetryUnlock = false;
+          retryBtn.disabled = false;
+        }
       },
       'expired-callback': () => {
         clearTurnstileToken();
@@ -253,7 +259,7 @@ const pageScript = String.raw`
     });
   };
 
-  const consumeTurnstileToken = ({ hide = false } = {}) => {
+  const consumeTurnstileToken = () => {
     if (!shouldEnforceTurnstile()) return;
     clearTurnstileToken();
     if (typeof window.turnstile?.reset === 'function' && state.security.widgetId !== null) {
@@ -262,13 +268,6 @@ const pageScript = String.raw`
       } catch (error) {
         console.warn('Turnstile reset 失败', error);
       }
-    }
-    if (hide) {
-      hideTurnstileContainer();
-      setTurnstileMessage('');
-    } else {
-      showTurnstileContainer();
-      setTurnstileMessage('请完成验证后继续下载');
     }
   };
 
@@ -313,6 +312,46 @@ const pageScript = String.raw`
       return promise;
     };
   })();
+
+  const handleInfoError = (error, context) => {
+    const rawMessage =
+      (error && typeof error.message === 'string' && error.message) || String(error || '未知错误');
+    const normalizedMessage = rawMessage.toLowerCase();
+    const needsWidgetRefresh =
+      normalizedMessage.includes('429') ||
+      normalizedMessage.includes('461') ||
+      normalizedMessage.includes('462') ||
+      normalizedMessage.includes('463') ||
+      normalizedMessage.includes('rate limit') ||
+      normalizedMessage.includes('turnstile');
+
+    const enforceTurnstile = shouldEnforceTurnstile();
+    const requiresTurnstileReset = needsWidgetRefresh && enforceTurnstile;
+    state.awaitingRetryUnlock = false;
+    if (requiresTurnstileReset) {
+      consumeTurnstileToken();
+      syncTurnstilePrompt();
+      state.awaitingRetryUnlock = true;
+    }
+
+    let errorPrefix = '';
+    if (context === 'init') {
+      errorPrefix = '初始化失败：';
+    } else if (context === 'retry') {
+      errorPrefix = '重新获取信息失败：';
+    } else if (context === 'clearCache') {
+      errorPrefix = '缓存已清理，但重新获取信息失败：';
+    }
+    setStatus(errorPrefix + rawMessage);
+
+    state.downloadBtnMode = 'download';
+    state.infoReady = false;
+    downloadBtn.textContent = requiresTurnstileReset ? '等待验证' : '获取失败';
+    downloadBtn.disabled = true;
+
+    retryBtn.disabled = requiresTurnstileReset;
+    clearCacheBtn.disabled = false;
+  };
 
   const fetchInfo = async ({ forceRefresh = false } = {}) => {
     const url = new URL(window.location.href);
@@ -379,7 +418,7 @@ const pageScript = String.raw`
     }
 
     if (shouldEnforceTurnstile()) {
-      consumeTurnstileToken({ hide: true });
+      consumeTurnstileToken();
     }
 
     downloadBtn.disabled = false;
@@ -441,13 +480,7 @@ const pageScript = String.raw`
       await fetchInfo({ forceRefresh: true });
     } catch (error) {
       console.error(error);
-      setStatus('重新获取信息失败：' + error.message);
-      // Keep download button disabled when fetch fails (no valid URL)
-      state.downloadBtnMode = 'download';
-      downloadBtn.disabled = true;
-      downloadBtn.textContent = '获取失败';
-      retryBtn.disabled = false;
-      clearCacheBtn.disabled = false;
+      handleInfoError(error, 'retry');
     }
   });
 
@@ -456,6 +489,7 @@ const pageScript = String.raw`
     downloadBtn.disabled = true;
     retryBtn.disabled = true;
     setStatus('正在清理缓存...');
+    let fetchAttempted = false;
     try {
       const db = await openStorageDatabase();
       if (db && db[STORAGE_TABLE_INFO]) {
@@ -463,15 +497,22 @@ const pageScript = String.raw`
         log('缓存已清理');
       }
       setStatus('缓存已清理，正在重新获取信息...');
+      fetchAttempted = true;
       await fetchInfo({ forceRefresh: true });
     } catch (error) {
       console.error(error);
-      setStatus('清理缓存失败：' + (error && error.message ? error.message : '未知错误'));
-      state.downloadBtnMode = 'download';
-      downloadBtn.textContent = '跳转下载';
-      clearCacheBtn.disabled = false;
-      downloadBtn.disabled = false;
-      retryBtn.disabled = false;
+      if (fetchAttempted) {
+        handleInfoError(error, 'clearCache');
+      } else {
+        const rawMessage =
+          (error && typeof error.message === 'string' && error.message) || String(error || '未知错误');
+        setStatus('清理缓存失败：' + rawMessage);
+        state.downloadBtnMode = 'download';
+        downloadBtn.textContent = '跳转下载';
+        downloadBtn.disabled = false;
+        retryBtn.disabled = false;
+        clearCacheBtn.disabled = false;
+      }
     }
   });
 
@@ -509,12 +550,7 @@ const pageScript = String.raw`
       await fetchInfo({ forceRefresh: false });
     } catch (error) {
       console.error(error);
-      setStatus('初始化失败：' + error.message);
-      // Keep download button disabled when fetch fails (no valid URL)
-      downloadBtn.disabled = true;
-      downloadBtn.textContent = '获取失败';
-      retryBtn.disabled = false;
-      clearCacheBtn.disabled = false;
+      handleInfoError(error, 'init');
     }
   };
 
@@ -617,6 +653,7 @@ const renderLandingPageHtml = (path, options = {}) => {
         background: rgba(56,189,248,0.18);
         color: #e0f2fe;
         transition: background 0.2s ease, transform 0.2s ease;
+        white-space: nowrap;
       }
       button:hover:not(:disabled) {
         background: rgba(56,189,248,0.28);
