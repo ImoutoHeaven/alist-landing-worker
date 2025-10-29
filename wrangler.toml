@@ -59,6 +59,123 @@ persist = true
 #                                                      # Default: "TURNSTILE_TOKEN_BINDING"
 #                                                      # Must match table created by init.sql
 #
+# # ═══════════════════════════════════════════════════════════════
+# # ⚠️ NEW: ALTCHA Proof-of-Work Anti-Bot Protection (防爬虫 PoW 验证)
+# # ═══════════════════════════════════════════════════════════════
+# #
+# # Purpose: Protect /info endpoint from automated scripts and bots
+# # Technology: ALTCHA - Privacy-first, self-hosted Proof-of-Work challenge system
+# # Security: Client-side computational challenge prevents automated attacks (no cookies, GDPR compliant)
+# #
+# # How it works:
+# # 1. User visits landing page → Worker generates ALTCHA challenge (HMAC-signed)
+# # 2. Browser solves PoW challenge (~10 seconds of computation, configurable)
+# # 3. JavaScript calls /info with solution → Worker verifies solution (stateless or stateful)
+# # 4. Stateless mode: Relies on solution expiry (ALTCHA_TOKEN_EXPIRE, default 3 minutes)
+# # 5. Stateful mode (DB_MODE set): Records token hash in ALTCHA_TOKEN_LIST table, prevents replay attacks
+# #
+# # Attack Scenarios Prevented:
+# # - Direct curl to /info endpoint (missing PoW solution → 403)
+# # - Replay attacks (token hash recorded in DB → second use returns 403)
+# # - IP switching (token bound to client IP → different IP returns 403)
+# # - Path hijacking (token bound to file path → different path returns 403)
+# #
+# # Configuration:
+# ALTCHA_ENABLED = "true"                 # Enable ALTCHA protection for /info endpoint
+#                                          # Default: "false"
+#                                          # When enabled: /info requires valid PoW solution
+#                                          # Direct curl to /info → 403 ALTCHA solution required
+#
+# ALTCHA_DIFFICULTY = "250000"             # PoW computational difficulty (maxnumber parameter)
+#                                          # Default: "250000" (~10 seconds on modern browsers)
+#                                          # Calculation time: ~difficulty / 25000 seconds
+#                                          # Examples:
+#                                          #   50000  → ~2 seconds (light protection)
+#                                          #   250000 → ~10 seconds (recommended)
+#                                          #   500000 → ~20 seconds (heavy protection)
+#                                          # Note: Higher = more secure but worse UX
+#
+# ALTCHA_TOKEN_EXPIRE = "3m"               # PoW solution validity duration
+#                                          # Default: "3m" (3 minutes)
+#                                          # Format: {number}{unit} where unit is h/m/s
+#                                          # Examples: "3m", "180s", "0.05h"
+#                                          # Rationale: Short expiry reduces replay attack window
+#                                          # ALTCHA official recommends 20-60min, but we use 3min
+#                                          # because tokens are only for signing download links
+#
+# PAGE_SECRET = ""                         # ALTCHA HMAC signing key (optional)
+#                                          # Default: Uses TOKEN value if not set
+#                                          # Recommended: Use different key from TOKEN for defense in depth
+#                                          # Format: Any string (e.g., random hex, UUID)
+#                                          # Example: "altcha-hmac-secret-key-2024"
+#
+# ALTCHA_TOKEN_BINDING_TABLE = "ALTCHA_TOKEN_LIST"  # ALTCHA Token 表名（Stateful 模式可自定义，默认 ALTCHA_TOKEN_LIST）
+#
+# # Replay Attack Prevention (Stateful Mode - Requires Database):
+# # When DB_MODE is set (d1, d1-rest, or custom-pg-rest):
+# # - Worker records ALTCHA token hash in ALTCHA_TOKEN_LIST table after verification
+# # - Token bound to: Client IP + File Path + Expiry Time
+# # - Second use of same token → 403 ALTCHA token already used (replay attack detected)
+# # - Token expiry → 403 ALTCHA token expired
+# # - IP mismatch → 403 ALTCHA token IP mismatch
+# # - Path mismatch → 403 ALTCHA token filepath mismatch
+# #
+# # Stateless Mode (No Database - DB_MODE not set):
+# # - Relies on ALTCHA solution's built-in expiry check (verifySolution())
+# # - No replay attack prevention (50ms race condition window exists)
+# # - Suitable for low-security scenarios or when database is unavailable
+# #
+# # Requirements for Stateful Mode:
+# # - DB_MODE must be set (d1, d1-rest, or custom-pg-rest)
+# # - For custom-pg-rest: Run init.sql to create ALTCHA_TOKEN_LIST table and functions:
+# #   * landing_verify_altcha_token() - Verify token and check replay
+# #   * landing_record_altcha_token() - Record token usage
+# #   * landing_cleanup_expired_altcha_tokens() - Cleanup expired tokens
+# # - For D1/D1-REST: Tables auto-created by ensureTables()
+# #
+# # Performance Notes:
+# # - ALTCHA verification integrated into unified check (1 RTT for cache + rate + turnstile + altcha)
+# # - PostgreSQL: Single RPC call landing_unified_check() includes ALTCHA verification
+# # - D1 Binding: Single db.batch([cache, rate, turnstile, altcha]) - 1 RTT
+# # - D1 REST: Single batch API call with 4 queries - 1 RTT (optimized from 4 RTT)
+# # - Token recording happens asynchronously (ctx.waitUntil) - no response blocking
+# #
+# # Error Codes:
+# # - 403: ALTCHA solution required (missing solution)
+# # - 403: ALTCHA verification failed (invalid solution signature)
+# # - 403: ALTCHA error: {details} (solution parsing/hashing error)
+# # - 463: ALTCHA token IP mismatch (stateful mode, different IP)
+# # - 463: ALTCHA token expired (stateful mode, TTL exceeded)
+# # - 463: ALTCHA token already used (stateful mode, replay attack detected)
+# # - 463: ALTCHA token filepath mismatch (stateful mode, different file)
+# #
+# # Example Configuration (Stateless - No Database):
+# #   ALTCHA_ENABLED = "true"
+# #   ALTCHA_DIFFICULTY = "250000"
+# #   ALTCHA_TOKEN_EXPIRE = "3m"
+# #   PAGE_SECRET = "my-altcha-secret"
+# #
+# # Example Configuration (Stateful - With PostgreSQL):
+# #   ALTCHA_ENABLED = "true"
+# #   ALTCHA_DIFFICULTY = "250000"
+# #   ALTCHA_TOKEN_EXPIRE = "3m"
+# #   PAGE_SECRET = "my-altcha-secret"
+# #   DB_MODE = "custom-pg-rest"
+# #   POSTGREST_URL = "https://postgrest.example.com"
+# #   VERIFY_HEADER = "X-Auth-Token"
+# #   VERIFY_SECRET = "your-secret"
+# #
+# # Example Configuration (Heavy Protection - Turnstile + ALTCHA):
+# #   UNDER_ATTACK = "true"
+# #   TURNSTILE_SITE_KEY = "your-site-key"
+# #   TURNSTILE_SECRET_KEY = "your-secret-key"
+# #   TURNSTILE_TOKEN_BINDING = "true"
+# #   ALTCHA_ENABLED = "true"
+# #   ALTCHA_DIFFICULTY = "250000"
+# #   DB_MODE = "custom-pg-rest"
+# #   # Result: Double protection (Human verification + PoW challenge)
+# #   # Verification order: ALTCHA first, then Turnstile, then sign
+#
 # # How it works:
 # # 1. User passes Turnstile verification (Cloudflare siteVerify) → Worker records token hash + IP (access_count=0)
 # # 2. User calls /info → Worker checks: token exists? IP matches? access_count < 1?
@@ -108,12 +225,21 @@ persist = true
 # ALIST_ADDRESS = "https://alist.example.com"  # Fallback AList base URL when appending expiry (ADDRESS/ALIST_BASE_URL also supported)
 # MIN_ALLOWED_BANDWIDTH = "10"            # Minimum allowed download bandwidth (Mbps)
 # MIN_DURATION_TIME = "1h"                # Minimum expiry duration for generated links (supports h/m/s suffix)
+# # ACTION 可选值:
+# # - block: 返回 403
+# # - verify-pow: 仅要求 ALTCHA PoW 验证
+# # - verify-turn: 仅要求 Turnstile 验证
+# # - verify-both: 同时要求 PoW 和 Turnstile
+# # - pass-web: 跳过验证，强制渲染 landing page
+# # - pass-server: 跳过验证，强制 302 重定向
+# # - pass-asis: 跳过验证，遵循 FAST_REDIRECT 配置
+#
 # BLACKLIST_PREFIX = "/private,/admin"
 # BLACKLIST_ACTION = "block"
 # WHITELIST_PREFIX = "/public,/shared"
 # WHITELIST_ACTION = "pass-asis"
 # EXCEPT_PREFIX = "/guest,/public"
-# EXCEPT_ACTION = "block-except"
+# EXCEPT_ACTION = "block-except"   # 支持所有 ACTION 值 + "-except" 后缀（如 block-except, verify-both-except, pass-asis-except）
 #
 # # Database Mode for IP Rate Limiting
 # # Options: "d1" (Cloudflare D1 Binding), "d1-rest" (Cloudflare D1 REST API), "custom-pg-rest" (Custom PostgreSQL + PostgREST)
@@ -124,7 +250,7 @@ persist = true
 # IPV4_SUFFIX = "/32"
 # IPV6_SUFFIX = "/60"
 # PG_ERROR_HANDLE = "fail-closed"
-# CLEANUP_PERCENTAGE = "1"  # 0-100 inclusive, decimals allowed (e.g., "0.1" = 0.1%)
+# CLEANUP_PERCENTAGE = "5"  # 0-100（可为小数），触发过期令牌清理的概率，默认 5%
 # BLOCK_TIME = "10m"
 #
 # # D1 (Cloudflare D1 Binding) Rate Limiting - requires DB_MODE="d1"
@@ -145,11 +271,15 @@ persist = true
 # #   - Creates IP_LIMIT_TABLE table (rate limiting)
 # #   - Creates FILESIZE_CACHE_TABLE table (filesize caching)
 # #   - Creates TURNSTILE_TOKEN_BINDING table (Turnstile token binding)
+# #   - Creates ALTCHA_TOKEN_LIST table (ALTCHA PoW token replay prevention)
 # #   - Creates landing_upsert_rate_limit() stored procedure (atomic rate limit)
 # #   - Creates landing_upsert_filesize_cache() stored procedure (atomic cache)
 # #   - Creates landing_upsert_token_binding() stored procedure (atomic token binding)
-# #   - Creates landing_cleanup_expired_tokens() stored procedure (token cleanup)
-# #   - Creates landing_unified_check() stored procedure (single RTT: cache + rate + token)
+# #   - Creates landing_verify_altcha_token() stored procedure (verify ALTCHA token)
+# #   - Creates landing_record_altcha_token() stored procedure (record ALTCHA token usage)
+# #   - Creates landing_cleanup_expired_tokens() stored procedure (Turnstile token cleanup)
+# #   - Creates landing_cleanup_expired_altcha_tokens() stored procedure (ALTCHA token cleanup)
+# #   - Creates landing_unified_check() stored procedure (single RTT: cache + rate + turnstile + altcha)
 # POSTGREST_URL = "https://your-domain.com/postgrest"  # PostgREST API endpoint (without table name)
 # POSTGREST_TABLE_NAME = "IP_LIMIT_TABLE"  # Optional, defaults to IP_LIMIT_TABLE
 # # Note: VERIFY_HEADER and VERIFY_SECRET (already defined above) are used for PostgREST authentication

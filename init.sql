@@ -254,6 +254,156 @@ $$ LANGUAGE plpgsql;
 
 
 -- ========================================
+-- ALTCHA Token Binding Schema (Replay Attack Prevention)
+-- ========================================
+
+CREATE TABLE IF NOT EXISTS "ALTCHA_TOKEN_LIST" (
+  "ALTCHA_TOKEN_HASH" TEXT PRIMARY KEY,
+  "CLIENT_IP" TEXT NOT NULL,
+  "FILEPATH_HASH" TEXT NOT NULL,
+  "ACCESS_COUNT" INTEGER NOT NULL DEFAULT 0,
+  "CREATED_AT" INTEGER NOT NULL,
+  "EXPIRES_AT" INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_altcha_token_expires
+  ON "ALTCHA_TOKEN_LIST" ("EXPIRES_AT");
+
+
+-- ========================================
+-- Stored Procedure: Verify and Consume ALTCHA Token
+-- ========================================
+
+CREATE OR REPLACE FUNCTION landing_verify_altcha_token(
+  p_token_hash TEXT,
+  p_client_ip TEXT,
+  p_filepath_hash TEXT,
+  p_now INTEGER,
+  p_table_name TEXT DEFAULT 'ALTCHA_TOKEN_LIST'
+)
+RETURNS TABLE(
+  token_allowed BOOLEAN,
+  token_error_code INTEGER,
+  token_access_count INTEGER,
+  token_expires_at INTEGER
+) AS $$
+DECLARE
+  sql TEXT;
+  rec RECORD;
+  allowed_local BOOLEAN := FALSE;
+  error_local INTEGER := 0;
+  access_local INTEGER := 0;
+  expires_local INTEGER := NULL;
+BEGIN
+  sql := format(
+    'SELECT "CLIENT_IP", "FILEPATH_HASH", "ACCESS_COUNT", "EXPIRES_AT"
+     FROM %1$I
+     WHERE "ALTCHA_TOKEN_HASH" = $1',
+    p_table_name
+  );
+
+  EXECUTE sql INTO rec USING p_token_hash;
+
+  IF rec."ACCESS_COUNT" IS NULL THEN
+    allowed_local := TRUE;
+    error_local := 0;
+    access_local := 0;
+    expires_local := NULL;
+  ELSE
+    access_local := rec."ACCESS_COUNT";
+    expires_local := rec."EXPIRES_AT";
+
+    IF rec."CLIENT_IP" <> p_client_ip THEN
+      allowed_local := FALSE;
+      error_local := 1;
+    ELSIF rec."FILEPATH_HASH" <> p_filepath_hash THEN
+      allowed_local := FALSE;
+      error_local := 4;
+    ELSIF rec."EXPIRES_AT" < p_now THEN
+      allowed_local := FALSE;
+      error_local := 2;
+    ELSIF access_local >= 1 THEN
+      allowed_local := FALSE;
+      error_local := 3;
+    ELSE
+      allowed_local := TRUE;
+      error_local := 0;
+    END IF;
+  END IF;
+
+  token_allowed := allowed_local;
+  token_error_code := error_local;
+  token_access_count := access_local;
+  token_expires_at := expires_local;
+
+  RETURN NEXT;
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- ========================================
+-- Stored Procedure: Record ALTCHA Token Usage
+-- ========================================
+
+CREATE OR REPLACE FUNCTION landing_record_altcha_token(
+  p_token_hash TEXT,
+  p_client_ip TEXT,
+  p_filepath_hash TEXT,
+  p_now INTEGER,
+  p_ttl_seconds INTEGER,
+  p_table_name TEXT DEFAULT 'ALTCHA_TOKEN_LIST'
+)
+RETURNS TABLE(
+  "ALTCHA_TOKEN_HASH" TEXT,
+  "ACCESS_COUNT" INTEGER,
+  "CREATED_AT" INTEGER,
+  "EXPIRES_AT" INTEGER
+) AS $$
+DECLARE
+  sql TEXT;
+BEGIN
+  sql := format(
+    'INSERT INTO %1$I ("ALTCHA_TOKEN_HASH", "CLIENT_IP", "FILEPATH_HASH", "ACCESS_COUNT", "CREATED_AT", "EXPIRES_AT")
+     VALUES ($1, $2, $3, 1, $4, $4 + $5)
+     ON CONFLICT ("ALTCHA_TOKEN_HASH") DO UPDATE SET
+       "ACCESS_COUNT" = %1$I."ACCESS_COUNT" + 1
+     RETURNING "ALTCHA_TOKEN_HASH", "ACCESS_COUNT", "CREATED_AT", "EXPIRES_AT"',
+    p_table_name
+  );
+
+  RETURN QUERY EXECUTE sql USING p_token_hash, p_client_ip, p_filepath_hash, p_now, p_ttl_seconds;
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- ========================================
+-- Stored Procedure: Cleanup Expired ALTCHA Tokens
+-- ========================================
+
+CREATE OR REPLACE FUNCTION landing_cleanup_expired_altcha_tokens(
+  p_now INTEGER,
+  p_table_name TEXT DEFAULT 'ALTCHA_TOKEN_LIST'
+)
+RETURNS INTEGER AS $$
+DECLARE
+  sql TEXT;
+  deleted_count INTEGER := 0;
+BEGIN
+  sql := format(
+    'DELETE FROM %1$I
+     WHERE "EXPIRES_AT" <= $1',
+    p_table_name
+  );
+
+  EXECUTE sql USING p_now;
+  GET DIAGNOSTICS deleted_count = ROW_COUNT;
+
+  RETURN deleted_count;
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- ========================================
 -- Stored Procedure: Cleanup Expired Turnstile Tokens
 -- ========================================
 
@@ -301,7 +451,11 @@ CREATE OR REPLACE FUNCTION landing_unified_check(
   p_token_ip TEXT,
   p_token_ttl INTEGER,
   p_token_table_name TEXT DEFAULT 'TURNSTILE_TOKEN_BINDING',
-  p_filepath_hash TEXT DEFAULT NULL
+  p_filepath_hash TEXT DEFAULT NULL,
+  p_altcha_token_hash TEXT DEFAULT NULL,
+  p_altcha_token_ip TEXT DEFAULT NULL,
+  p_altcha_filepath_hash TEXT DEFAULT NULL,
+  p_altcha_table_name TEXT DEFAULT 'ALTCHA_TOKEN_LIST'
 )
 RETURNS TABLE(
   cache_size BIGINT,
@@ -314,7 +468,11 @@ RETURNS TABLE(
   token_access_count INTEGER,
   token_client_ip TEXT,
   token_filepath TEXT,
-  token_expires_at INTEGER
+  token_expires_at INTEGER,
+  altcha_allowed BOOLEAN,
+  altcha_error_code INTEGER,
+  altcha_access_count INTEGER,
+  altcha_expires_at INTEGER
 ) AS $$
 DECLARE
   cache_sql TEXT;
@@ -328,6 +486,11 @@ DECLARE
   token_client_local TEXT := NULL;
   token_filepath_local TEXT := NULL;
   token_expires_local INTEGER := NULL;
+  altcha_rec RECORD;
+  altcha_allowed_local BOOLEAN := TRUE;
+  altcha_error_local INTEGER := 0;
+  altcha_access_local INTEGER := 0;
+  altcha_expires_local INTEGER := NULL;
 BEGIN
   cache_sql := format(
     'SELECT "SIZE", "TIMESTAMP"
@@ -412,6 +575,33 @@ BEGIN
   token_client_ip := token_client_local;
   token_filepath := token_filepath_local;
   token_expires_at := token_expires_local;
+
+  IF p_altcha_token_hash IS NOT NULL AND length(p_altcha_token_hash) > 0 THEN
+    SELECT *
+    INTO altcha_rec
+    FROM landing_verify_altcha_token(
+      p_altcha_token_hash,
+      p_altcha_token_ip,
+      p_altcha_filepath_hash,
+      p_now,
+      p_altcha_table_name
+    );
+
+    altcha_allowed_local := altcha_rec.token_allowed;
+    altcha_error_local := altcha_rec.token_error_code;
+    altcha_access_local := altcha_rec.token_access_count;
+    altcha_expires_local := altcha_rec.token_expires_at;
+  ELSE
+    altcha_allowed_local := TRUE;
+    altcha_error_local := 0;
+    altcha_access_local := 0;
+    altcha_expires_local := NULL;
+  END IF;
+
+  altcha_allowed := altcha_allowed_local;
+  altcha_error_code := altcha_error_local;
+  altcha_access_count := altcha_access_local;
+  altcha_expires_at := altcha_expires_local;
 
   RETURN NEXT;
 END;

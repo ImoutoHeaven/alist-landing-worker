@@ -221,40 +221,6 @@ export const saveCache = async (path, size, config) => {
 
     console.log('[Filesize Cache] Successfully saved to database');
 
-    const triggerCleanup = () => {
-      const probability = config.cleanupProbability ?? 0.01;
-      if (probability <= 0) {
-        return;
-      }
-      if (Math.random() < probability) {
-        console.log(`[Filesize Cache Cleanup] Triggering probabilistic cleanup (p=${probability})`);
-        const cleanupPromise = callRpc(
-          postgrestUrl,
-          verifyHeader,
-          verifySecret,
-          'landing_cleanup_expired_cache',
-          {
-            p_ttl_seconds: sizeTTL,
-            p_table_name: tableName,
-          }
-        )
-          .then((result) => {
-            const deleted = Array.isArray(result) && result[0]?.landing_cleanup_expired_cache;
-            console.log(
-              `[Filesize Cache Cleanup] Removed ${Number.parseInt(deleted || '0', 10) || 0} expired records`
-            );
-          })
-          .catch((error) => {
-            console.error('[Filesize Cache Cleanup] Failed:', error instanceof Error ? error.message : String(error));
-          });
-
-        if (config.ctx?.waitUntil) {
-          config.ctx.waitUntil(cleanupPromise);
-        }
-      }
-    };
-
-    triggerCleanup();
   } catch (error) {
     console.error('[Filesize Cache] Save failed:', error instanceof Error ? error.message : String(error));
   }

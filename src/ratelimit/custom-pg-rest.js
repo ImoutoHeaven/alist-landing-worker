@@ -143,30 +143,6 @@ export const checkRateLimit = async (ip, config) => {
     // Get current timestamp (in seconds)
     const now = Math.floor(Date.now() / 1000);
 
-    // Probabilistic cleanup helper
-    const triggerCleanup = () => {
-      const probability = config.cleanupProbability || 0.01;
-      if (Math.random() < probability) {
-        console.log(`[Rate Limit Cleanup] Triggered cleanup (probability: ${probability * 100}%)`);
-
-        const cleanupPromise = cleanupExpiredRecords(postgrestUrl, verifyHeader, verifySecret, tableName, config.windowTimeSeconds)
-          .then((deletedCount) => {
-            console.log(`[Rate Limit Cleanup] Background cleanup finished: ${deletedCount} records deleted`);
-            return deletedCount;
-          })
-          .catch((error) => {
-            console.error('[Rate Limit Cleanup] Background cleanup failed:', error instanceof Error ? error.message : String(error));
-          });
-
-        if (config.ctx && config.ctx.waitUntil) {
-          config.ctx.waitUntil(cleanupPromise);
-          console.log(`[Rate Limit Cleanup] Cleanup scheduled in background (using ctx.waitUntil)`);
-        } else {
-          console.warn(`[Rate Limit Cleanup] No ctx.waitUntil available, cleanup may be interrupted`);
-        }
-      }
-    };
-
     // Call atomic RPC stored procedure - single database round-trip
     // The stored procedure handles all concurrency via ON CONFLICT internally
     const rpcUrl = `${postgrestUrl}/rpc/upsert_rate_limit`;
@@ -205,9 +181,6 @@ export const checkRateLimit = async (ip, config) => {
     const accessCount = Number.parseInt(row.ACCESS_COUNT, 10);
     const lastWindowTime = Number.parseInt(row.LAST_WINDOW_TIME, 10);
     const blockUntil = row.BLOCK_UNTIL ? Number.parseInt(row.BLOCK_UNTIL, 10) : null;
-
-    // Trigger cleanup probabilistically
-    triggerCleanup();
 
     // Check if currently blocked
     if (blockUntil && blockUntil > now) {

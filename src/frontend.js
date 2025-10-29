@@ -10,6 +10,16 @@ const pageScript = String.raw`
 (() => {
   'use strict';
 
+  /**
+   * Base64url 编码（URL 安全 base64）
+   * @param {string} str
+   * @returns {string}
+   */
+  function base64urlEncode(str) {
+    const base64 = btoa(str);
+    return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+  }
+
   const $ = (id) => document.getElementById(id);
   const statusEl = $('status');
   const fileNameEl = $('fileName');
@@ -100,13 +110,43 @@ const pageScript = String.raw`
     security: {
       underAttack: false,
       siteKey: '',
+      altchaChallenge: null,
       scriptLoaded: false,
       scriptLoading: null,
       widgetId: null,
-      token: '',
-      tokenIssuedAt: 0,
+    },
+    verification: {
+      needAltcha: false,
+      needTurnstile: false,
+      altchaReady: false,
+      turnstileReady: false,
+      altchaSolution: null,
+      turnstileToken: null,
+      altchaIssuedAt: 0,
+      turnstileIssuedAt: 0,
       tokenResolvers: [],
     },
+  };
+
+  const updateButtonState = () => {
+    if (!downloadBtn) return;
+    if (state.infoReady) {
+      return;
+    }
+    const {
+      needAltcha,
+      needTurnstile,
+      altchaReady,
+      turnstileReady,
+    } = state.verification;
+    const canCallInfo = (!needAltcha || altchaReady) && (!needTurnstile || turnstileReady);
+    if (canCallInfo) {
+      downloadBtn.disabled = false;
+      downloadBtn.textContent = '开始下载';
+    } else {
+      downloadBtn.disabled = true;
+      downloadBtn.textContent = '身份验证中';
+    }
   };
 
   const setTurnstileMessage = (text) => {
@@ -132,24 +172,24 @@ const pageScript = String.raw`
     turnstileContainer.classList.remove('is-visible');
   };
 
-  const shouldEnforceTurnstile = () => state.security.underAttack === true;
+  const shouldEnforceTurnstile = () => state.verification.needTurnstile === true;
 
   const syncTurnstilePrompt = () => {
     if (!shouldEnforceTurnstile()) {
       hideTurnstileContainer();
-      if (!state.security.token) {
+      if (!state.verification.turnstileToken) {
         setTurnstileMessage('');
       }
       return;
     }
     showTurnstileContainer();
-    if (!state.security.token) {
+    if (!state.verification.turnstileToken) {
       setTurnstileMessage('请完成验证后继续下载');
     }
   };
 
   const fulfilTurnstileResolvers = (token) => {
-    const resolvers = state.security.tokenResolvers.splice(0, state.security.tokenResolvers.length);
+    const resolvers = state.verification.tokenResolvers.splice(0, state.verification.tokenResolvers.length);
     resolvers.forEach((resolver) => {
       try {
         resolver(token);
@@ -160,11 +200,88 @@ const pageScript = String.raw`
   };
 
   const clearTurnstileToken = () => {
-    state.security.token = '';
-    state.security.tokenIssuedAt = 0;
+    state.verification.turnstileToken = null;
+    state.verification.turnstileIssuedAt = 0;
+    state.verification.turnstileReady = false;
+    updateButtonState();
   };
 
   const SECURITY_SCRIPT_SRC = 'https://challenges.cloudflare.com/turnstile/v0/api.js';
+  const ALTCHA_MODULE_URL = 'https://cdn.jsdelivr.net/npm/altcha-lib@1.3.0/+esm';
+
+  let altchaModulePromise = null;
+  const loadAltchaModule = () => {
+    if (!altchaModulePromise) {
+      altchaModulePromise = import(ALTCHA_MODULE_URL);
+    }
+    return altchaModulePromise;
+  };
+
+  let altchaComputationPromise = null;
+  const startAltchaComputation = () => {
+    if (!state.verification.needAltcha) {
+      state.verification.altchaReady = true;
+      state.verification.altchaSolution = null;
+      updateButtonState();
+      return Promise.resolve(null);
+    }
+    if (state.verification.altchaReady && state.verification.altchaSolution) {
+      return Promise.resolve(state.verification.altchaSolution);
+    }
+    if (altchaComputationPromise) {
+      return altchaComputationPromise;
+    }
+    const challenge = state.security.altchaChallenge;
+    if (!challenge) {
+      state.verification.altchaReady = false;
+      updateButtonState();
+      return Promise.reject(new Error('缺少 ALTCHA 挑战'));
+    }
+
+    const computePromise = (async () => {
+      try {
+        setStatus('正在进行身份验证（PoW 计算）...');
+        const module = await loadAltchaModule();
+        const { solveChallenge } = module || {};
+        if (typeof solveChallenge !== 'function') {
+          throw new Error('ALTCHA 求解函数不可用');
+        }
+        const { promise } = solveChallenge(
+          challenge.challenge,
+          challenge.salt,
+          challenge.algorithm,
+          challenge.maxnumber
+        );
+        const solutionResult = await promise;
+        if (!solutionResult || typeof solutionResult.number !== 'number') {
+          throw new Error('ALTCHA PoW 计算未返回有效结果');
+        }
+        const solution = {
+          algorithm: challenge.algorithm,
+          challenge: challenge.challenge,
+          number: solutionResult.number,
+          salt: challenge.salt,
+          signature: challenge.signature,
+        };
+        state.verification.altchaSolution = solution;
+        state.verification.altchaIssuedAt = Date.now();
+        state.verification.altchaReady = true;
+        updateButtonState();
+        return solution;
+      } catch (error) {
+        state.verification.altchaSolution = null;
+        state.verification.altchaIssuedAt = 0;
+        state.verification.altchaReady = false;
+        updateButtonState();
+        throw error;
+      } finally {
+        altchaComputationPromise = null;
+      }
+    })();
+
+    altchaComputationPromise = computePromise;
+    return computePromise;
+  };
 
   const ensureTurnstileScript = () => {
     if (!shouldEnforceTurnstile()) return Promise.resolve();
@@ -213,11 +330,13 @@ const pageScript = String.raw`
       theme: 'dark',
       execution: 'render',
       callback: (token) => {
-        state.security.token = token || '';
-        state.security.tokenIssuedAt = Date.now();
+        state.verification.turnstileToken = token || '';
+        state.verification.turnstileIssuedAt = Date.now();
+        state.verification.turnstileReady = true;
         hideTurnstileContainer();
         setTurnstileMessage('');
-        fulfilTurnstileResolvers(state.security.token);
+        fulfilTurnstileResolvers(state.verification.turnstileToken);
+        updateButtonState();
         if (state.awaitingRetryUnlock) {
           state.awaitingRetryUnlock = false;
           retryBtn.disabled = false;
@@ -247,15 +366,15 @@ const pageScript = String.raw`
       throw new Error('缺少 Turnstile site key');
     }
     await renderTurnstileWidget();
-    if (!state.security.token) {
+    if (!state.verification.turnstileToken) {
       showTurnstileContainer();
       setTurnstileMessage('请完成验证后继续下载');
     }
-    if (state.security.token) {
-      return state.security.token;
+    if (state.verification.turnstileToken) {
+      return state.verification.turnstileToken;
     }
     return new Promise((resolve) => {
-      state.security.tokenResolvers.push(resolve);
+      state.verification.tokenResolvers.push(resolve);
     });
   };
 
@@ -271,20 +390,41 @@ const pageScript = String.raw`
     }
   };
 
+  const applySecurityConfig = (security = {}) => {
+    state.security.underAttack = security.underAttack === true;
+    state.security.siteKey =
+      typeof security.turnstileSiteKey === 'string' ? security.turnstileSiteKey.trim() : '';
+    state.security.altchaChallenge =
+      security.altchaChallenge && typeof security.altchaChallenge === 'object'
+        ? security.altchaChallenge
+        : null;
+    state.verification.needAltcha = !!state.security.altchaChallenge;
+    state.verification.needTurnstile =
+      state.security.underAttack && typeof state.security.siteKey === 'string' && state.security.siteKey.length > 0;
+    if (!state.verification.needTurnstile) {
+      state.security.underAttack = false;
+    }
+    state.verification.altchaSolution = null;
+    state.verification.altchaIssuedAt = 0;
+    state.verification.altchaReady = !state.verification.needAltcha;
+    state.verification.turnstileToken = null;
+    state.verification.turnstileIssuedAt = 0;
+    state.verification.turnstileReady = !state.verification.needTurnstile;
+    state.verification.tokenResolvers = [];
+    syncTurnstilePrompt();
+    updateButtonState();
+    if (state.verification.needAltcha) {
+      startAltchaComputation().catch((error) => {
+        console.error('ALTCHA 初始化失败:', error && error.message ? error.message : error);
+      });
+    }
+  };
+
   const securityConfig =
     typeof window !== 'undefined' && window.__ALIST_SECURITY__ && typeof window.__ALIST_SECURITY__ === 'object'
       ? window.__ALIST_SECURITY__
       : {};
-  state.security.underAttack = securityConfig.underAttack === true;
-  state.security.siteKey =
-    typeof securityConfig.turnstileSiteKey === 'string' ? securityConfig.turnstileSiteKey.trim() : '';
-  if (!state.security.siteKey) {
-    state.security.underAttack = false;
-  }
-  if (!state.security.underAttack) {
-    clearTurnstileToken();
-  }
-  syncTurnstilePrompt();
+  applySecurityConfig(securityConfig);
 
   const STORAGE_DB_NAME = 'alist-crypt-storage';
   const STORAGE_DB_VERSION = 2;
@@ -317,6 +457,16 @@ const pageScript = String.raw`
     const rawMessage =
       (error && typeof error.message === 'string' && error.message) || String(error || '未知错误');
     const normalizedMessage = rawMessage.toLowerCase();
+    if (normalizedMessage.includes('altcha')) {
+      state.verification.altchaSolution = null;
+      state.verification.altchaIssuedAt = 0;
+      state.verification.altchaReady = false;
+      if (state.verification.needAltcha) {
+        startAltchaComputation().catch((altchaError) => {
+          console.error('ALTCHA 重新计算失败:', altchaError && altchaError.message ? altchaError.message : altchaError);
+        });
+      }
+    }
     const needsWidgetRefresh =
       normalizedMessage.includes('429') ||
       normalizedMessage.includes('461') ||
@@ -362,14 +512,39 @@ const pageScript = String.raw`
       throw new Error('缺少签名参数 (sign)');
     }
 
+    state.infoReady = false;
+    updateButtonState();
+
+    const altchaPromise = state.verification.needAltcha
+      ? startAltchaComputation()
+      : Promise.resolve(null);
+
     let turnstileToken = '';
     if (shouldEnforceTurnstile()) {
       turnstileToken = await waitForTurnstileToken();
     }
 
+    let altchaSolution = null;
+    if (state.verification.needAltcha) {
+      try {
+        const solution = await altchaPromise;
+        if (!solution || typeof solution !== 'object') {
+          throw new Error('ALTCHA PoW 计算未返回有效结果');
+        }
+        altchaSolution = solution;
+      } catch (error) {
+        throw new Error('ALTCHA PoW 计算失败：' + (error && error.message ? error.message : String(error || '未知错误')));
+      }
+    }
+
     const infoURL = new URL('/info', window.location.origin);
     infoURL.searchParams.set('path', path);
     infoURL.searchParams.set('sign', sign);
+    if (altchaSolution) {
+      const solutionJson = JSON.stringify(altchaSolution);
+      const base64urlToken = base64urlEncode(solutionJson);
+      infoURL.searchParams.set('altChallengeResult', base64urlToken);
+    }
 
     const headers = new Headers();
     if (turnstileToken) {
@@ -420,6 +595,11 @@ const pageScript = String.raw`
     if (shouldEnforceTurnstile()) {
       consumeTurnstileToken();
     }
+    if (state.verification.needAltcha) {
+      state.verification.altchaReady = false;
+      state.verification.altchaSolution = null;
+      state.verification.altchaIssuedAt = 0;
+    }
 
     downloadBtn.disabled = false;
     downloadBtn.textContent = '跳转下载';
@@ -427,6 +607,49 @@ const pageScript = String.raw`
     retryBtn.disabled = false;
     clearCacheBtn.disabled = false;
     setStatus('就绪，点击按钮跳转下载');
+  };
+
+  const retryDownload = async () => {
+    try {
+      const response = await fetch(window.location.href);
+      const html = await response.text();
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(html, 'text/html');
+      const scriptNodes = Array.from(doc.querySelectorAll('script'));
+      let newSecurityConfig = null;
+      for (const node of scriptNodes) {
+        const content = node.textContent || '';
+        const match = content.match(/window\.__ALIST_SECURITY__\s*=\s*({.*?});/s);
+        if (match && match[1]) {
+          try {
+            newSecurityConfig = JSON.parse(match[1]);
+          } catch (parseError) {
+            console.warn('解析新的安全配置失败', parseError);
+          }
+          break;
+        }
+      }
+      if (newSecurityConfig) {
+        window.__ALIST_SECURITY__ = newSecurityConfig;
+        applySecurityConfig(newSecurityConfig);
+        if (state.verification.needTurnstile && window.turnstile && typeof window.turnstile.reset === 'function' && state.security.widgetId !== null) {
+          try {
+            window.turnstile.reset(state.security.widgetId);
+          } catch (resetError) {
+            console.warn('Turnstile reset 失败', resetError);
+          }
+        }
+      }
+      state.infoReady = false;
+      state.downloadURL = '';
+      state.downloadBtnMode = 'download';
+      updateButtonState();
+      await fetchInfo({ forceRefresh: true });
+    } catch (error) {
+      console.error('Retry failed:', error);
+      alert('重试失败，请刷新页面');
+      throw error;
+    }
   };
 
   const redirectToDownload = () => {
@@ -473,11 +696,11 @@ const pageScript = String.raw`
 
   retryBtn.addEventListener('click', async () => {
     downloadBtn.disabled = true;
-    downloadBtn.textContent = '加载中';
+    downloadBtn.textContent = '身份验证中';
     retryBtn.disabled = true;
     clearCacheBtn.disabled = true;
     try {
-      await fetchInfo({ forceRefresh: true });
+      await retryDownload();
     } catch (error) {
       console.error(error);
       handleInfoError(error, 'retry');
@@ -489,6 +712,8 @@ const pageScript = String.raw`
     downloadBtn.disabled = true;
     retryBtn.disabled = true;
     setStatus('正在清理缓存...');
+    state.infoReady = false;
+    updateButtonState();
     let fetchAttempted = false;
     try {
       const db = await openStorageDatabase();
@@ -541,8 +766,8 @@ const pageScript = String.raw`
   });
 
   const initialise = async () => {
-    downloadBtn.disabled = true;
-    downloadBtn.textContent = shouldEnforceTurnstile() ? '等待验证' : '加载中';
+    state.infoReady = false;
+    updateButtonState();
     retryBtn.disabled = true;
     clearCacheBtn.disabled = true;
     syncTurnstilePrompt();
@@ -574,10 +799,24 @@ const renderLandingPageHtml = (path, options = {}) => {
   }
   const title = escapeHtml(display);
   const script = pageScript.replace(/<\/script>/g, '<\\/script>');
+  const rawAltchaChallenge =
+    normalizedOptions.altchaChallenge && typeof normalizedOptions.altchaChallenge === 'object'
+      ? normalizedOptions.altchaChallenge
+      : null;
+  const normalizedAltchaChallenge = rawAltchaChallenge
+    ? {
+        algorithm: rawAltchaChallenge.algorithm,
+        challenge: rawAltchaChallenge.challenge,
+        salt: rawAltchaChallenge.salt,
+        signature: rawAltchaChallenge.signature,
+        maxnumber: rawAltchaChallenge.maxnumber,
+      }
+    : null;
   const securityConfig = {
     underAttack: normalizedOptions.underAttack === true,
     turnstileSiteKey:
       typeof normalizedOptions.turnstileSiteKey === 'string' ? normalizedOptions.turnstileSiteKey : '',
+    altchaChallenge: normalizedAltchaChallenge,
   };
   const securityJson = JSON.stringify(securityConfig).replace(/</g, '\\u003c');
 

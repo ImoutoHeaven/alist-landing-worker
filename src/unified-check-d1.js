@@ -1,6 +1,6 @@
 import { sha256Hash, calculateIPSubnet } from './utils.js';
 
-const ensureTables = async (db, { cacheTableName, rateLimitTableName, tokenTableName }) => {
+const ensureTables = async (db, { cacheTableName, rateLimitTableName, tokenTableName, altchaTableName }) => {
   await db.batch([
     db.prepare(`
       CREATE TABLE IF NOT EXISTS ${cacheTableName} (
@@ -32,10 +32,21 @@ const ensureTables = async (db, { cacheTableName, rateLimitTableName, tokenTable
       )
     `),
     db.prepare(`CREATE INDEX IF NOT EXISTS idx_turnstile_token_expires ON ${tokenTableName}(EXPIRES_AT)`),
+    db.prepare(`
+      CREATE TABLE IF NOT EXISTS ${altchaTableName} (
+        ALTCHA_TOKEN_HASH TEXT PRIMARY KEY,
+        CLIENT_IP TEXT NOT NULL,
+        FILEPATH_HASH TEXT NOT NULL,
+        ACCESS_COUNT INTEGER NOT NULL DEFAULT 0,
+        CREATED_AT INTEGER NOT NULL,
+        EXPIRES_AT INTEGER NOT NULL
+      )
+    `),
+    db.prepare(`CREATE INDEX IF NOT EXISTS idx_altcha_token_expires ON ${altchaTableName}(EXPIRES_AT)`),
   ]);
 };
 
-export const unifiedCheckD1 = async (path, clientIP, config) => {
+export const unifiedCheckD1 = async (path, clientIP, altchaTableName, config) => {
   if (!config?.env || !config?.databaseBinding) {
     throw new Error('[Unified Check D1] Missing D1 configuration');
   }
@@ -58,6 +69,9 @@ export const unifiedCheckD1 = async (path, clientIP, config) => {
   const tokenHash = tokenBindingEnabled ? (config.tokenHash || null) : null;
   const tokenIP = tokenBindingEnabled ? (config.tokenIP || clientIP || null) : null;
   const tokenTableName = config.tokenTableName || 'TURNSTILE_TOKEN_BINDING';
+  const altchaTokenHash = config.altchaTokenHash || null;
+  const altchaTokenIP = config.altchaTokenIP || clientIP || null;
+  const resolvedAltchaTableName = altchaTableName || 'ALTCHA_TOKEN_LIST';
 
   if (cacheTTL <= 0) {
     throw new Error('[Unified Check D1] sizeTTL must be greater than zero');
@@ -66,7 +80,7 @@ export const unifiedCheckD1 = async (path, clientIP, config) => {
     throw new Error('[Unified Check D1] windowTimeSeconds and limit are required');
   }
 
-  await ensureTables(db, { cacheTableName, rateLimitTableName, tokenTableName });
+  await ensureTables(db, { cacheTableName, rateLimitTableName, tokenTableName, altchaTableName: resolvedAltchaTableName });
 
   console.log('[Unified Check D1] Starting unified check for path:', path);
 
@@ -122,9 +136,19 @@ export const unifiedCheckD1 = async (path, clientIP, config) => {
     db.prepare(`SELECT CLIENT_IP, FILEPATH_HASH, ACCESS_COUNT, EXPIRES_AT FROM ${tokenTableName} WHERE TOKEN_HASH = ?`).bind(tokenHash),
   ];
 
+  statements.push(
+    altchaTokenHash
+      ? db.prepare(`
+          SELECT CLIENT_IP, FILEPATH_HASH, ACCESS_COUNT, EXPIRES_AT
+          FROM ${resolvedAltchaTableName}
+          WHERE ALTCHA_TOKEN_HASH = ?
+        `).bind(altchaTokenHash)
+      : db.prepare(`SELECT NULL AS CLIENT_IP, NULL AS FILEPATH_HASH, NULL AS ACCESS_COUNT, NULL AS EXPIRES_AT`)
+  );
+
   console.log('[Unified Check D1] Executing batch (cache + rate limit + token binding)');
   const results = await db.batch(statements);
-  if (!results || results.length < 3) {
+  if (!results || results.length < 4) {
     throw new Error('[Unified Check D1] Batch returned incomplete results');
   }
 
@@ -231,6 +255,36 @@ export const unifiedCheckD1 = async (path, clientIP, config) => {
   const safeTokenAccess = Number.isFinite(tokenAccessCount) ? tokenAccessCount : 0;
   const safeTokenExpires = Number.isFinite(tokenExpiresAt) ? tokenExpiresAt : null;
 
+  const altchaRow = results[3].results?.[0] || {};
+  let altchaAllowed = true;
+  let altchaErrorCode = 0;
+  let altchaAccessCount = 0;
+  let altchaExpiresAt = null;
+
+  if (altchaTokenHash && altchaRow.ACCESS_COUNT !== null && typeof altchaRow.ACCESS_COUNT !== 'undefined') {
+    altchaAccessCount = Number.parseInt(altchaRow.ACCESS_COUNT, 10);
+    altchaExpiresAt = altchaRow.EXPIRES_AT !== null && typeof altchaRow.EXPIRES_AT !== 'undefined'
+      ? Number.parseInt(altchaRow.EXPIRES_AT, 10)
+      : null;
+
+    if (altchaRow.CLIENT_IP !== altchaTokenIP) {
+      altchaAllowed = false;
+      altchaErrorCode = 1;
+    } else if (altchaRow.FILEPATH_HASH !== filepathHash) {
+      altchaAllowed = false;
+      altchaErrorCode = 4;
+    } else if (Number.isFinite(altchaExpiresAt) && altchaExpiresAt < now) {
+      altchaAllowed = false;
+      altchaErrorCode = 2;
+    } else if (Number.isFinite(altchaAccessCount) && altchaAccessCount >= 1) {
+      altchaAllowed = false;
+      altchaErrorCode = 3;
+    }
+  }
+
+  const safeAltchaAccess = Number.isFinite(altchaAccessCount) ? altchaAccessCount : 0;
+  const safeAltchaExpires = Number.isFinite(altchaExpiresAt) ? altchaExpiresAt : null;
+
   return {
     cache: cacheResult,
     rateLimit: {
@@ -248,6 +302,12 @@ export const unifiedCheckD1 = async (path, clientIP, config) => {
       clientIp: tokenClientBinding,
       filepath: tokenFilepathBinding,
       expiresAt: safeTokenExpires,
+    },
+    altcha: {
+      allowed: altchaAllowed,
+      errorCode: Number.isFinite(altchaErrorCode) ? altchaErrorCode : 0,
+      accessCount: safeAltchaAccess,
+      expiresAt: safeAltchaExpires,
     },
   };
 };

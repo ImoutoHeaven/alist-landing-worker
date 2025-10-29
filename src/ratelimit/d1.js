@@ -73,35 +73,6 @@ export const checkRateLimit = async (ip, config) => {
     // Get current timestamp (in seconds)
     const now = Math.floor(Date.now() / 1000);
 
-    // Query for existing record
-    // Probabilistic cleanup helper
-    const triggerCleanup = () => {
-      // Use configured cleanup probability (default 1% = 0.01)
-      const probability = config.cleanupProbability || 0.01;
-      if (Math.random() < probability) {
-        console.log(`[Rate Limit Cleanup] Triggered cleanup (probability: ${probability * 100}%)`);
-
-        // Use ctx.waitUntil to ensure cleanup completes even after response is sent
-        const cleanupPromise = cleanupExpiredRecords(db, tableName, config.windowTimeSeconds)
-          .then((deletedCount) => {
-            console.log(`[Rate Limit Cleanup] Background cleanup finished: ${deletedCount} records deleted`);
-            return deletedCount;
-          })
-          .catch((error) => {
-            console.error('[Rate Limit Cleanup] Background cleanup failed:', error instanceof Error ? error.message : String(error));
-          });
-
-        if (config.ctx && config.ctx.waitUntil) {
-          // Cloudflare Workers context available, use waitUntil
-          config.ctx.waitUntil(cleanupPromise);
-          console.log(`[Rate Limit Cleanup] Cleanup scheduled in background (using ctx.waitUntil)`);
-        } else {
-          // No context available, cleanup may be interrupted
-          console.warn(`[Rate Limit Cleanup] No ctx.waitUntil available, cleanup may be interrupted`);
-        }
-      }
-    };
-
     // Atomic UPSERT with RETURNING - single database round-trip, no locks needed
     // D1 (SQLite) supports RETURNING since SQLite 3.35.0
     const upsertSql = `
@@ -150,9 +121,6 @@ export const checkRateLimit = async (ip, config) => {
     const accessCount = Number.parseInt(result.ACCESS_COUNT, 10);
     const lastWindowTime = Number.parseInt(result.LAST_WINDOW_TIME, 10);
     const blockUntil = result.BLOCK_UNTIL ? Number.parseInt(result.BLOCK_UNTIL, 10) : null;
-
-    // Trigger cleanup probabilistically
-    triggerCleanup();
 
     // Check if currently blocked
     if (blockUntil && blockUntil > now) {

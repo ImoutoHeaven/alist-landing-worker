@@ -1,6 +1,6 @@
 import { sha256Hash, calculateIPSubnet, applyVerifyHeaders, hasVerifyCredentials } from './utils.js';
 
-export const unifiedCheck = async (path, clientIP, config) => {
+export const unifiedCheck = async (path, clientIP, altchaTableName, config) => {
   if (!config?.postgrestUrl || !hasVerifyCredentials(config.verifyHeader, config.verifySecret)) {
     throw new Error('[Unified Check] Missing PostgREST configuration');
   }
@@ -19,6 +19,9 @@ export const unifiedCheck = async (path, clientIP, config) => {
   const tokenIP = tokenBindingEnabled ? (config.tokenIP || clientIP || null) : null;
   const tokenTTLSeconds = Number(config.tokenTTLSeconds) || 0;
   const tokenTableName = config.tokenTableName || 'TURNSTILE_TOKEN_BINDING';
+  const altchaTokenHash = config.altchaTokenHash || null;
+  const altchaTokenIP = config.altchaTokenIP || clientIP || null;
+  const normalizedAltchaTableName = altchaTableName || 'ALTCHA_TOKEN_LIST';
 
   if (cacheTTL <= 0) {
     throw new Error('[Unified Check] sizeTTL must be greater than zero');
@@ -66,6 +69,10 @@ export const unifiedCheck = async (path, clientIP, config) => {
     p_token_ttl: tokenTTLSeconds,
     p_token_table_name: tokenTableName,
     p_filepath_hash: filepathHash,
+    p_altcha_token_hash: altchaTokenHash,
+    p_altcha_token_ip: altchaTokenIP,
+    p_altcha_filepath_hash: filepathHash,
+    p_altcha_table_name: normalizedAltchaTableName,
   };
 
   console.log('[Unified Check] Calling landing_unified_check with params:', JSON.stringify(rpcBody));
@@ -116,6 +123,13 @@ export const unifiedCheck = async (path, clientIP, config) => {
     : Number.parseInt(row.token_access_count, 10);
   const tokenAllowedRaw = row.token_allowed;
   const tokenFilepathRaw = row.token_filepath;
+  const altchaErrorRaw = row.altcha_error_code === null || typeof row.altcha_error_code === 'undefined'
+    ? 0
+    : Number.parseInt(row.altcha_error_code, 10);
+  const altchaAccessRaw = row.altcha_access_count === null || typeof row.altcha_access_count === 'undefined'
+    ? 0
+    : Number.parseInt(row.altcha_access_count, 10);
+  const altchaAllowedRaw = row.altcha_allowed;
 
   let allowed = true;
   let retryAfter = 0;
@@ -152,6 +166,12 @@ export const unifiedCheck = async (path, clientIP, config) => {
       clientIp: typeof row.token_client_ip === 'string' ? row.token_client_ip : null,
       filepath: typeof tokenFilepathRaw === 'string' ? tokenFilepathRaw : null,
       expiresAt: row.token_expires_at !== null ? Number.parseInt(row.token_expires_at, 10) : null,
+    },
+    altcha: {
+      allowed: altchaAllowedRaw !== false,
+      errorCode: Number.isFinite(altchaErrorRaw) ? altchaErrorRaw : 0,
+      accessCount: Number.isFinite(altchaAccessRaw) ? altchaAccessRaw : 0,
+      expiresAt: row.altcha_expires_at !== null ? Number.parseInt(row.altcha_expires_at, 10) : null,
     },
   };
 };

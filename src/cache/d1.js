@@ -149,23 +149,6 @@ export const saveCache = async (path, size, config) => {
       throw new Error('D1 filesize cache UPSERT returned no rows');
     }
 
-    const triggerCleanup = () => {
-      const probability = config.cleanupProbability ?? 0.01;
-      if (probability <= 0) {
-        return;
-      }
-      if (Math.random() < probability) {
-        console.log(`[Filesize Cache Cleanup] Triggering probabilistic cleanup (p=${probability})`);
-        const cleanupPromise = cleanupExpiredCache(db, tableName, sizeTTL).catch((error) => {
-          console.error('[Filesize Cache Cleanup] Failed:', error instanceof Error ? error.message : String(error));
-        });
-        if (config.ctx?.waitUntil) {
-          config.ctx.waitUntil(cleanupPromise);
-        }
-      }
-    };
-
-    triggerCleanup();
   } catch (error) {
     console.error('[Filesize Cache] Save failed:', error instanceof Error ? error.message : String(error));
   }

@@ -1,10 +1,16 @@
 import { sha256Hash, calculateIPSubnet } from './utils.js';
 
-const executeQuery = async (accountId, databaseId, apiToken, sql, params = []) => {
+const executeQuery = async (accountId, databaseId, apiToken, sqlOrBatch, params = []) => {
   const endpoint = `https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database/${databaseId}/query`;
-  const body = { sql };
-  if (params.length > 0) {
-    body.params = params;
+
+  let body;
+  if (Array.isArray(sqlOrBatch)) {
+    body = sqlOrBatch;
+  } else {
+    body = { sql: sqlOrBatch };
+    if (params.length > 0) {
+      body.params = params;
+    }
   }
 
   const response = await fetch(endpoint, {
@@ -26,10 +32,14 @@ const executeQuery = async (accountId, databaseId, apiToken, sql, params = []) =
     throw new Error(`D1 REST API query failed: ${JSON.stringify(payload.errors || 'Unknown error')}`);
   }
 
+  if (Array.isArray(sqlOrBatch)) {
+    return payload.result || [];
+  }
+
   return payload.result?.[0] || { results: [], success: true };
 };
 
-const ensureTables = async (accountId, databaseId, apiToken, { cacheTableName, rateLimitTableName, tokenTableName }) => {
+const ensureTables = async (accountId, databaseId, apiToken, { cacheTableName, rateLimitTableName, tokenTableName, altchaTableName }) => {
   await executeQuery(accountId, databaseId, apiToken, `
     CREATE TABLE IF NOT EXISTS ${cacheTableName} (
       PATH_HASH TEXT PRIMARY KEY,
@@ -61,9 +71,20 @@ const ensureTables = async (accountId, databaseId, apiToken, { cacheTableName, r
     )
   `);
   await executeQuery(accountId, databaseId, apiToken, `CREATE INDEX IF NOT EXISTS idx_turnstile_token_expires ON ${tokenTableName}(EXPIRES_AT)`);
+  await executeQuery(accountId, databaseId, apiToken, `
+    CREATE TABLE IF NOT EXISTS ${altchaTableName} (
+      ALTCHA_TOKEN_HASH TEXT PRIMARY KEY,
+      CLIENT_IP TEXT NOT NULL,
+      FILEPATH_HASH TEXT NOT NULL,
+      ACCESS_COUNT INTEGER NOT NULL DEFAULT 0,
+      CREATED_AT INTEGER NOT NULL,
+      EXPIRES_AT INTEGER NOT NULL
+    )
+  `);
+  await executeQuery(accountId, databaseId, apiToken, `CREATE INDEX IF NOT EXISTS idx_altcha_token_expires ON ${altchaTableName}(EXPIRES_AT)`);
 };
 
-export const unifiedCheckD1Rest = async (path, clientIP, config) => {
+export const unifiedCheckD1Rest = async (path, clientIP, altchaTableName, config) => {
   if (!config?.accountId || !config?.databaseId || !config?.apiToken) {
     throw new Error('[Unified Check D1-REST] Missing D1 REST configuration');
   }
@@ -82,6 +103,9 @@ export const unifiedCheckD1Rest = async (path, clientIP, config) => {
   const tokenHash = tokenBindingEnabled ? (config.tokenHash || null) : null;
   const tokenIP = tokenBindingEnabled ? (config.tokenIP || clientIP || null) : null;
   const tokenTableName = config.tokenTableName || 'TURNSTILE_TOKEN_BINDING';
+  const altchaTokenHash = config.altchaTokenHash || null;
+  const altchaTokenIP = config.altchaTokenIP || clientIP || null;
+  const resolvedAltchaTableName = altchaTableName || 'ALTCHA_TOKEN_LIST';
 
   if (cacheTTL <= 0) {
     throw new Error('[Unified Check D1-REST] sizeTTL must be greater than zero');
@@ -90,7 +114,7 @@ export const unifiedCheckD1Rest = async (path, clientIP, config) => {
     throw new Error('[Unified Check D1-REST] windowTimeSeconds and limit are required');
   }
 
-  await ensureTables(accountId, databaseId, apiToken, { cacheTableName, rateLimitTableName, tokenTableName });
+  await ensureTables(accountId, databaseId, apiToken, { cacheTableName, rateLimitTableName, tokenTableName, altchaTableName: resolvedAltchaTableName });
 
   console.log('[Unified Check D1-REST] Starting unified check for path:', path);
 
@@ -113,48 +137,76 @@ export const unifiedCheckD1Rest = async (path, clientIP, config) => {
     throw new Error('[Unified Check D1-REST] Failed to calculate IP hash');
   }
 
-  console.log('[Unified Check D1-REST] Executing cache lookup');
-  const cacheSql = `SELECT SIZE, TIMESTAMP FROM ${cacheTableName} WHERE PATH_HASH = ?`;
-  const cacheResult = await executeQuery(accountId, databaseId, apiToken, cacheSql, [pathHash]);
+  console.log('[Unified Check D1-REST] Executing batch query (cache + rate limit + token + altcha)');
 
-  console.log('[Unified Check D1-REST] Executing rate limit UPSERT');
-  const rateLimitSql = `
-    INSERT INTO ${rateLimitTableName} (IP_HASH, IP_RANGE, ACCESS_COUNT, LAST_WINDOW_TIME, BLOCK_UNTIL)
-    VALUES (?, ?, 1, ?, NULL)
-    ON CONFLICT (IP_HASH) DO UPDATE SET
-      ACCESS_COUNT = CASE
-        WHEN ? - ${rateLimitTableName}.LAST_WINDOW_TIME >= ? THEN 1
-        WHEN ${rateLimitTableName}.BLOCK_UNTIL IS NOT NULL AND ${rateLimitTableName}.BLOCK_UNTIL <= ? THEN 1
-        WHEN ${rateLimitTableName}.ACCESS_COUNT >= ? THEN ${rateLimitTableName}.ACCESS_COUNT
-        ELSE ${rateLimitTableName}.ACCESS_COUNT + 1
-      END,
-      LAST_WINDOW_TIME = CASE
-        WHEN ? - ${rateLimitTableName}.LAST_WINDOW_TIME >= ? THEN ?
-        WHEN ${rateLimitTableName}.BLOCK_UNTIL IS NOT NULL AND ${rateLimitTableName}.BLOCK_UNTIL <= ? THEN ?
-        ELSE ${rateLimitTableName}.LAST_WINDOW_TIME
-      END,
-      BLOCK_UNTIL = CASE
-        WHEN ? - ${rateLimitTableName}.LAST_WINDOW_TIME >= ? THEN NULL
-        WHEN ${rateLimitTableName}.BLOCK_UNTIL IS NOT NULL AND ${rateLimitTableName}.BLOCK_UNTIL <= ? THEN NULL
-        WHEN ${rateLimitTableName}.ACCESS_COUNT >= ? AND ? > 0 THEN ? + ?
-        ELSE ${rateLimitTableName}.BLOCK_UNTIL
-      END
-    RETURNING ACCESS_COUNT, LAST_WINDOW_TIME, BLOCK_UNTIL
-  `;
-
-  const rateLimitParams = [
-    ipHash, ipSubnet, now,
-    now, windowSeconds, now, limit,
-    now, windowSeconds, now, now, now,
-    now, windowSeconds, now, limit, blockSeconds, now, blockSeconds,
+  const batchQueries = [
+    {
+      sql: `SELECT SIZE, TIMESTAMP FROM ${cacheTableName} WHERE PATH_HASH = ?`,
+      params: [pathHash],
+    },
+    {
+      sql: `
+        INSERT INTO ${rateLimitTableName} (IP_HASH, IP_RANGE, ACCESS_COUNT, LAST_WINDOW_TIME, BLOCK_UNTIL)
+        VALUES (?, ?, 1, ?, NULL)
+        ON CONFLICT (IP_HASH) DO UPDATE SET
+          ACCESS_COUNT = CASE
+            WHEN ? - ${rateLimitTableName}.LAST_WINDOW_TIME >= ? THEN 1
+            WHEN ${rateLimitTableName}.BLOCK_UNTIL IS NOT NULL AND ${rateLimitTableName}.BLOCK_UNTIL <= ? THEN 1
+            WHEN ${rateLimitTableName}.ACCESS_COUNT >= ? THEN ${rateLimitTableName}.ACCESS_COUNT
+            ELSE ${rateLimitTableName}.ACCESS_COUNT + 1
+          END,
+          LAST_WINDOW_TIME = CASE
+            WHEN ? - ${rateLimitTableName}.LAST_WINDOW_TIME >= ? THEN ?
+            WHEN ${rateLimitTableName}.BLOCK_UNTIL IS NOT NULL AND ${rateLimitTableName}.BLOCK_UNTIL <= ? THEN ?
+            ELSE ${rateLimitTableName}.LAST_WINDOW_TIME
+          END,
+          BLOCK_UNTIL = CASE
+            WHEN ? - ${rateLimitTableName}.LAST_WINDOW_TIME >= ? THEN NULL
+            WHEN ${rateLimitTableName}.BLOCK_UNTIL IS NOT NULL AND ${rateLimitTableName}.BLOCK_UNTIL <= ? THEN NULL
+            WHEN ${rateLimitTableName}.ACCESS_COUNT >= ? AND ? > 0 THEN ? + ?
+            ELSE ${rateLimitTableName}.BLOCK_UNTIL
+          END
+        RETURNING ACCESS_COUNT, LAST_WINDOW_TIME, BLOCK_UNTIL
+      `,
+      params: [
+        ipHash, ipSubnet, now,
+        now, windowSeconds, now, limit,
+        now, windowSeconds, now, now, now,
+        now, windowSeconds, now, limit, blockSeconds, now, blockSeconds,
+      ],
+    },
+    tokenHash
+      ? {
+          sql: `SELECT CLIENT_IP, FILEPATH_HASH, ACCESS_COUNT, EXPIRES_AT FROM ${tokenTableName} WHERE TOKEN_HASH = ?`,
+          params: [tokenHash],
+        }
+      : {
+          sql: 'SELECT NULL AS CLIENT_IP, NULL AS FILEPATH_HASH, NULL AS ACCESS_COUNT, NULL AS EXPIRES_AT',
+          params: [],
+        },
+    altchaTokenHash
+      ? {
+          sql: `SELECT CLIENT_IP, FILEPATH_HASH, ACCESS_COUNT, EXPIRES_AT FROM ${resolvedAltchaTableName} WHERE ALTCHA_TOKEN_HASH = ?`,
+          params: [altchaTokenHash],
+        }
+      : {
+          sql: 'SELECT NULL AS CLIENT_IP, NULL AS FILEPATH_HASH, NULL AS ACCESS_COUNT, NULL AS EXPIRES_AT',
+          params: [],
+        },
   ];
-  const rateLimitResult = await executeQuery(accountId, databaseId, apiToken, rateLimitSql, rateLimitParams);
 
-  console.log('[Unified Check D1-REST] Executing token lookup');
-  const tokenSql = `SELECT CLIENT_IP, FILEPATH_HASH, ACCESS_COUNT, EXPIRES_AT FROM ${tokenTableName} WHERE TOKEN_HASH = ?`;
-  const tokenResult = await executeQuery(accountId, databaseId, apiToken, tokenSql, [tokenHash]);
+  const batchResults = await executeQuery(accountId, databaseId, apiToken, batchQueries);
 
-  const cacheRow = cacheResult.results?.[0];
+  if (!batchResults || batchResults.length < 4) {
+    throw new Error(`[Unified Check D1-REST] Batch returned incomplete results: expected 4, got ${batchResults?.length || 0}`);
+  }
+
+  const cacheResult = batchResults[0];
+  const rateLimitResult = batchResults[1];
+  const tokenResult = batchResults[2];
+  const altchaResult = batchResults[3];
+
+  const cacheRow = cacheResult?.results?.[0];
   const cacheData = {
     hit: false,
     size: null,
@@ -206,7 +258,7 @@ export const unifiedCheckD1Rest = async (path, clientIP, config) => {
     console.log('[Unified Check D1-REST] Rate limit OK:', safeAccess, '/', limit);
   }
 
-  const tokenRow = tokenResult.results?.[0];
+  const tokenRow = tokenResult?.results?.[0];
   let tokenAllowed = true;
   let tokenErrorCode = 0;
   let tokenAccessCount = 0;
@@ -240,6 +292,36 @@ export const unifiedCheckD1Rest = async (path, clientIP, config) => {
   const safeTokenAccess = Number.isFinite(tokenAccessCount) ? tokenAccessCount : 0;
   const safeTokenExpires = Number.isFinite(tokenExpiresAt) ? tokenExpiresAt : null;
 
+  const altchaRow = altchaResult?.results?.[0];
+  let altchaAllowed = true;
+  let altchaErrorCode = 0;
+  let altchaAccessCount = 0;
+  let altchaExpiresAt = null;
+
+  if (altchaTokenHash && altchaRow) {
+    altchaAccessCount = Number.parseInt(altchaRow.ACCESS_COUNT, 10);
+    altchaExpiresAt = altchaRow.EXPIRES_AT !== null && typeof altchaRow.EXPIRES_AT !== 'undefined'
+      ? Number.parseInt(altchaRow.EXPIRES_AT, 10)
+      : null;
+
+    if (altchaRow.CLIENT_IP !== altchaTokenIP) {
+      altchaAllowed = false;
+      altchaErrorCode = 1;
+    } else if (altchaRow.FILEPATH_HASH !== filepathHash) {
+      altchaAllowed = false;
+      altchaErrorCode = 4;
+    } else if (Number.isFinite(altchaExpiresAt) && altchaExpiresAt < now) {
+      altchaAllowed = false;
+      altchaErrorCode = 2;
+    } else if (Number.isFinite(altchaAccessCount) && altchaAccessCount >= 1) {
+      altchaAllowed = false;
+      altchaErrorCode = 3;
+    }
+  }
+
+  const safeAltchaAccess = Number.isFinite(altchaAccessCount) ? altchaAccessCount : 0;
+  const safeAltchaExpires = Number.isFinite(altchaExpiresAt) ? altchaExpiresAt : null;
+
   return {
     cache: cacheData,
     rateLimit: {
@@ -257,6 +339,12 @@ export const unifiedCheckD1Rest = async (path, clientIP, config) => {
       clientIp: tokenClientBinding,
       filepath: tokenFilepathBinding,
       expiresAt: safeTokenExpires,
+    },
+    altcha: {
+      allowed: altchaAllowed,
+      errorCode: Number.isFinite(altchaErrorCode) ? altchaErrorCode : 0,
+      accessCount: safeAltchaAccess,
+      expiresAt: safeAltchaExpires,
     },
   };
 };

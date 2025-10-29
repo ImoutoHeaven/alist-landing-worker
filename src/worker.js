@@ -8,6 +8,7 @@ import {
   sha256Hash,
   applyVerifyHeaders,
 } from './utils.js';
+import { createChallenge, verifySolution } from 'altcha-lib';
 import { renderLandingPage } from './frontend.js';
 import { createRateLimiter } from './ratelimit/factory.js';
 import { createCacheManager } from './cache/factory.js';
@@ -26,7 +27,102 @@ const TOKEN_BINDING_ERROR_MESSAGES = {
   4: 'turnstile token path mismatch',
 };
 
-const VALID_ACTIONS = new Set(['block', 'verify', 'pass-web', 'pass-server', 'pass-asis']);
+const VALID_ACTIONS = [
+  'block',
+  'verify-pow',
+  'verify-turn',
+  'verify-both',
+  'pass-web',
+  'pass-server',
+  'pass-asis',
+];
+const VALID_ACTIONS_SET = new Set(VALID_ACTIONS);
+
+/**
+ * 解析 ACTION 值为验证需求对象
+ * @param {string} action - ACTION 值
+ * @param {object} config - 配置对象（包含 ALTCHA_ENABLED 和 UNDER_ATTACK）
+ * @returns {{needAltcha: boolean, needTurnstile: boolean}}
+ */
+function parseVerificationNeeds(action, config) {
+  switch (action) {
+    case 'verify-pow':
+      return { needAltcha: true, needTurnstile: false };
+    case 'verify-turn':
+      return { needAltcha: false, needTurnstile: true };
+    case 'verify-both':
+      return { needAltcha: true, needTurnstile: true };
+    case 'block':
+    case 'pass-web':
+    case 'pass-server':
+    case 'pass-asis':
+      return { needAltcha: false, needTurnstile: false };
+    default:
+      // 不再支持旧的 'verify' 值，抛出错误
+      throw new Error(`Invalid ACTION value: "${action}". Please use verify-pow, verify-turn, or verify-both instead of verify.`);
+  }
+}
+
+/**
+ * 校验 action 是否为允许的值
+ * @param {string|null|undefined} action
+ * @returns {string|null}
+ */
+function ensureValidActionValue(action) {
+  if (!action) {
+    return null;
+  }
+  if (action === 'verify') {
+    throw new Error('Invalid ACTION value: "verify". Please use verify-pow, verify-turn, or verify-both.');
+  }
+  if (!VALID_ACTIONS_SET.has(action)) {
+    throw new Error(`Invalid ACTION value: "${action}". Valid actions: ${VALID_ACTIONS.join(', ')}`);
+  }
+  return action;
+}
+
+/**
+ * Base64url 解码工具（URL 安全字符集）
+ * @param {string} base64url
+ * @returns {string}
+ */
+function base64urlDecode(base64url) {
+  let base64 = base64url.replace(/-/g, '+').replace(/_/g, '/');
+  while (base64.length % 4 !== 0) {
+    base64 += '=';
+  }
+  return atob(base64);
+}
+
+/**
+ * 执行 D1 REST 查询
+ * @param {{accountId:string,databaseId:string,apiToken:string}} restConfig
+ * @param {Array<{sql:string,params?:any[]}>|{sql:string,params?:any[]}} statements
+ */
+async function executeD1RestQuery(restConfig, statements) {
+  if (!restConfig || !restConfig.accountId || !restConfig.databaseId || !restConfig.apiToken) {
+    throw new Error('D1 REST configuration is incomplete');
+  }
+  const endpoint = `https://api.cloudflare.com/client/v4/accounts/${restConfig.accountId}/d1/database/${restConfig.databaseId}/query`;
+  const payload = Array.isArray(statements) ? statements : [statements];
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${restConfig.apiToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`D1 REST API error (${response.status}): ${text}`);
+  }
+  const result = await response.json().catch(() => ({}));
+  if (result && result.success === false) {
+    throw new Error(`D1 REST API query failed: ${JSON.stringify(result.errors || [])}`);
+  }
+  return result?.result || [];
+}
 
 const hopByHopHeaders = new Set([
   'connection',
@@ -51,6 +147,25 @@ const ensureRequiredEnv = (env) => {
 
 const resolveConfig = (env = {}) => {
   ensureRequiredEnv(env);
+  const rawToken = env.TOKEN;
+  const normalizedToken = typeof rawToken === 'string' ? rawToken : String(rawToken || '');
+  const pageSecret = typeof env.PAGE_SECRET === 'string' && env.PAGE_SECRET.trim() !== ''
+    ? env.PAGE_SECRET.trim()
+    : normalizedToken;
+  const altchaEnabled = env.ALTCHA_ENABLED === 'true';
+  const parsedAltchaDifficulty = Number.parseInt(env.ALTCHA_DIFFICULTY || '250000', 10);
+  const altchaDifficulty = Number.isFinite(parsedAltchaDifficulty) && parsedAltchaDifficulty > 0
+    ? parsedAltchaDifficulty
+    : 250000;
+  const rawAltchaTokenExpire = typeof env.ALTCHA_TOKEN_EXPIRE === 'string' ? env.ALTCHA_TOKEN_EXPIRE.trim() : '';
+  let altchaTokenExpire = parseWindowTime(rawAltchaTokenExpire || '3m');
+  if (!Number.isFinite(altchaTokenExpire) || altchaTokenExpire <= 0) {
+    altchaTokenExpire = parseWindowTime('3m');
+  }
+  const altchaTokenTable = env.ALTCHA_TOKEN_BINDING_TABLE && typeof env.ALTCHA_TOKEN_BINDING_TABLE === 'string'
+    ? env.ALTCHA_TOKEN_BINDING_TABLE.trim()
+    : '';
+  const altchaTableName = altchaTokenTable || 'ALTCHA_TOKEN_LIST';
   const underAttack = parseBoolean(env.UNDER_ATTACK, false);
   const turnstileSiteKey = env.TURNSTILE_SITE_KEY ? String(env.TURNSTILE_SITE_KEY).trim() : '';
   const turnstileSecretKey = env.TURNSTILE_SECRET_KEY ? String(env.TURNSTILE_SECRET_KEY).trim() : '';
@@ -79,8 +194,11 @@ const resolveConfig = (env = {}) => {
   const validateAction = (action, paramName) => {
     if (!action) return '';
     const normalizedAction = String(action).trim().toLowerCase();
-    if (!VALID_ACTIONS.has(normalizedAction)) {
-      throw new Error(`${paramName} must be one of: ${Array.from(VALID_ACTIONS).join(', ')}`);
+    if (normalizedAction === 'verify') {
+      throw new Error(`${paramName} value "verify" is no longer supported. Please use verify-pow, verify-turn, or verify-both.`);
+    }
+    if (!VALID_ACTIONS_SET.has(normalizedAction)) {
+      throw new Error(`${paramName} must be one of: ${VALID_ACTIONS.join(', ')}`);
     }
     return normalizedAction;
   };
@@ -100,14 +218,18 @@ const resolveConfig = (env = {}) => {
       if (!rawExceptAction.endsWith('-except')) {
         throw new Error('EXCEPT_ACTION must be in format "{action}-except" (e.g., "block-except")');
       }
-      // Extract the actual action part
-      const actionPart = rawExceptAction.slice(0, -7); // Remove '-except'
-      if (!actionPart) {
-        throw new Error('EXCEPT_ACTION must specify an action (e.g., "block-except")');
+      const actionPart = rawExceptAction.slice(0, -7);
+
+      // Reject legacy 'verify-except' (ambiguous)
+      if (actionPart === 'verify') {
+        throw new Error('EXCEPT_ACTION value "verify-except" is no longer supported. Please use verify-pow-except, verify-turn-except, or verify-both-except.');
       }
-      if (!VALID_ACTIONS.has(actionPart)) {
-        throw new Error(`EXCEPT_ACTION action part must be one of: ${Array.from(VALID_ACTIONS).join(', ')}`);
+
+      // Validate action part is in VALID_ACTIONS
+      if (!VALID_ACTIONS_SET.has(actionPart)) {
+        throw new Error(`EXCEPT_ACTION action part must be one of: ${VALID_ACTIONS.join(', ')}`);
       }
+
       exceptAction = actionPart;
     }
   }
@@ -134,12 +256,16 @@ const resolveConfig = (env = {}) => {
   const blockTime = env.BLOCK_TIME && typeof env.BLOCK_TIME === 'string' ? env.BLOCK_TIME.trim() : '10m';
   const blockTimeSeconds = parseWindowTime(blockTime);
 
-  // Parse cleanup percentage (default 1%)
-  const cleanupPercentage = parseNumber(env.CLEANUP_PERCENTAGE, 1);
-  // Clamp between 0 and 100 (supports decimal percentages)
-  const validCleanupPercentage = Math.max(0, Math.min(100, cleanupPercentage));
+  // Parse cleanup percentage (默认 5%)
+  let cleanupPercentage = Number.parseFloat(typeof env.CLEANUP_PERCENTAGE === 'string' ? env.CLEANUP_PERCENTAGE.trim() : '');
+  if (!Number.isFinite(cleanupPercentage)) {
+    cleanupPercentage = 5;
+  }
+  if (cleanupPercentage < 0 || cleanupPercentage > 100) {
+    cleanupPercentage = 5;
+  }
   // Convert to probability (0.0 to 1.0)
-  const cleanupProbability = validCleanupPercentage / 100;
+  const cleanupProbability = cleanupPercentage / 100;
 
   // Filesize cache configuration
   const rawSizeTTL = env.SIZE_TTL && typeof env.SIZE_TTL === 'string' ? env.SIZE_TTL.trim() : '24h';
@@ -178,6 +304,7 @@ const resolveConfig = (env = {}) => {
   let rateLimitConfig = {};
   let cacheEnabled = false;
   let cacheConfig = {};
+  let d1RestConfig = null;
 
   if (dbMode) {
     const normalizedDbMode = dbMode.toLowerCase();
@@ -247,6 +374,11 @@ const resolveConfig = (env = {}) => {
             cleanupProbability,
           };
         }
+        d1RestConfig = {
+          accountId: d1AccountId,
+          databaseId: d1DatabaseId,
+          apiToken: d1ApiToken,
+        };
       } else {
         throw new Error('DB_MODE is set to "d1-rest" but required environment variables are missing: D1_ACCOUNT_ID, D1_DATABASE_ID, D1_API_TOKEN, WINDOW_TIME, IPSUBNET_WINDOWTIME_LIMIT');
       }
@@ -329,12 +461,18 @@ const resolveConfig = (env = {}) => {
     signSecret: env.SIGN_SECRET && env.SIGN_SECRET.trim() !== '' ? env.SIGN_SECRET : env.TOKEN,
     underAttack,
     fastRedirect: parseBoolean(env.FAST_REDIRECT, false),
+    altchaEnabled,
+    altchaDifficulty,
+    altchaTokenExpire,
+    altchaTableName,
+    pageSecret,
     turnstileSiteKey,
     turnstileSecretKey,
     turnstileTokenBindingEnabled,
     turnstileTokenTTL: rawTurnstileTokenTTL,
     turnstileTokenTTLSeconds,
     turnstileTokenTableName,
+    cleanupPercentage,
     blacklistPrefixes,
     whitelistPrefixes,
     blacklistAction,
@@ -350,6 +488,7 @@ const resolveConfig = (env = {}) => {
     sizeTTL,
     sizeTTLSeconds,
     filesizeCacheTableName,
+    d1RestConfig,
     windowTime,
     ipSubnetLimit,
     appendAdditional,
@@ -654,7 +793,7 @@ const checkPathListAction = (path, config) => {
   if (config.blacklistPrefixes.length > 0 && config.blacklistAction) {
     for (const prefix of config.blacklistPrefixes) {
       if (decodedPath.startsWith(prefix)) {
-        return config.blacklistAction;
+        return ensureValidActionValue(config.blacklistAction);
       }
     }
   }
@@ -663,7 +802,7 @@ const checkPathListAction = (path, config) => {
   if (config.whitelistPrefixes.length > 0 && config.whitelistAction) {
     for (const prefix of config.whitelistPrefixes) {
       if (decodedPath.startsWith(prefix)) {
-        return config.whitelistAction;
+        return ensureValidActionValue(config.whitelistAction);
       }
     }
   }
@@ -680,7 +819,7 @@ const checkPathListAction = (path, config) => {
     }
     // If path does NOT match any except prefix, apply the except action
     if (!matchesExceptPrefix) {
-      return config.exceptAction;
+      return ensureValidActionValue(config.exceptAction);
     }
   }
 
@@ -690,7 +829,7 @@ const checkPathListAction = (path, config) => {
 
 const handleOptions = (request) => new Response(null, { headers: safeHeaders(request.headers.get('Origin')) });
 
-const handleInfo = async (request, config, rateLimiter, ctx) => {
+const handleInfo = async (request, env, config, rateLimiter, ctx) => {
   const origin = request.headers.get('origin') || '*';
   const url = new URL(request.url);
   const path = url.searchParams.get('path');
@@ -700,6 +839,13 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
     return respondJson(origin, { code: 400, message: 'path is required' }, 400);
   }
 
+  let decodedPath;
+  try {
+    decodedPath = decodeURIComponent(path);
+  } catch (error) {
+    return respondJson(origin, { code: 400, message: 'invalid path encoding' }, 400);
+  }
+
   const clientIP = extractClientIP(request);
   const rawTurnstileToken =
     request.headers.get(TURNSTILE_HEADER) ||
@@ -707,28 +853,44 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
     url.searchParams.get(TURNSTILE_HEADER) ||
     url.searchParams.get('turnstile_token') ||
     '';
+  const altChallengeResultParam = url.searchParams.get('altChallengeResult');
+  let altchaPayload = null;
+  if (altChallengeResultParam) {
+    try {
+      const decoded = base64urlDecode(altChallengeResultParam);
+      altchaPayload = JSON.parse(decoded);
+    } catch (error) {
+      console.error('[ALTCHA] Failed to decode altChallengeResult:', error instanceof Error ? error.message : String(error));
+      return new Response('Invalid altChallengeResult format', { status: 400 });
+    }
+  }
 
   // Check blacklist/whitelist
-  const action = checkPathListAction(path, config);
+  const action = checkPathListAction(decodedPath, config);
 
   // Handle block action
   if (action === 'block') {
     return respondJson(origin, { code: 403, message: 'access denied' }, 403);
   }
 
-  // Determine if we need verification
-  const forceVerify = action === 'verify';
-  const skipVerify = action === 'pass-web' || action === 'pass-server' || action === 'pass-asis';
-  const needVerify = forceVerify || (config.underAttack && !skipVerify);
+  let needAltcha = config.altchaEnabled;
+  let needTurnstile = config.underAttack;
+
+  if (action) {
+    const parsedNeeds = parseVerificationNeeds(action, config);
+    needAltcha = parsedNeeds.needAltcha;
+    needTurnstile = parsedNeeds.needTurnstile;
+  }
 
   const hasDbMode = typeof config.dbMode === 'string'
     ? config.dbMode.length > 0
     : Boolean(config.dbMode);
   const tokenTTLSeconds = Number(config.turnstileTokenTTLSeconds) || 0;
   const tokenTableName = config.turnstileTokenTableName || 'TURNSTILE_TOKEN_BINDING';
+  const altchaTableName = config.altchaTableName || 'ALTCHA_TOKEN_LIST';
 
   let tokenHash = null;
-  if (config.turnstileTokenBindingEnabled && rawTurnstileToken) {
+  if (needTurnstile && config.turnstileTokenBindingEnabled && rawTurnstileToken) {
     try {
       tokenHash = await sha256Hash(rawTurnstileToken);
     } catch (error) {
@@ -737,6 +899,7 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
   }
 
   const shouldBindToken = Boolean(
+    needTurnstile &&
     config.turnstileTokenBindingEnabled &&
     tokenHash &&
     clientIP &&
@@ -981,15 +1144,9 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
   };
 
   const encodedPath = path;
-  let decodedPath;
-  try {
-    decodedPath = decodeURIComponent(path);
-  } catch (error) {
-    return respondJson(origin, { code: 400, message: 'invalid path encoding' }, 400);
-  }
 
   let filepathHash = null;
-  if (shouldBindToken && decodedPath) {
+  if (decodedPath) {
     try {
       filepathHash = await sha256Hash(decodedPath);
     } catch (error) {
@@ -997,7 +1154,37 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
     }
   }
 
-  if (needVerify) {
+  let altchaTokenHash = null;
+  if (needAltcha) {
+    if (!altchaPayload) {
+      return respondJson(origin, { code: 403, message: 'ALTCHA solution required' }, 403);
+    }
+    try {
+      // Stateless 验证：verifySolution 的内置过期检查（120 秒）
+      const verified = await verifySolution(altchaPayload, config.pageSecret, true);
+      if (!verified) {
+        return respondJson(origin, { code: 403, message: 'ALTCHA verification failed' }, 403);
+      }
+      // Stateful 验证会在 unified check 中额外检查 DB 的 EXPIRES_AT 字段
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return respondJson(origin, { code: 403, message: `ALTCHA error: ${message}` }, 403);
+    }
+  }
+
+  if (needAltcha && altchaPayload) {
+    try {
+      const canonicalToken = `${altchaPayload.algorithm}:${altchaPayload.challenge}:${altchaPayload.number}:${altchaPayload.salt}:${altchaPayload.signature}`;
+      altchaTokenHash = await sha256Hash(canonicalToken);
+    } catch (error) {
+      console.error('[ALTCHA] Failed to compute token hash:', error instanceof Error ? error.message : String(error));
+      if (hasDbMode) {
+        return respondJson(origin, { code: 500, message: 'ALTCHA token hashing failed' }, 500);
+      }
+    }
+  }
+
+  if (needTurnstile) {
     if (!rawTurnstileToken) {
       return respondJson(origin, { code: 461, message: 'turnstile token required' }, 403);
     }
@@ -1038,26 +1225,39 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
   });
 
   const hasCacheSupport = Boolean(cacheManager && config.cacheEnabled);
-  const canUseUnified = Boolean(
-    config.rateLimitEnabled &&
-    hasDbMode &&
-    clientIP &&
-    (hasCacheSupport || shouldBindToken)
+  const requiresAltchaStateful = Boolean(needAltcha && altchaTokenHash && hasDbMode);
+  const unifiedEligible = Boolean(
+    (config.rateLimitEnabled && hasDbMode) ||
+    shouldBindToken ||
+    requiresAltchaStateful
   );
+  const canUseUnified = Boolean(unifiedEligible && hasDbMode && clientIP);
 
   console.log('[CACHE] Unified check eligibility:', {
     canUseUnified,
+    unifiedEligible,
     hasCacheManager: !!cacheManager,
     cacheEnabled: config.cacheEnabled,
     rateLimitEnabled: config.rateLimitEnabled,
     dbMode: config.dbMode,
     hasClientIP: !!clientIP,
     shouldBindToken,
+    requiresAltchaStateful,
   });
+
+  if (requiresAltchaStateful && !filepathHash) {
+    console.error('[ALTCHA] Missing filepath hash for stateful verification');
+    return respondJson(origin, { code: 500, message: 'ALTCHA token validation unavailable' }, 500);
+  }
 
   if (shouldBindToken && !canUseUnified) {
     console.error('[Turnstile Binding] Token binding enabled but unified check is unavailable');
     return respondJson(origin, { code: 500, message: 'turnstile token binding unavailable' }, 500);
+  }
+
+  if (requiresAltchaStateful && !canUseUnified) {
+    console.error('[ALTCHA] Token validation enabled but unified check is unavailable');
+    return respondJson(origin, { code: 500, message: 'ALTCHA token validation unavailable' }, 500);
   }
 
   let unifiedResult = null;
@@ -1088,6 +1288,9 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
           tokenIP: clientIP,
           tokenTTLSeconds: config.turnstileTokenTTLSeconds,
           tokenTableName: config.turnstileTokenTableName,
+          altchaTokenHash,
+          altchaTokenIP: clientIP,
+          altchaTableName,
         };
         console.log('[Unified Check] Config for custom-pg-rest:', {
           postgrestUrl: unifiedConfig.postgrestUrl,
@@ -1096,9 +1299,9 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
           sizeTTL: unifiedConfig.sizeTTL,
           cacheTableName: unifiedConfig.cacheTableName,
         });
-        unifiedResult = await unifiedCheck(decodedPath, clientIP, unifiedConfig);
+        unifiedResult = await unifiedCheck(decodedPath, clientIP, config.altchaTableName, unifiedConfig);
       } else if (config.dbMode === 'd1') {
-        unifiedResult = await unifiedCheckD1(decodedPath, clientIP, {
+        unifiedResult = await unifiedCheckD1(decodedPath, clientIP, config.altchaTableName, {
           env: config.cacheConfig.env || config.rateLimitConfig.env,
           databaseBinding: config.cacheConfig.databaseBinding || config.rateLimitConfig.databaseBinding || 'DB',
           sizeTTL: config.cacheConfig.sizeTTL ?? config.sizeTTLSeconds,
@@ -1114,9 +1317,12 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
           tokenIP: clientIP,
           tokenTTLSeconds: config.turnstileTokenTTLSeconds,
           tokenTableName: config.turnstileTokenTableName,
+          altchaTokenHash,
+          altchaTokenIP: clientIP,
+          altchaTableName,
         });
       } else if (config.dbMode === 'd1-rest') {
-        unifiedResult = await unifiedCheckD1Rest(decodedPath, clientIP, {
+        unifiedResult = await unifiedCheckD1Rest(decodedPath, clientIP, config.altchaTableName, {
           accountId: config.rateLimitConfig.accountId || config.cacheConfig.accountId,
           databaseId: config.rateLimitConfig.databaseId || config.cacheConfig.databaseId,
           apiToken: config.rateLimitConfig.apiToken || config.cacheConfig.apiToken,
@@ -1133,6 +1339,9 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
           tokenIP: clientIP,
           tokenTTLSeconds: config.turnstileTokenTTLSeconds,
           tokenTableName: config.turnstileTokenTableName,
+          altchaTokenHash,
+          altchaTokenIP: clientIP,
+          altchaTableName,
         });
       } else {
         console.log('[Unified Check] Unsupported DB mode for unified check, falling back');
@@ -1159,6 +1368,21 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
         } else {
           tokenBindingAllowed = true;
           tokenBindingErrorCode = 0;
+        }
+
+        if (needAltcha && altchaTokenHash) {
+          const altchaResult = unifiedResult.altcha || { allowed: true, errorCode: 0 };
+          if (altchaResult.allowed === false) {
+            const altchaErrorMessages = {
+              1: 'ALTCHA token IP mismatch',
+              2: 'ALTCHA token expired',
+              3: 'ALTCHA token already used (replay attack detected)',
+              4: 'ALTCHA token filepath mismatch',
+            };
+            const message = altchaErrorMessages[altchaResult.errorCode] || 'ALTCHA token validation failed';
+            console.warn('[ALTCHA] Token rejected:', message);
+            return respondJson(origin, { code: 463, message }, 403);
+          }
         }
 
         if (!unifiedResult.rateLimit.allowed) {
@@ -1198,8 +1422,11 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
     }
   }
 
+  // Unified cleanup scheduler (handles all tables)
+  await scheduleAllCleanups(config, env, ctx);
+
   // 当 unified check 未能启用 token binding 时，尝试回落到无状态的 Turnstile siteverify
-  if (shouldBindToken && !tokenBindingAllowed && needVerify) {
+  if (shouldBindToken && !tokenBindingAllowed && needTurnstile) {
     console.log('[Turnstile] Falling back to stateless siteverify (token binding DB unavailable)');
     const verification = await verifyTurnstileToken(
       config.turnstileSecretKey,
@@ -1307,7 +1534,7 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
   }
 
   const expireTime = calculateExpireTimestamp(sizeBytes, config.minDurationSeconds, config.minBandwidthBytesPerSecond);
-  const downloadURL = await createDownloadURL(config, {
+  let downloadURL = await createDownloadURL(config, {
     encodedPath,
     decodedPath,
     sign,
@@ -1327,18 +1554,431 @@ const handleInfo = async (request, config, rateLimiter, ctx) => {
         path: decodedPath,
       },
       settings: {
-        underAttack: needVerify,
+        underAttack: needTurnstile,
       },
     },
   };
+  if (needAltcha && altchaTokenHash && canUseUnified) {
+    ctx.waitUntil(
+      (async () => {
+        if (!filepathHash) {
+          console.warn('[ALTCHA Token Recording] Skipped: missing filepath hash');
+          return;
+        }
+        if (!clientIP) {
+          console.warn('[ALTCHA Token Recording] Skipped: missing client IP');
+          return;
+        }
+        const ttlSeconds = Number.isFinite(config.altchaTokenExpire) && config.altchaTokenExpire > 0
+          ? Math.floor(config.altchaTokenExpire)
+          : 180;
+        if (!Number.isFinite(ttlSeconds) || ttlSeconds <= 0) {
+          console.warn('[ALTCHA Token Recording] Skipped: invalid TTL', config.altchaTokenExpire);
+          return;
+        }
+        const nowSeconds = Math.floor(Date.now() / 1000);
+        const expiresAt = nowSeconds + ttlSeconds;
+        const normalizedDbMode = typeof config.dbMode === 'string' ? config.dbMode.toLowerCase() : '';
+        try {
+          if (normalizedDbMode === 'custom-pg-rest') {
+            const postgrestUrl = config.rateLimitConfig?.postgrestUrl;
+            if (!postgrestUrl) {
+              console.warn('[ALTCHA Token Recording] PostgREST URL missing');
+              return;
+            }
+            const rpcUrl = `${postgrestUrl}/rpc/landing_record_altcha_token`;
+            const headers = { 'Content-Type': 'application/json' };
+            applyVerifyHeaders(headers, config.verifyHeader, config.verifySecret);
+            const rpcBody = {
+              p_token_hash: altchaTokenHash,
+              p_client_ip: clientIP,
+              p_filepath_hash: filepathHash,
+              p_now: nowSeconds,
+              p_ttl_seconds: ttlSeconds,
+              p_table_name: altchaTableName,
+            };
+            const response = await fetch(rpcUrl, {
+              method: 'POST',
+              headers,
+              body: JSON.stringify(rpcBody),
+            });
+            if (!response.ok) {
+              const text = await response.text().catch(() => '');
+              console.error('[ALTCHA Token Recording] PostgREST failed:', response.status, text);
+            }
+          } else if (normalizedDbMode === 'd1') {
+            const envSource = config.cacheConfig?.env || config.rateLimitConfig?.env;
+            const bindingName = config.cacheConfig?.databaseBinding || config.rateLimitConfig?.databaseBinding || 'DB';
+            const db = envSource ? envSource[bindingName] : null;
+            if (!db) {
+              console.warn('[ALTCHA Token Recording] D1 binding missing');
+              return;
+            }
+            await db.prepare(`
+              INSERT INTO ${altchaTableName} (ALTCHA_TOKEN_HASH, CLIENT_IP, FILEPATH_HASH, ACCESS_COUNT, CREATED_AT, EXPIRES_AT)
+              VALUES (?, ?, ?, 1, ?, ?)
+              ON CONFLICT (ALTCHA_TOKEN_HASH) DO UPDATE SET ACCESS_COUNT = ACCESS_COUNT + 1
+            `).bind(altchaTokenHash, clientIP, filepathHash, nowSeconds, expiresAt).run();
+          } else if (normalizedDbMode === 'd1-rest') {
+            const accountId = config.rateLimitConfig?.accountId || config.cacheConfig?.accountId;
+            const databaseId = config.rateLimitConfig?.databaseId || config.cacheConfig?.databaseId;
+            const apiToken = config.rateLimitConfig?.apiToken || config.cacheConfig?.apiToken;
+            if (!accountId || !databaseId || !apiToken) {
+              console.warn('[ALTCHA Token Recording] D1 REST credentials missing');
+              return;
+            }
+            const sql = `
+              INSERT INTO ${altchaTableName} (ALTCHA_TOKEN_HASH, CLIENT_IP, FILEPATH_HASH, ACCESS_COUNT, CREATED_AT, EXPIRES_AT)
+              VALUES (?, ?, ?, 1, ?, ?)
+              ON CONFLICT (ALTCHA_TOKEN_HASH) DO UPDATE SET ACCESS_COUNT = ACCESS_COUNT + 1
+            `;
+            const body = {
+              sql,
+              params: [altchaTokenHash, clientIP, filepathHash, nowSeconds, expiresAt],
+            };
+            const response = await fetch(
+              `https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database/${databaseId}/query`,
+              {
+                method: 'POST',
+                headers: {
+                  Authorization: `Bearer ${apiToken}`,
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(body),
+              }
+            );
+            if (!response.ok) {
+              const text = await response.text().catch(() => '');
+              console.error('[ALTCHA Token Recording] D1 REST failed:', response.status, text);
+            }
+          }
+        } catch (error) {
+          console.error('[ALTCHA Token Recording] Failed:', error instanceof Error ? error.message : String(error));
+        }
+      })()
+    );
+  }
   scheduleTokenBindingWrite(filepathHash);
   return respondJson(origin, responsePayload, 200);
 };
 
-const handleFileRequest = async (request, config, rateLimiter, ctx) => {
+/**
+ * 清理过期 ALTCHA token 记录
+ * @param {object} config
+ * @param {object} env
+ */
+async function cleanupExpiredAltchaTokens(config, env) {
+  try {
+    const nowSeconds = Math.floor(Date.now() / 1000);
+
+    if (config.dbMode === 'custom-pg-rest') {
+      const postgrestUrl = config.rateLimitConfig?.postgrestUrl;
+      if (!postgrestUrl) {
+        console.error('[ALTCHA Cleanup] PostgREST URL missing');
+        return;
+      }
+      const rpcUrl = `${postgrestUrl}/rpc/landing_cleanup_expired_altcha_tokens`;
+      const headers = { 'Content-Type': 'application/json' };
+      applyVerifyHeaders(headers, config.verifyHeader, config.verifySecret);
+      const response = await fetch(rpcUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          p_now: nowSeconds,
+          p_table_name: config.altchaTableName,
+        }),
+      });
+      if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        console.error('[ALTCHA Cleanup] PostgREST RPC failed:', response.status, text);
+      }
+      return;
+    }
+
+    if (config.dbMode === 'd1') {
+      const envSource = config.cacheConfig?.env || config.rateLimitConfig?.env || env;
+      const bindingName = config.cacheConfig?.databaseBinding || config.rateLimitConfig?.databaseBinding || 'DB';
+      const db = envSource ? envSource[bindingName] : null;
+      if (!db) {
+        console.error('[ALTCHA Cleanup] D1 binding not available');
+        return;
+      }
+      await db.prepare(
+        `DELETE FROM ${config.altchaTableName} WHERE EXPIRES_AT < ?`
+      ).bind(nowSeconds).run();
+      return;
+    }
+
+    if (config.dbMode === 'd1-rest') {
+      const restConfig = config.d1RestConfig;
+      if (!restConfig) {
+        console.error('[ALTCHA Cleanup] D1 REST config missing');
+        return;
+      }
+      const sql = `DELETE FROM ${config.altchaTableName} WHERE EXPIRES_AT < ?`;
+      await executeD1RestQuery(restConfig, [{ sql, params: [nowSeconds] }]);
+    }
+  } catch (error) {
+    console.error('[ALTCHA Cleanup] Failed:', error instanceof Error ? error.message : String(error));
+  }
+}
+
+/**
+ * 清理过期的 Turnstile Token Binding 记录
+ * @param {object} config - 配置对象
+ * @param {object} env - 环境变量
+ */
+async function cleanupExpiredTurnstileTokens(config, env) {
+  try {
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const turnstileTableName = config.turnstileTokenTableName || 'TURNSTILE_TOKEN_BINDING';
+
+    if (config.dbMode === 'custom-pg-rest') {
+      const postgrestUrl = config.rateLimitConfig?.postgrestUrl;
+      if (!postgrestUrl) {
+        console.error('[Turnstile Cleanup] PostgREST URL missing');
+        return;
+      }
+      const rpcUrl = `${postgrestUrl}/rpc/landing_cleanup_expired_tokens`;
+      const headers = { 'Content-Type': 'application/json' };
+      applyVerifyHeaders(headers, config.verifyHeader, config.verifySecret);
+      const response = await fetch(rpcUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          p_now: nowSeconds,
+          p_table_name: turnstileTableName,
+        }),
+      });
+      if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        console.error('[Turnstile Cleanup] PostgREST RPC failed:', response.status, text);
+      }
+      return;
+    }
+
+    if (config.dbMode === 'd1') {
+      const envSource = config.cacheConfig?.env || config.rateLimitConfig?.env || env;
+      const bindingName = config.cacheConfig?.databaseBinding || config.rateLimitConfig?.databaseBinding || 'DB';
+      const db = envSource ? envSource[bindingName] : null;
+      if (!db) {
+        console.error('[Turnstile Cleanup] D1 binding not available');
+        return;
+      }
+      await db.prepare(
+        `DELETE FROM ${turnstileTableName} WHERE EXPIRES_AT < ?`
+      ).bind(nowSeconds).run();
+      return;
+    }
+
+    if (config.dbMode === 'd1-rest') {
+      const restConfig = config.d1RestConfig;
+      if (!restConfig) {
+        console.error('[Turnstile Cleanup] D1 REST config missing');
+        return;
+      }
+      const sql = `DELETE FROM ${turnstileTableName} WHERE EXPIRES_AT < ?`;
+      await executeD1RestQuery(restConfig, [{ sql, params: [nowSeconds] }]);
+    }
+  } catch (error) {
+    console.error('[Turnstile Cleanup] Failed:', error instanceof Error ? error.message : String(error));
+  }
+}
+
+/**
+ * 清理过期的 Rate Limit 记录
+ * @param {object} config - 配置对象
+ * @param {object} env - 环境变量
+ */
+async function cleanupExpiredRateLimits(config, env) {
+  try {
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const tableName = config.rateLimitConfig?.tableName || 'IP_LIMIT_TABLE';
+    const windowTimeSeconds = config.rateLimitConfig?.windowTimeSeconds || 0;
+    
+    if (windowTimeSeconds <= 0) {
+      return; // No cleanup if no window time configured
+    }
+
+    const cutoffTime = nowSeconds - (windowTimeSeconds * 2);
+
+    if (config.dbMode === 'custom-pg-rest') {
+      const postgrestUrl = config.rateLimitConfig?.postgrestUrl;
+      if (!postgrestUrl) {
+        console.error('[Rate Limit Cleanup] PostgREST URL missing');
+        return;
+      }
+      
+      // Use direct SQL via PostgREST (no RPC for rate limit cleanup in init.sql)
+      const headers = {
+        'Content-Type': 'application/json',
+        'Prefer': 'return=minimal'
+      };
+      applyVerifyHeaders(headers, config.verifyHeader, config.verifySecret);
+      
+      // PostgREST DELETE syntax: table?condition
+      const deleteUrl = `${postgrestUrl}/${tableName}?LAST_WINDOW_TIME=lt.${cutoffTime}&or=(BLOCK_UNTIL.is.null,BLOCK_UNTIL.lt.${nowSeconds})`;
+      const response = await fetch(deleteUrl, {
+        method: 'DELETE',
+        headers,
+      });
+      
+      if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        console.error('[Rate Limit Cleanup] PostgREST DELETE failed:', response.status, text);
+      }
+      return;
+    }
+
+    if (config.dbMode === 'd1') {
+      const envSource = config.rateLimitConfig?.env || env;
+      const bindingName = config.rateLimitConfig?.databaseBinding || 'DB';
+      const db = envSource ? envSource[bindingName] : null;
+      if (!db) {
+        console.error('[Rate Limit Cleanup] D1 binding not available');
+        return;
+      }
+      const sql = `DELETE FROM ${tableName}
+                   WHERE LAST_WINDOW_TIME < ?
+                     AND (BLOCK_UNTIL IS NULL OR BLOCK_UNTIL < ?)`;
+      await db.prepare(sql).bind(cutoffTime, nowSeconds).run();
+      return;
+    }
+
+    if (config.dbMode === 'd1-rest') {
+      const restConfig = config.d1RestConfig;
+      if (!restConfig) {
+        console.error('[Rate Limit Cleanup] D1 REST config missing');
+        return;
+      }
+      const sql = `DELETE FROM ${tableName}
+                   WHERE LAST_WINDOW_TIME < ?
+                     AND (BLOCK_UNTIL IS NULL OR BLOCK_UNTIL < ?)`;
+      await executeD1RestQuery(restConfig, [{ sql, params: [cutoffTime, nowSeconds] }]);
+    }
+  } catch (error) {
+    console.error('[Rate Limit Cleanup] Failed:', error instanceof Error ? error.message : String(error));
+  }
+}
+
+/**
+ * 清理过期的 Filesize Cache 记录
+ * @param {object} config - 配置对象
+ * @param {object} env - 环境变量
+ */
+async function cleanupExpiredCache(config, env) {
+  try {
+    const sizeTTL = config.cacheConfig?.sizeTTL || config.sizeTTLSeconds || 0;
+    if (sizeTTL <= 0) {
+      return; // No cleanup if no TTL configured
+    }
+
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const cutoffTime = nowSeconds - (sizeTTL * 2);
+    const tableName = config.cacheConfig?.tableName || config.filesizeCacheTableName || 'FILESIZE_CACHE_TABLE';
+
+    if (config.dbMode === 'custom-pg-rest') {
+      const postgrestUrl = config.cacheConfig?.postgrestUrl || config.rateLimitConfig?.postgrestUrl;
+      if (!postgrestUrl) {
+        console.error('[Cache Cleanup] PostgREST URL missing');
+        return;
+      }
+      const rpcUrl = `${postgrestUrl}/rpc/landing_cleanup_expired_cache`;
+      const headers = { 'Content-Type': 'application/json' };
+      applyVerifyHeaders(headers, config.verifyHeader, config.verifySecret);
+      const response = await fetch(rpcUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          p_ttl_seconds: sizeTTL,
+          p_table_name: tableName,
+        }),
+      });
+      if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        console.error('[Cache Cleanup] PostgREST RPC failed:', response.status, text);
+      }
+      return;
+    }
+
+    if (config.dbMode === 'd1') {
+      const envSource = config.cacheConfig?.env || config.rateLimitConfig?.env || env;
+      const bindingName = config.cacheConfig?.databaseBinding || config.rateLimitConfig?.databaseBinding || 'DB';
+      const db = envSource ? envSource[bindingName] : null;
+      if (!db) {
+        console.error('[Cache Cleanup] D1 binding not available');
+        return;
+      }
+      const sql = `DELETE FROM ${tableName} WHERE TIMESTAMP < ?`;
+      await db.prepare(sql).bind(cutoffTime).run();
+      return;
+    }
+
+    if (config.dbMode === 'd1-rest') {
+      const restConfig = config.d1RestConfig || config.cacheConfig;
+      if (!restConfig || !restConfig.accountId) {
+        console.error('[Cache Cleanup] D1 REST config missing');
+        return;
+      }
+      const sql = `DELETE FROM ${tableName} WHERE TIMESTAMP < ?`;
+      await executeD1RestQuery(restConfig, [{ sql, params: [cutoffTime] }]);
+    }
+  } catch (error) {
+    console.error('[Cache Cleanup] Failed:', error instanceof Error ? error.message : String(error));
+  }
+}
+
+/**
+ * 统一清理调度器：按概率触发所有过期数据清理
+ * @param {object} config - 配置对象
+ * @param {object} env - 环境变量
+ * @param {ExecutionContext} ctx - Workers ExecutionContext
+ */
+async function scheduleAllCleanups(config, env, ctx) {
+  const hasDbMode = typeof config.dbMode === 'string' && config.dbMode.length > 0;
+  if (!hasDbMode || config.cleanupPercentage <= 0) {
+    return; // Skip if no DB or cleanup disabled
+  }
+
+  // Probabilistic trigger
+  const shouldCleanup = Math.random() * 100 < config.cleanupPercentage;
+  if (!shouldCleanup) {
+    return;
+  }
+
+  console.log(`[Cleanup Scheduler] Triggered cleanup (probability: ${config.cleanupPercentage}%)`);
+
+  // Run all cleanups in parallel (Promise.allSettled ensures one failure doesn't block others)
+  const cleanupTasks = [
+    { name: 'Rate Limit', fn: () => cleanupExpiredRateLimits(config, env) },
+    { name: 'Filesize Cache', fn: () => cleanupExpiredCache(config, env) },
+    { name: 'ALTCHA Token', fn: () => cleanupExpiredAltchaTokens(config, env) },
+    { name: 'Turnstile Token', fn: () => cleanupExpiredTurnstileTokens(config, env) },
+  ];
+
+  const cleanupPromise = Promise.allSettled(
+    cleanupTasks.map(task =>
+      task.fn().catch(error => {
+        console.error(`[Cleanup Scheduler] ${task.name} failed:`, error instanceof Error ? error.message : String(error));
+      })
+    )
+  ).then(results => {
+    const succeeded = results.filter(r => r.status === 'fulfilled').length;
+    console.log(`[Cleanup Scheduler] Completed: ${succeeded}/${cleanupTasks.length} tasks succeeded`);
+  });
+
+  if (ctx && ctx.waitUntil) {
+    ctx.waitUntil(cleanupPromise);
+  }
+}
+
+const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
   if (request.method !== 'GET' && request.method !== 'HEAD') {
     return respondJson(request.headers.get('origin') || '*', { code: 405, message: 'method not allowed' }, 405);
   }
+  // Unified cleanup scheduler (handles all tables)
+  await scheduleAllCleanups(config, env, ctx);
+
   if (request.method === 'HEAD') {
     return new Response(null, {
       status: 200,
@@ -1349,6 +1989,7 @@ const handleFileRequest = async (request, config, rateLimiter, ctx) => {
     });
   }
 
+  const origin = request.headers.get('origin') || '*';
   const url = new URL(request.url);
 
   // Check blacklist/whitelist
@@ -1360,20 +2001,25 @@ const handleFileRequest = async (request, config, rateLimiter, ctx) => {
   }
 
   // Determine behavior based on action
-  const forceVerify = action === 'verify';
-  const skipVerify = action === 'pass-web' || action === 'pass-server' || action === 'pass-asis';
   const forceWeb = action === 'pass-web';
   const forceRedirect = action === 'pass-server';
 
-  // Determine if we need verification
-  const needVerify = forceVerify || (config.underAttack && !skipVerify);
+  let needAltcha = config.altchaEnabled;
+  let needTurnstile = config.underAttack;
 
-  // Determine if we should do fast redirect
-  const shouldRedirect = forceRedirect || (config.fastRedirect && !forceWeb && !needVerify);
+  if (action) {
+    const parsedNeeds = parseVerificationNeeds(action, config);
+    needAltcha = parsedNeeds.needAltcha;
+    needTurnstile = parsedNeeds.needTurnstile;
+  }
+
+  const needsVerification = needAltcha || needTurnstile;
+
+  const fastRedirectCandidate = forceRedirect || (config.fastRedirect && !forceWeb && !needsVerification);
+  const shouldRedirect = fastRedirectCandidate;
 
   // Fast redirect logic
   if (shouldRedirect) {
-    const origin = request.headers.get('origin') || '*';
     const sign = url.searchParams.get('sign') || '';
     const encodedPath = url.pathname;
     let decodedPath;
@@ -1451,9 +2097,9 @@ const handleFileRequest = async (request, config, rateLimiter, ctx) => {
             sizeTTL: unifiedConfig.sizeTTL,
             cacheTableName: unifiedConfig.cacheTableName,
           });
-          unifiedResult = await unifiedCheck(decodedPath, clientIP, unifiedConfig);
+          unifiedResult = await unifiedCheck(decodedPath, clientIP, config.altchaTableName, unifiedConfig);
         } else if (config.dbMode === 'd1') {
-          unifiedResult = await unifiedCheckD1(decodedPath, clientIP, {
+          unifiedResult = await unifiedCheckD1(decodedPath, clientIP, config.altchaTableName, {
             env: config.cacheConfig.env || config.rateLimitConfig.env,
             databaseBinding: config.cacheConfig.databaseBinding || config.rateLimitConfig.databaseBinding || 'DB',
             sizeTTL: config.cacheConfig.sizeTTL ?? config.sizeTTLSeconds,
@@ -1466,7 +2112,7 @@ const handleFileRequest = async (request, config, rateLimiter, ctx) => {
             ipv6Suffix: config.rateLimitConfig.ipv6Suffix,
           });
         } else if (config.dbMode === 'd1-rest') {
-          unifiedResult = await unifiedCheckD1Rest(decodedPath, clientIP, {
+          unifiedResult = await unifiedCheckD1Rest(decodedPath, clientIP, config.altchaTableName, {
             accountId: config.rateLimitConfig.accountId || config.cacheConfig.accountId,
             databaseId: config.rateLimitConfig.databaseId || config.cacheConfig.databaseId,
             apiToken: config.rateLimitConfig.apiToken || config.cacheConfig.apiToken,
@@ -1613,13 +2259,35 @@ const handleFileRequest = async (request, config, rateLimiter, ctx) => {
   }
 
   // Default: render landing page
+  let altchaChallengePayload = null;
+  const needsAltchaChallenge = needAltcha;
+  if (!shouldRedirect && needsAltchaChallenge) {
+    try {
+      const challenge = await createChallenge({
+        hmacKey: config.pageSecret,
+        maxnumber: config.altchaDifficulty,
+        expires: new Date(Date.now() + 120000),
+      });
+      altchaChallengePayload = {
+        algorithm: challenge.algorithm,
+        challenge: challenge.challenge,
+        salt: challenge.salt,
+        signature: challenge.signature,
+        maxnumber: challenge.maxnumber,
+      };
+    } catch (error) {
+      console.error('[ALTCHA] Failed to create challenge:', error instanceof Error ? error.message : String(error));
+    }
+  }
+
   return renderLandingPage(url.pathname, {
-    underAttack: needVerify,
+    underAttack: needTurnstile,
     turnstileSiteKey: config.turnstileSiteKey,
+    altchaChallenge: altchaChallengePayload,
   });
 };
 
-const routeRequest = async (request, config, rateLimiter, ctx) => {
+const routeRequest = async (request, env, config, rateLimiter, ctx) => {
   if (request.method === 'OPTIONS') {
     return handleOptions(request);
   }
@@ -1628,9 +2296,9 @@ const routeRequest = async (request, config, rateLimiter, ctx) => {
   if (request.method === 'GET' && pathname === '/info') {
     const ipv4Error = ensureIPv4(request, config.ipv4Only);
     if (ipv4Error) return ipv4Error;
-    return handleInfo(request, config, rateLimiter, ctx);
+    return handleInfo(request, env, config, rateLimiter, ctx);
   }
-  return handleFileRequest(request, config, rateLimiter, ctx);
+  return handleFileRequest(request, env, config, rateLimiter, ctx);
 };
 
 export default {
@@ -1640,7 +2308,7 @@ export default {
       // Create rate limiter instance based on DB_MODE
       const rateLimiter = config.rateLimitEnabled ? createRateLimiter(config.dbMode) : null;
 
-      return await routeRequest(request, config, rateLimiter, ctx);
+      return await routeRequest(request, env, config, rateLimiter, ctx);
     } catch (error) {
       const origin = request.headers.get('origin') || '*';
       const message = error instanceof Error ? error.message : String(error);
