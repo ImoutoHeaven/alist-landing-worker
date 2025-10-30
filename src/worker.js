@@ -174,6 +174,7 @@ const resolveConfig = (env = {}) => {
     : '';
   const altchaTableName = altchaTokenTable || 'ALTCHA_TOKEN_LIST';
   const underAttack = parseBoolean(env.UNDER_ATTACK, false);
+  const autoRedirect = parseBoolean(env.AUTO_REDIRECT, false);
   const turnstileSiteKey = env.TURNSTILE_SITE_KEY ? String(env.TURNSTILE_SITE_KEY).trim() : '';
   const turnstileSecretKey = env.TURNSTILE_SECRET_KEY ? String(env.TURNSTILE_SECRET_KEY).trim() : '';
   if (underAttack && (!turnstileSiteKey || !turnstileSecretKey)) {
@@ -467,6 +468,7 @@ const resolveConfig = (env = {}) => {
     ipv4Only: parseBoolean(env.IPV4_ONLY, false),
     signSecret: env.SIGN_SECRET && env.SIGN_SECRET.trim() !== '' ? env.SIGN_SECRET : env.TOKEN,
     underAttack,
+    autoRedirect,
     fastRedirect: parseBoolean(env.FAST_REDIRECT, false),
     altchaEnabled,
     altchaDifficulty,
@@ -753,7 +755,7 @@ const fetchAlistFileInfo = async (config, path, clientIP) => {
   return payload.data;
 };
 
-const createAdditionalParams = async (config, decodedPath, clientIP, options = {}) => {
+const createAdditionalParams = async (config, decodedPath, clientIP, signExpire, options = {}) => {
   if (!config.appendAdditional) return null;
   let { sizeBytes, expireTime, fileInfo } = options;
 
@@ -775,7 +777,7 @@ const createAdditionalParams = async (config, decodedPath, clientIP, options = {
   });
   const rawAdditionalInfo = encodeTextToBase64(payload);
   const additionalInfo = rawAdditionalInfo.replace(/=+$/, '');
-  const additionalInfoSign = await hmacSha256Sign(config.signSecret, additionalInfo, expireTime);
+  const additionalInfoSign = await hmacSha256Sign(config.signSecret, additionalInfo, signExpire);
   return { additionalInfo, additionalInfoSign };
 };
 
@@ -800,7 +802,7 @@ const createDownloadURL = async (config, { encodedPath, decodedPath, sign, clien
   downloadURLObj.searchParams.set('ipSign', ipSign);
 
   if (config.appendAdditional) {
-    const additionalParams = await createAdditionalParams(config, decodedPath, clientIP, {
+    const additionalParams = await createAdditionalParams(config, decodedPath, clientIP, expire, {
       sizeBytes,
       expireTime,
       fileInfo,
@@ -2238,7 +2240,7 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
       const challenge = await createChallenge({
         hmacKey: config.pageSecret,
         maxnumber: config.altchaDifficulty,
-        expires: new Date(Date.now() + 120000),
+        expires: new Date(Date.now() + config.altchaTokenExpire * 1000),
       });
       altchaChallengePayload = {
         algorithm: challenge.algorithm,
@@ -2256,6 +2258,7 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
     underAttack: needTurnstile,
     turnstileSiteKey: config.turnstileSiteKey,
     altchaChallenge: altchaChallengePayload,
+    autoRedirect: config.autoRedirect,
   });
 };
 

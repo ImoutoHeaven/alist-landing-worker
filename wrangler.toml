@@ -15,6 +15,12 @@ persist = true
 # WORKER_ADDRESS_DOWNLOAD = "https://worker1.example.com,https://worker2.example.com"
 # UNDER_ATTACK = "false"
 # FAST_REDIRECT = "false"
+# AUTO_REDIRECT = "false"          # Auto-redirect to download URL after verification
+#                                   # Default: "false" (show landing page with download button)
+#                                   # When "true": Immediately redirect (302) to download URL after
+#                                   #              ALTCHA/Turnstile verification completes
+#                                   # When "false": Show landing page, user must click download button
+#                                   # Use case: Direct download links vs. user-confirmation page
 # TURNSTILE_SITE_KEY = ""
 # TURNSTILE_SECRET_KEY = ""
 #

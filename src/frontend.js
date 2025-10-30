@@ -33,6 +33,7 @@ const pageScript = String.raw`
   const logEl = $('log');
   const turnstileContainer = $('turnstileContainer');
   const turnstileMessage = $('turnstileMessage');
+  const autoRedirectEnabled = window.__AUTO_REDIRECT__ === true;
 
   const log = (message) => {
     const time = new Date().toLocaleTimeString();
@@ -606,6 +607,10 @@ const pageScript = String.raw`
     state.downloadBtnMode = 'download';
     retryBtn.disabled = false;
     clearCacheBtn.disabled = false;
+    if (autoRedirectEnabled) {
+      redirectToDownload();
+      return;
+    }
     setStatus('就绪，点击按钮跳转下载');
   };
 
@@ -819,6 +824,8 @@ const renderLandingPageHtml = (path, options = {}) => {
     altchaChallenge: normalizedAltchaChallenge,
   };
   const securityJson = JSON.stringify(securityConfig).replace(/</g, '\\u003c');
+  const autoRedirectEnabled = normalizedOptions.autoRedirect === true;
+  const autoRedirectLiteral = autoRedirectEnabled ? 'true' : 'false';
 
   return `
 <!DOCTYPE html>
@@ -1076,6 +1083,7 @@ const renderLandingPageHtml = (path, options = {}) => {
     </main>
     <script>
       window.__ALIST_SECURITY__ = ${securityJson};
+      window.__AUTO_REDIRECT__ = ${autoRedirectLiteral};
     </script>
     <script type="module">
       ${script}
