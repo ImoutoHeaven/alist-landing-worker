@@ -755,24 +755,135 @@ const fetchAlistFileInfo = async (config, path, clientIP) => {
   return payload.data;
 };
 
+// Query FILESIZE_CACHE_TABLE via the configured backend; returns 0 when no record is found.
+const fetchFilesizeFromCache = async (config, pathHash) => {
+  const normalizedDbMode = typeof config.dbMode === 'string' ? config.dbMode.trim().toLowerCase() : '';
+  if (!normalizedDbMode) {
+    return 0;
+  }
+
+  const rawTableName = typeof config.cacheConfig?.tableName === 'string' && config.cacheConfig.tableName.trim().length > 0
+    ? config.cacheConfig.tableName
+    : (typeof config.filesizeCacheTableName === 'string' && config.filesizeCacheTableName.trim().length > 0
+      ? config.filesizeCacheTableName
+      : 'FILESIZE_CACHE_TABLE');
+  const tableName = rawTableName.trim() || 'FILESIZE_CACHE_TABLE';
+
+  try {
+    if (normalizedDbMode === 'custom-pg-rest') {
+      const postgrestUrl = config.cacheConfig?.postgrestUrl || config.rateLimitConfig?.postgrestUrl;
+      if (!postgrestUrl) {
+        return 0;
+      }
+      const endpoint = new URL(`${postgrestUrl}/${tableName}`);
+      endpoint.searchParams.set('PATH_HASH', `eq.${pathHash}`);
+      endpoint.searchParams.set('limit', '1');
+
+      const headers = {
+        Accept: 'application/json',
+        Prefer: 'return=representation',
+      };
+      const verifyHeader = config.cacheConfig?.verifyHeader || config.verifyHeader;
+      const verifySecret = config.cacheConfig?.verifySecret || config.verifySecret;
+      applyVerifyHeaders(headers, verifyHeader, verifySecret);
+
+      const response = await fetch(endpoint.toString(), {
+        method: 'GET',
+        headers,
+      });
+      if (!response.ok) {
+        return 0;
+      }
+      const results = await response.json().catch(() => []);
+      if (Array.isArray(results) && results.length > 0) {
+        const row = results[0];
+        const value = row?.FILE_SIZE ?? row?.file_size ?? row?.size ?? row?.SIZE;
+        return parseFileSize(value);
+      }
+      return 0;
+    }
+
+    if (normalizedDbMode === 'd1') {
+      const envSource = config.cacheConfig?.env || config.rateLimitConfig?.env;
+      const bindingName = config.cacheConfig?.databaseBinding || config.rateLimitConfig?.databaseBinding || 'DB';
+      const db = envSource ? envSource[bindingName] : null;
+      if (!db || typeof db.prepare !== 'function') {
+        return 0;
+      }
+      const statement = db.prepare(`SELECT FILE_SIZE FROM ${tableName} WHERE PATH_HASH = ? LIMIT 1`);
+      const result = await statement.bind(pathHash).first();
+      if (result) {
+        const value = result.FILE_SIZE ?? result.file_size ?? result.size ?? result.SIZE;
+        return parseFileSize(value);
+      }
+      return 0;
+    }
+
+    if (normalizedDbMode === 'd1-rest') {
+      const restConfig = config.d1RestConfig || config.cacheConfig;
+      if (!restConfig || !restConfig.accountId || !restConfig.databaseId || !restConfig.apiToken) {
+        return 0;
+      }
+      const statements = {
+        sql: `SELECT FILE_SIZE FROM ${tableName} WHERE PATH_HASH = ? LIMIT 1`,
+        params: [pathHash],
+      };
+      const queryResults = await executeD1RestQuery(restConfig, statements);
+      if (Array.isArray(queryResults) && queryResults.length > 0) {
+        const statementResult = queryResults[0];
+        const rows = Array.isArray(statementResult?.results) ? statementResult.results : [];
+        if (rows.length > 0) {
+          const value = rows[0]?.FILE_SIZE ?? rows[0]?.file_size ?? rows[0]?.size ?? rows[0]?.SIZE;
+          return parseFileSize(value);
+        }
+      }
+      return 0;
+    }
+  } catch (error) {
+    console.warn('[Landing] Filesize cache lookup failed:', error instanceof Error ? error.message : String(error));
+  }
+
+  return 0;
+};
+
 const createAdditionalParams = async (config, decodedPath, clientIP, signExpire, options = {}) => {
   if (!config.appendAdditional) return null;
   let { sizeBytes, expireTime, fileInfo } = options;
 
-  if (!Number.isFinite(sizeBytes) || sizeBytes < 0) {
+  const pathHash = await sha256Hash(decodedPath);
+
+  let resolvedSize = parseFileSize(sizeBytes);
+  if (resolvedSize <= 0 && fileInfo) {
+    resolvedSize = parseFileSize(fileInfo.size);
+  }
+
+  if (resolvedSize <= 0) {
+    // Check the shared filesize cache before falling back to AList API.
+    const cachedSize = await fetchFilesizeFromCache(config, pathHash);
+    if (cachedSize > 0) {
+      resolvedSize = cachedSize;
+    }
+  }
+
+  if (resolvedSize <= 0) {
     if (!fileInfo) {
       fileInfo = await fetchAlistFileInfo(config, decodedPath, clientIP);
     }
-    sizeBytes = parseFileSize(fileInfo?.size);
+    resolvedSize = parseFileSize(fileInfo?.size);
   }
+
+  if (!Number.isFinite(resolvedSize) || resolvedSize < 0) {
+    resolvedSize = 0;
+  }
+  sizeBytes = resolvedSize;
 
   if (!Number.isFinite(expireTime) || expireTime <= 0) {
     expireTime = calculateExpireTimestamp(sizeBytes, config.minDurationSeconds, config.minBandwidthBytesPerSecond);
   }
 
-  const pathHash = await sha256Hash(decodedPath);
   const payload = JSON.stringify({
     pathHash,
+    filesize: sizeBytes,
     expireTime,
   });
   const rawAdditionalInfo = encodeTextToBase64(payload);
