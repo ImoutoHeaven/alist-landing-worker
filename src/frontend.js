@@ -238,6 +238,17 @@ const pageScript = String.raw`
       updateButtonState();
       return Promise.reject(new Error('缺少 ALTCHA 挑战'));
     }
+    if (
+      typeof challenge.binding !== 'string' ||
+      challenge.binding.length === 0 ||
+      typeof challenge.pathHash !== 'string' ||
+      challenge.pathHash.length === 0 ||
+      !Number.isFinite(challenge.bindingExpiresAt)
+    ) {
+      state.verification.altchaReady = false;
+      updateButtonState();
+      return Promise.reject(new Error('ALTCHA 挑战缺少绑定信息'));
+    }
 
     const computePromise = (async () => {
       try {
@@ -263,6 +274,10 @@ const pageScript = String.raw`
           number: solutionResult.number,
           salt: challenge.salt,
           signature: challenge.signature,
+          pathHash: challenge.pathHash,
+          ipHash: typeof challenge.ipHash === 'string' ? challenge.ipHash : '',
+          binding: challenge.binding,
+          bindingExpiresAt: challenge.bindingExpiresAt,
         };
         state.verification.altchaSolution = solution;
         state.verification.altchaIssuedAt = Date.now();
@@ -817,6 +832,16 @@ const renderLandingPageHtml = (path, options = {}) => {
         salt: rawAltchaChallenge.salt,
         signature: rawAltchaChallenge.signature,
         maxnumber: rawAltchaChallenge.maxnumber,
+        pathHash:
+          typeof rawAltchaChallenge.pathHash === 'string' ? rawAltchaChallenge.pathHash : '',
+        ipHash: typeof rawAltchaChallenge.ipHash === 'string' ? rawAltchaChallenge.ipHash : '',
+        binding: typeof rawAltchaChallenge.binding === 'string' ? rawAltchaChallenge.binding : '',
+        bindingExpiresAt:
+          typeof rawAltchaChallenge.bindingExpiresAt === 'number'
+            ? rawAltchaChallenge.bindingExpiresAt
+            : typeof rawAltchaChallenge.bindingExpiresAt === 'string'
+            ? Number.parseInt(rawAltchaChallenge.bindingExpiresAt, 10)
+            : 0,
       }
     : null;
   const securityConfig = {

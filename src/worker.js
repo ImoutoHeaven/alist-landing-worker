@@ -571,6 +571,48 @@ const encodeUrlSafeBase64 = (bytes) =>
     .replace(/\+/g, '-')
     .replace(/\//g, '_');
 
+const computeClientIpHash = async (clientIP) => {
+  if (!clientIP || typeof clientIP !== 'string' || clientIP.trim().length === 0) {
+    return '';
+  }
+  try {
+    return await sha256Hash(clientIP.trim());
+  } catch (error) {
+    console.error('[ALTCHA] Failed to compute client IP hash:', error instanceof Error ? error.message : String(error));
+    return '';
+  }
+};
+
+const buildAltchaBinding = async (secret, pathHash, ipHash, expiresAtSeconds) => {
+  const normalizedPathHash = typeof pathHash === 'string' ? pathHash : '';
+  const normalizedIpHash = typeof ipHash === 'string' ? ipHash : '';
+  const normalizedExpires =
+    Number.isFinite(expiresAtSeconds) && expiresAtSeconds > 0 ? Math.floor(expiresAtSeconds) : 0;
+  const payload = JSON.stringify({
+    pathHash: normalizedPathHash,
+    ipHash: normalizedIpHash,
+    expiresAt: normalizedExpires,
+  });
+  try {
+    const macBytes = await computeHmac(secret, payload);
+    const mac = encodeUrlSafeBase64(macBytes);
+    return {
+      pathHash: normalizedPathHash,
+      ipHash: normalizedIpHash,
+      bindingMac: mac,
+      expiresAt: normalizedExpires,
+    };
+  } catch (error) {
+    console.error('[ALTCHA] Failed to compute binding MAC:', error instanceof Error ? error.message : String(error));
+    return {
+      pathHash: normalizedPathHash,
+      ipHash: normalizedIpHash,
+      bindingMac: '',
+      expiresAt: normalizedExpires,
+    };
+  }
+};
+
 const hmacSha256Sign = async (secret, data, expire) => {
   const bytes = await computeHmac(secret, `${data}:${expire}`);
   return `${encodeUrlSafeBase64(bytes)}:${expire}`;
@@ -1341,6 +1383,34 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
         return respondJson(origin, { code: 403, message: 'ALTCHA verification failed' }, 403);
       }
       // Stateful 验证会在 unified check 中额外检查 DB 的 EXPIRES_AT 字段
+
+      const payloadPathHash = typeof altchaPayload.pathHash === 'string' ? altchaPayload.pathHash : '';
+      const payloadIpHash = typeof altchaPayload.ipHash === 'string' ? altchaPayload.ipHash : '';
+      const payloadBindingMac = typeof altchaPayload.binding === 'string' ? altchaPayload.binding : '';
+      const payloadBindingExpireRaw = altchaPayload.bindingExpiresAt;
+      const payloadBindingExpiresAt = Number.isFinite(payloadBindingExpireRaw)
+        ? Math.floor(payloadBindingExpireRaw)
+        : Number.parseInt(payloadBindingExpireRaw, 10);
+      if (!payloadPathHash || !payloadBindingMac || !Number.isFinite(payloadBindingExpiresAt) || payloadBindingExpiresAt <= 0) {
+        return respondJson(origin, { code: 403, message: 'ALTCHA binding missing' }, 403);
+      }
+
+      const expectedPathHash = typeof filepathHash === 'string' ? filepathHash : '';
+      const expectedIpHash = await computeClientIpHash(clientIP);
+      const expectedBinding = await buildAltchaBinding(
+        config.pageSecret,
+        expectedPathHash,
+        expectedIpHash,
+        payloadBindingExpiresAt
+      );
+      const bindingMismatch =
+        payloadPathHash !== expectedBinding.pathHash ||
+        payloadIpHash !== expectedBinding.ipHash ||
+        payloadBindingMac !== expectedBinding.bindingMac ||
+        payloadBindingExpiresAt !== expectedBinding.expiresAt;
+      if (bindingMismatch) {
+        return respondJson(origin, { code: 463, message: 'ALTCHA binding mismatch' }, 403);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return respondJson(origin, { code: 403, message: `ALTCHA error: ${message}` }, 403);
@@ -2348,10 +2418,29 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
   const needsAltchaChallenge = needAltcha;
   if (!shouldRedirect && needsAltchaChallenge) {
     try {
+      let decodedChallengePath = '';
+      try {
+        decodedChallengePath = decodeURIComponent(url.pathname);
+      } catch (error) {
+        decodedChallengePath = url.pathname;
+      }
+      const challengePathHash = decodedChallengePath ? await sha256Hash(decodedChallengePath) : '';
+      const challengeIpHash = await computeClientIpHash(clientIP);
+      const baseNowSeconds = Math.floor(Date.now() / 1000);
+      const configuredTtlSeconds = Number.isFinite(config.altchaTokenExpire) && config.altchaTokenExpire > 0
+        ? Math.floor(config.altchaTokenExpire)
+        : 180;
+      const challengeExpiresAt = baseNowSeconds + configuredTtlSeconds;
+      const challengeBinding = await buildAltchaBinding(
+        config.pageSecret,
+        challengePathHash,
+        challengeIpHash,
+        challengeExpiresAt
+      );
       const challenge = await createChallenge({
         hmacKey: config.pageSecret,
         maxnumber: config.altchaDifficulty,
-        expires: new Date(Date.now() + config.altchaTokenExpire * 1000),
+        expires: new Date(challengeExpiresAt * 1000),
       });
       altchaChallengePayload = {
         algorithm: challenge.algorithm,
@@ -2359,6 +2448,10 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
         salt: challenge.salt,
         signature: challenge.signature,
         maxnumber: challenge.maxnumber,
+        pathHash: challengeBinding.pathHash,
+        ipHash: challengeBinding.ipHash,
+        binding: challengeBinding.bindingMac,
+        bindingExpiresAt: challengeBinding.expiresAt,
       };
     } catch (error) {
       console.error('[ALTCHA] Failed to create challenge:', error instanceof Error ? error.message : String(error));
