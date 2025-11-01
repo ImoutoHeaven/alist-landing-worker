@@ -652,7 +652,9 @@ const pageScript = String.raw`
       await fetchInfo({ forceRefresh: true });
     } catch (error) {
       console.error('Retry failed:', error);
-      alert('重试失败，请刷新页面');
+      const rawMessage =
+        (error && typeof error.message === 'string' && error.message) || String(error || '未知错误');
+      log('重试失败：' + rawMessage);
       throw error;
     }
   };
