@@ -593,16 +593,29 @@ const computeClientIpHash = async (clientIP) => {
   }
 };
 
-const buildBindingPayload = async (secret, pathHash, ipHash, expiresAtSeconds, context = 'Binding') => {
+const buildBindingPayload = async (
+  secret,
+  pathHash,
+  ipHash,
+  expiresAtSeconds,
+  context = 'Binding',
+  additionalData = null,
+) => {
   const normalizedPathHash = typeof pathHash === 'string' ? pathHash : '';
   const normalizedIpHash = typeof ipHash === 'string' ? ipHash : '';
   const normalizedExpires =
     Number.isFinite(expiresAtSeconds) && expiresAtSeconds > 0 ? Math.floor(expiresAtSeconds) : 0;
-  const payload = JSON.stringify({
+  const payloadObject = {
     pathHash: normalizedPathHash,
     ipHash: normalizedIpHash,
     expiresAt: normalizedExpires,
-  });
+  };
+  if (additionalData && typeof additionalData === 'object') {
+    for (const [key, value] of Object.entries(additionalData)) {
+      payloadObject[key] = value;
+    }
+  }
+  const payload = JSON.stringify(payloadObject);
   try {
     const macBytes = await computeHmac(secret, payload);
     const mac = encodeUrlSafeBase64(macBytes);
@@ -623,8 +636,11 @@ const buildBindingPayload = async (secret, pathHash, ipHash, expiresAtSeconds, c
   }
 };
 
-const buildAltchaBinding = async (secret, pathHash, ipHash, expiresAtSeconds) =>
-  buildBindingPayload(secret, pathHash, ipHash, expiresAtSeconds, 'ALTCHA');
+const buildAltchaBinding = async (secret, pathHash, ipHash, expiresAtSeconds, salt) => {
+  const normalizedSalt = typeof salt === 'string' ? salt : '';
+  const additionalData = normalizedSalt ? { salt: normalizedSalt } : null;
+  return buildBindingPayload(secret, pathHash, ipHash, expiresAtSeconds, 'ALTCHA', additionalData);
+};
 
 const hmacSha256Sign = async (secret, data, expire) => {
   const bytes = await computeHmac(secret, `${data}:${expire}`);
@@ -1459,6 +1475,10 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
       const payloadBindingExpiresAt = Number.isFinite(payloadBindingExpireRaw)
         ? Math.floor(payloadBindingExpireRaw)
         : Number.parseInt(payloadBindingExpireRaw, 10);
+      const payloadSalt = typeof altchaPayload.salt === 'string' ? altchaPayload.salt : '';
+      if (!payloadSalt) {
+        return respondJson(origin, { code: 403, message: 'ALTCHA binding missing salt' }, 403);
+      }
       if (!payloadPathHash || !payloadBindingMac || !Number.isFinite(payloadBindingExpiresAt) || payloadBindingExpiresAt <= 0) {
         return respondJson(origin, { code: 403, message: 'ALTCHA binding missing' }, 403);
       }
@@ -1473,7 +1493,8 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
         config.pageSecret,
         expectedPathHash,
         expectedIpHash,
-        payloadBindingExpiresAt
+        payloadBindingExpiresAt,
+        payloadSalt
       );
       const bindingMismatch =
         payloadPathHash !== expectedBinding.pathHash ||
@@ -2538,17 +2559,18 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
         ? Math.floor(config.altchaTokenExpire)
         : 180;
       const challengeExpiresAt = baseNowSeconds + configuredTtlSeconds;
-      const challengeBinding = await buildAltchaBinding(
-        config.pageSecret,
-        challengePathHash,
-        challengeIpHash,
-        challengeExpiresAt
-      );
       const challenge = await createChallenge({
         hmacKey: config.pageSecret,
         maxnumber: config.altchaDifficulty,
         expires: new Date(challengeExpiresAt * 1000),
       });
+      const challengeBinding = await buildAltchaBinding(
+        config.pageSecret,
+        challengePathHash,
+        challengeIpHash,
+        challengeExpiresAt,
+        challenge.salt
+      );
       altchaChallengePayload = {
         algorithm: challenge.algorithm,
         challenge: challenge.challenge,
