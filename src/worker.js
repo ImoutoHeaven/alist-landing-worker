@@ -1397,6 +1397,10 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
 
       const expectedPathHash = typeof filepathHash === 'string' ? filepathHash : '';
       const expectedIpHash = await computeClientIpHash(clientIP);
+      const nowSeconds = Math.floor(Date.now() / 1000);
+      if (payloadBindingExpiresAt < nowSeconds) {
+        return respondJson(origin, { code: 463, message: 'ALTCHA binding expired' }, 403);
+      }
       const expectedBinding = await buildAltchaBinding(
         config.pageSecret,
         expectedPathHash,
