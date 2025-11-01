@@ -111,6 +111,7 @@ const pageScript = String.raw`
     security: {
       underAttack: false,
       siteKey: '',
+      turnstileAction: 'download',
       altchaChallenge: null,
       turnstileBinding: null,
       scriptLoaded: false,
@@ -202,7 +203,16 @@ const pageScript = String.raw`
     if (expiresAt <= nowSeconds) {
       return { valid: false, binding, reason: 'expired' };
     }
-    return { valid: true, binding: { ...binding, bindingExpiresAt: expiresAt }, reason: null };
+    const nonce = typeof binding.nonce === 'string' ? binding.nonce : '';
+    const cdata = typeof binding.cdata === 'string' ? binding.cdata : '';
+    if (!nonce || !cdata) {
+      return { valid: false, binding, reason: 'invalid' };
+    }
+    return {
+      valid: true,
+      binding: { ...binding, bindingExpiresAt: expiresAt, nonce, cdata },
+      reason: null,
+    };
   };
 
   const ensureTurnstileBinding = () => {
@@ -392,12 +402,24 @@ const pageScript = String.raw`
     if (state.security.widgetId !== null) {
       return;
     }
+    const bindingStatus = getTurnstileBindingStatus();
+    if (!bindingStatus.valid) {
+      if (bindingStatus.reason === 'expired') {
+        setTurnstileMessage('验证已过期，请刷新页面');
+      } else {
+        setTurnstileMessage('验证信息缺失，请刷新页面');
+      }
+      return;
+    }
+    const activeBinding = bindingStatus.binding;
     turnstileContainer.innerHTML = '';
     setTurnstileMessage('请完成验证后继续下载');
     state.security.widgetId = window.turnstile.render(turnstileContainer, {
       sitekey: state.security.siteKey,
       theme: 'dark',
       execution: 'render',
+      action: state.security.turnstileAction || 'download',
+      cData: activeBinding.cdata,
       callback: (token) => {
         state.verification.turnstileToken = token || '';
         state.verification.turnstileIssuedAt = Date.now();
@@ -463,6 +485,10 @@ const pageScript = String.raw`
     state.security.underAttack = security.underAttack === true;
     state.security.siteKey =
       typeof security.turnstileSiteKey === 'string' ? security.turnstileSiteKey.trim() : '';
+    state.security.turnstileAction =
+      typeof security.turnstileAction === 'string' && security.turnstileAction.trim().length > 0
+        ? security.turnstileAction.trim()
+        : 'download';
     state.security.altchaChallenge =
       security.altchaChallenge && typeof security.altchaChallenge === 'object'
         ? security.altchaChallenge
@@ -492,12 +518,18 @@ const pageScript = String.raw`
         typeof rawTurnstileBinding.pathHash === 'string' ? rawTurnstileBinding.pathHash : '';
       const ipHash =
         typeof rawTurnstileBinding.ipHash === 'string' ? rawTurnstileBinding.ipHash : '';
-      if (bindingValue && bindingExpiresAt > 0 && pathHash) {
+      const nonce =
+        typeof rawTurnstileBinding.nonce === 'string' ? rawTurnstileBinding.nonce : '';
+      const cdata =
+        typeof rawTurnstileBinding.cdata === 'string' ? rawTurnstileBinding.cdata : '';
+      if (bindingValue && bindingExpiresAt > 0 && pathHash && nonce && cdata) {
         state.security.turnstileBinding = {
           pathHash,
           ipHash,
           binding: bindingValue,
           bindingExpiresAt,
+          nonce,
+          cdata,
         };
       } else {
         state.security.turnstileBinding = null;
@@ -648,6 +680,8 @@ const pageScript = String.raw`
           ipHash: binding.ipHash,
           binding: binding.binding || '',
           bindingExpiresAt: binding.bindingExpiresAt,
+          nonce: binding.nonce,
+          cdata: binding.cdata,
         };
         turnstileBindingEncoded = base64urlEncode(JSON.stringify(payload));
       }
@@ -996,12 +1030,21 @@ const renderLandingPageHtml = (path, options = {}) => {
             : typeof rawTurnstileBinding.expiresAt === 'string'
             ? Number.parseInt(rawTurnstileBinding.expiresAt, 10)
             : 0,
+        nonce:
+          typeof rawTurnstileBinding.nonce === 'string' ? rawTurnstileBinding.nonce : '',
+        cdata:
+          typeof rawTurnstileBinding.cdata === 'string' ? rawTurnstileBinding.cdata : '',
       }
     : null;
+  const turnstileAction =
+    typeof normalizedOptions.turnstileAction === 'string' && normalizedOptions.turnstileAction.trim().length > 0
+      ? normalizedOptions.turnstileAction.trim()
+      : 'download';
   const securityConfig = {
     underAttack: normalizedOptions.underAttack === true,
     turnstileSiteKey:
       typeof normalizedOptions.turnstileSiteKey === 'string' ? normalizedOptions.turnstileSiteKey : '',
+    turnstileAction,
     altchaChallenge: normalizedAltchaChallenge,
     turnstileBinding: normalizedTurnstileBinding,
   };

@@ -65,6 +65,19 @@ persist = true
 #                                                      # Default: "TURNSTILE_TOKEN_BINDING"
 #                                                      # Must match table created by init.sql
 #
+# TURNSTILE_COOKIE_EXPIRE_TIME = "2m"              # TTL for stateless binding cookie/token
+#                                                   # Format: h/m/s (e.g. "2m", "120s")
+#                                                   # Default: "2m" (must be <= Turnstile token TTL)
+#
+# TURNSTILE_EXPECTED_ACTION = "download"           # Action string passed to turnstile.render
+#                                                   # Default: "download"
+# TURNSTILE_ENFORCE_ACTION = "true"                # Verify siteverify.action matches expected action
+#                                                   # Default: "true" (set "false" to skip action check)
+# TURNSTILE_ENFORCE_HOSTNAME = "false"             # Verify siteverify.hostname against allowlist
+#                                                   # Default: "false"; enable only when you provide allowlist
+# TURNSTILE_ALLOWED_HOSTNAMES = "landing.example.com"  # Comma-separated allowlist when HOSTNAME enforcement is on
+#                                                        # Example: "landing.example.com,landingv2.example.com"
+#
 # # ═══════════════════════════════════════════════════════════════
 # # ⚠️ NEW: ALTCHA Proof-of-Work Anti-Bot Protection (防爬虫 PoW 验证)
 # # ═══════════════════════════════════════════════════════════════

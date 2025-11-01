@@ -200,6 +200,17 @@ const resolveConfig = (env = {}) => {
   if (turnstileCookieExpireSeconds <= 0) {
     turnstileCookieExpireSeconds = parseWindowTime('2m');
   }
+  const rawTurnstileExpectedAction = env.TURNSTILE_EXPECTED_ACTION && typeof env.TURNSTILE_EXPECTED_ACTION === 'string'
+    ? env.TURNSTILE_EXPECTED_ACTION.trim()
+    : '';
+  const turnstileExpectedAction = rawTurnstileExpectedAction || 'download';
+  const turnstileEnforceAction = parseBoolean(env.TURNSTILE_ENFORCE_ACTION, true);
+  const parsedHostnameList = typeof env.TURNSTILE_ALLOWED_HOSTNAMES === 'string'
+    ? env.TURNSTILE_ALLOWED_HOSTNAMES.split(',').map((entry) => entry.trim()).filter((entry) => entry.length > 0)
+    : [];
+  const normalizedAllowedHostnames = parsedHostnameList.map((entry) => entry.toLowerCase());
+  const hasAllowedHostnames = normalizedAllowedHostnames.length > 0;
+  const turnstileEnforceHostname = parseBoolean(env.TURNSTILE_ENFORCE_HOSTNAME, false) && hasAllowedHostnames;
 
   // Parse prefix lists (comma-separated)
   const parsePrefixList = (value) => {
@@ -491,6 +502,11 @@ const resolveConfig = (env = {}) => {
     turnstileTokenTTLSeconds,
     turnstileTokenTableName,
     turnstileCookieExpireSeconds,
+    turnstileExpectedAction,
+    turnstileEnforceAction,
+    turnstileEnforceHostname,
+    turnstileAllowedHostnames: normalizedAllowedHostnames,
+    turnstileAllowedHostnamesSet: new Set(normalizedAllowedHostnames),
     cleanupPercentage,
     blacklistPrefixes,
     whitelistPrefixes,
@@ -552,12 +568,32 @@ const verifyTurnstileToken = async (secretKey, token, remoteIP) => {
   } catch (error) {
     return { ok: false, message: 'turnstile verify parse failed' };
   }
+  const action = typeof result?.action === 'string' ? result.action : '';
+  const hostname = typeof result?.hostname === 'string' ? result.hostname : '';
+  const cdata = typeof result?.cdata === 'string' ? result.cdata : '';
+  const challengeTs = typeof result?.challenge_ts === 'string' ? result.challenge_ts : '';
+  const errorCodes = Array.isArray(result?.['error-codes']) ? result['error-codes'] : [];
   if (!result.success) {
-    const errorCodes = Array.isArray(result['error-codes']) ? result['error-codes'] : [];
     const reason = errorCodes.length > 0 ? String(errorCodes[0]) : 'turnstile verification failed';
-    return { ok: false, message: reason };
+    return {
+      ok: false,
+      message: reason,
+      errorCodes,
+      action,
+      hostname,
+      cdata,
+      challengeTs,
+      raw: result,
+    };
   }
-  return { ok: true };
+  return {
+    ok: true,
+    action,
+    hostname,
+    cdata,
+    challengeTs,
+    raw: result,
+  };
 };
 
 const computeHmac = async (secret, payload) => {
@@ -580,6 +616,18 @@ const encodeUrlSafeBase64 = (bytes) =>
   btoa(String.fromCharCode(...bytes))
     .replace(/\+/g, '-')
     .replace(/\//g, '_');
+
+const generateNonce = (byteLength = 16) => {
+  try {
+    const length = Number.isInteger(byteLength) && byteLength > 0 ? byteLength : 16;
+    const nonceBytes = new Uint8Array(length);
+    crypto.getRandomValues(nonceBytes);
+    return encodeUrlSafeBase64(nonceBytes);
+  } catch (error) {
+    console.error('[Binding] Failed to generate nonce:', error instanceof Error ? error.message : String(error));
+    return '';
+  }
+};
 
 const computeClientIpHash = async (clientIP) => {
   if (!clientIP || typeof clientIP !== 'string' || clientIP.trim().length === 0) {
@@ -640,6 +688,25 @@ const buildAltchaBinding = async (secret, pathHash, ipHash, expiresAtSeconds, sa
   const normalizedSalt = typeof salt === 'string' ? salt : '';
   const additionalData = normalizedSalt ? { salt: normalizedSalt } : null;
   return buildBindingPayload(secret, pathHash, ipHash, expiresAtSeconds, 'ALTCHA', additionalData);
+};
+
+const buildTurnstileCData = async (secret, bindingMac, nonce) => {
+  if (!secret || typeof secret !== 'string' || secret.length === 0) {
+    return '';
+  }
+  if (!bindingMac || typeof bindingMac !== 'string' || bindingMac.length === 0) {
+    return '';
+  }
+  if (!nonce || typeof nonce !== 'string' || nonce.length === 0) {
+    return '';
+  }
+  try {
+    const macBytes = await computeHmac(secret, `${bindingMac}:${nonce}`);
+    return encodeUrlSafeBase64(macBytes);
+  } catch (error) {
+    console.error('[Turnstile Binding] Failed to compute cData:', error instanceof Error ? error.message : String(error));
+    return '';
+  }
 };
 
 const hmacSha256Sign = async (secret, data, expire) => {
@@ -1158,7 +1225,7 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
     }
   }
 
-  const shouldBindToken = Boolean(
+  let shouldBindToken = Boolean(
     needTurnstile &&
     config.turnstileTokenBindingEnabled &&
     tokenHash &&
@@ -1415,6 +1482,8 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
   }
 
   let altchaTokenHash = null;
+  let expectedTurnstileCData = '';
+  let payloadTurnstileNonce = '';
   if (needTurnstile && config.turnstileCookieExpireSeconds > 0) {
     if (!turnstileBindingPayload) {
       return respondJson(origin, { code: 463, message: 'turnstile binding required' }, 403);
@@ -1430,8 +1499,16 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
     const payloadBindingExpiresAt = Number.isFinite(rawBindingExpires)
       ? Math.floor(rawBindingExpires)
       : Number.parseInt(rawBindingExpires, 10);
+    payloadTurnstileNonce = typeof turnstileBindingPayload.nonce === 'string' ? turnstileBindingPayload.nonce : '';
+    const payloadBindingCData = typeof turnstileBindingPayload.cdata === 'string' ? turnstileBindingPayload.cdata : '';
     if (!payloadPathHash || !payloadBindingMac || !Number.isFinite(payloadBindingExpiresAt) || payloadBindingExpiresAt <= 0) {
       return respondJson(origin, { code: 463, message: 'turnstile binding missing' }, 403);
+    }
+    if (!payloadTurnstileNonce) {
+      return respondJson(origin, { code: 463, message: 'turnstile binding missing nonce' }, 403);
+    }
+    if (!/^[A-Za-z0-9_-]+$/.test(payloadTurnstileNonce)) {
+      return respondJson(origin, { code: 463, message: 'turnstile binding nonce invalid' }, 403);
     }
     const expectedPathHash = typeof filepathHash === 'string' ? filepathHash : '';
     const expectedIpHash = await computeClientIpHash(clientIP);
@@ -1452,6 +1529,20 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
       payloadBindingMac !== expectedBinding.bindingMac ||
       payloadBindingExpiresAt !== expectedBinding.expiresAt;
     if (mismatch) {
+      return respondJson(origin, { code: 463, message: 'turnstile binding mismatch' }, 403);
+    }
+    expectedTurnstileCData = await buildTurnstileCData(
+      config.pageSecret,
+      expectedBinding.bindingMac,
+      payloadTurnstileNonce
+    );
+    if (!expectedTurnstileCData) {
+      return respondJson(origin, { code: 500, message: 'turnstile binding cdata unavailable' }, 500);
+    }
+    if (!payloadBindingCData) {
+      return respondJson(origin, { code: 463, message: 'turnstile binding missing cdata' }, 403);
+    }
+    if (payloadBindingCData !== expectedTurnstileCData) {
       return respondJson(origin, { code: 463, message: 'turnstile binding mismatch' }, 403);
     }
   }
@@ -1529,6 +1620,24 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
     const verification = await verifyTurnstileToken(config.turnstileSecretKey, rawTurnstileToken, clientIP);
     if (!verification.ok) {
       return respondJson(origin, { code: 462, message: verification.message || 'turnstile verification failed' }, 403);
+    }
+    if (expectedTurnstileCData) {
+      const responseCData = typeof verification.cdata === 'string' ? verification.cdata : '';
+      if (!responseCData || responseCData !== expectedTurnstileCData) {
+        return respondJson(origin, { code: 463, message: 'turnstile cdata mismatch' }, 403);
+      }
+    }
+    if (config.turnstileEnforceAction) {
+      const action = typeof verification.action === 'string' ? verification.action : '';
+      if (action !== config.turnstileExpectedAction) {
+        return respondJson(origin, { code: 463, message: 'turnstile action mismatch' }, 403);
+      }
+    }
+    if (config.turnstileEnforceHostname) {
+      const hostname = typeof verification.hostname === 'string' ? verification.hostname.toLowerCase().trim() : '';
+      if (!hostname || !config.turnstileAllowedHostnamesSet.has(hostname)) {
+        return respondJson(origin, { code: 463, message: 'turnstile hostname mismatch' }, 403);
+      }
     }
     if (shouldBindToken) {
       scheduleTokenBindingInsert(filepathHash);
@@ -1710,17 +1819,18 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
       console.error('[Unified Check] Failed:', error instanceof Error ? error.message : String(error));
       const pgHandle = config.rateLimitConfig?.pgErrorHandle || 'fail-closed';
       if (pgHandle === 'fail-open') {
-        console.warn('[Unified Check] fail-open: continuing with standalone checks');
-        unifiedResult = null;
-        cacheHit = false;
-        if (shouldBindToken) {
-          console.warn('[Unified Check] Token binding DB unavailable, will fallback to stateless siteverify');
-          tokenBindingAllowed = false;
-          shouldRecordTokenBinding = false;
-        }
-      } else {
-        const message = error instanceof Error ? error.message : String(error);
-        return respondJson(origin, { code: 500, message: `unified check failed: ${message}` }, 500);
+      console.warn('[Unified Check] fail-open: continuing with standalone checks');
+      unifiedResult = null;
+      cacheHit = false;
+      if (shouldBindToken) {
+        console.warn('[Unified Check] Token binding DB unavailable, falling back to stateless protection');
+        tokenBindingAllowed = true;
+        shouldBindToken = false;
+        shouldRecordTokenBinding = false;
+      }
+    } else {
+      const message = error instanceof Error ? error.message : String(error);
+      return respondJson(origin, { code: 500, message: `unified check failed: ${message}` }, 500);
       }
     }
   }
@@ -1737,14 +1847,31 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
     );
     if (!verification.ok) {
       console.error('[Turnstile] Stateless verification failed:', verification.message);
-      const pgHandle = config.rateLimitConfig?.pgErrorHandle || 'fail-closed';
-      if (pgHandle === 'fail-closed') {
-        return respondJson(origin, {
-          code: 462,
-          message: verification.message || 'turnstile verification failed'
-        }, 403);
+      return respondJson(origin, {
+        code: 462,
+        message: verification.message || 'turnstile verification failed'
+      }, 403);
+    }
+    if (expectedTurnstileCData) {
+      const responseCData = typeof verification.cdata === 'string' ? verification.cdata : '';
+      if (!responseCData || responseCData !== expectedTurnstileCData) {
+        console.error('[Turnstile] Stateless verification cdata mismatch');
+        return respondJson(origin, { code: 463, message: 'turnstile cdata mismatch' }, 403);
       }
-      console.warn('[Turnstile] fail-open: allowing request despite verification failure');
+    }
+    if (config.turnstileEnforceAction) {
+      const action = typeof verification.action === 'string' ? verification.action : '';
+      if (action !== config.turnstileExpectedAction) {
+        console.error('[Turnstile] Stateless verification action mismatch:', action);
+        return respondJson(origin, { code: 463, message: 'turnstile action mismatch' }, 403);
+      }
+    }
+    if (config.turnstileEnforceHostname) {
+      const hostname = typeof verification.hostname === 'string' ? verification.hostname.toLowerCase().trim() : '';
+      if (!hostname || !config.turnstileAllowedHostnamesSet.has(hostname)) {
+        console.error('[Turnstile] Stateless verification hostname mismatch:', hostname);
+        return respondJson(origin, { code: 463, message: 'turnstile hostname mismatch' }, 403);
+      }
     }
   }
 
@@ -2538,12 +2665,24 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
           expiresAt,
           'Turnstile'
         );
-        turnstileBindingPayload = {
-          pathHash: binding.pathHash,
-          ipHash: binding.ipHash,
-          binding: binding.bindingMac,
-          bindingExpiresAt: binding.expiresAt,
-        };
+        if (binding?.bindingMac) {
+          const nonce = generateNonce();
+          const cdata = await buildTurnstileCData(config.pageSecret, binding.bindingMac, nonce);
+          if (nonce && cdata) {
+            turnstileBindingPayload = {
+              pathHash: binding.pathHash,
+              ipHash: binding.ipHash,
+              binding: binding.bindingMac,
+              bindingExpiresAt: binding.expiresAt,
+              nonce,
+              cdata,
+            };
+          } else {
+            console.error('[Turnstile Binding] Failed to generate nonce or cData for binding');
+          }
+        } else {
+          console.error('[Turnstile Binding] Missing binding MAC; cannot emit binding payload');
+        }
       }
     } catch (error) {
       console.error('[Turnstile Binding] Failed to generate challenge binding:', error instanceof Error ? error.message : String(error));
@@ -2590,6 +2729,7 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
   return renderLandingPage(url.pathname, {
     underAttack: needTurnstile,
     turnstileSiteKey: config.turnstileSiteKey,
+    turnstileAction: config.turnstileExpectedAction,
     altchaChallenge: altchaChallengePayload,
     turnstileBinding: turnstileBindingPayload,
     autoRedirect: config.autoRedirect,
