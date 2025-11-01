@@ -112,6 +112,7 @@ const pageScript = String.raw`
       underAttack: false,
       siteKey: '',
       altchaChallenge: null,
+      turnstileBinding: null,
       scriptLoaded: false,
       scriptLoading: null,
       widgetId: null,
@@ -133,6 +134,14 @@ const pageScript = String.raw`
     if (!downloadBtn) return;
     if (state.infoReady) {
       return;
+    }
+    if (shouldEnforceTurnstile()) {
+      const { valid, reason } = getTurnstileBindingStatus();
+      if (!valid) {
+        downloadBtn.disabled = true;
+        downloadBtn.textContent = reason === 'expired' ? '验证已过期' : '验证不可用';
+        return;
+      }
     }
     const {
       needAltcha,
@@ -175,6 +184,41 @@ const pageScript = String.raw`
 
   const shouldEnforceTurnstile = () => state.verification.needTurnstile === true;
 
+  const getTurnstileBindingStatus = () => {
+    const binding = state.security.turnstileBinding;
+    if (!shouldEnforceTurnstile()) {
+      return { valid: true, binding: null, reason: null };
+    }
+    if (!binding || typeof binding !== 'object') {
+      return { valid: false, binding: null, reason: 'missing' };
+    }
+    const expiresAt = Number.isFinite(binding.bindingExpiresAt)
+      ? binding.bindingExpiresAt
+      : Number.parseInt(binding.bindingExpiresAt, 10);
+    if (!Number.isFinite(expiresAt) || expiresAt <= 0) {
+      return { valid: false, binding, reason: 'invalid' };
+    }
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    if (expiresAt <= nowSeconds) {
+      return { valid: false, binding, reason: 'expired' };
+    }
+    return { valid: true, binding: { ...binding, bindingExpiresAt: expiresAt }, reason: null };
+  };
+
+  const ensureTurnstileBinding = () => {
+    const status = getTurnstileBindingStatus();
+    if (status.valid && status.binding) {
+      return status.binding;
+    }
+    if (!status.valid) {
+      if (status.reason === 'expired') {
+        throw new Error('Turnstile 绑定已过期，请刷新页面后重试');
+      }
+      throw new Error('缺少 Turnstile 绑定信息，请刷新页面后重试');
+    }
+    return null;
+  };
+
   const syncTurnstilePrompt = () => {
     if (!shouldEnforceTurnstile()) {
       hideTurnstileContainer();
@@ -184,6 +228,15 @@ const pageScript = String.raw`
       return;
     }
     showTurnstileContainer();
+    const status = getTurnstileBindingStatus();
+    if (!status.valid) {
+      if (status.reason === 'expired') {
+        setTurnstileMessage('验证已过期，请刷新页面');
+      } else {
+        setTurnstileMessage('验证信息缺失，请刷新页面');
+      }
+      return;
+    }
     if (!state.verification.turnstileToken) {
       setTurnstileMessage('请完成验证后继续下载');
     }
@@ -414,6 +467,44 @@ const pageScript = String.raw`
       security.altchaChallenge && typeof security.altchaChallenge === 'object'
         ? security.altchaChallenge
         : null;
+    const rawTurnstileBinding =
+      security.turnstileBinding && typeof security.turnstileBinding === 'object'
+        ? security.turnstileBinding
+        : null;
+    if (rawTurnstileBinding) {
+      const bindingExpiresAt =
+        typeof rawTurnstileBinding.bindingExpiresAt === 'number'
+          ? rawTurnstileBinding.bindingExpiresAt
+          : typeof rawTurnstileBinding.bindingExpiresAt === 'string'
+            ? Number.parseInt(rawTurnstileBinding.bindingExpiresAt, 10)
+            : typeof rawTurnstileBinding.expiresAt === 'number'
+              ? rawTurnstileBinding.expiresAt
+              : typeof rawTurnstileBinding.expiresAt === 'string'
+                ? Number.parseInt(rawTurnstileBinding.expiresAt, 10)
+                : 0;
+      const bindingValue =
+        typeof rawTurnstileBinding.binding === 'string'
+          ? rawTurnstileBinding.binding
+          : typeof rawTurnstileBinding.bindingMac === 'string'
+            ? rawTurnstileBinding.bindingMac
+            : '';
+      const pathHash =
+        typeof rawTurnstileBinding.pathHash === 'string' ? rawTurnstileBinding.pathHash : '';
+      const ipHash =
+        typeof rawTurnstileBinding.ipHash === 'string' ? rawTurnstileBinding.ipHash : '';
+      if (bindingValue && bindingExpiresAt > 0 && pathHash) {
+        state.security.turnstileBinding = {
+          pathHash,
+          ipHash,
+          binding: bindingValue,
+          bindingExpiresAt,
+        };
+      } else {
+        state.security.turnstileBinding = null;
+      }
+    } else {
+      state.security.turnstileBinding = null;
+    }
     state.verification.needAltcha = !!state.security.altchaChallenge;
     state.verification.needTurnstile =
       state.security.underAttack && typeof state.security.siteKey === 'string' && state.security.siteKey.length > 0;
@@ -488,6 +579,7 @@ const pageScript = String.raw`
       normalizedMessage.includes('461') ||
       normalizedMessage.includes('462') ||
       normalizedMessage.includes('463') ||
+      normalizedMessage.includes('binding') ||
       normalizedMessage.includes('rate limit') ||
       normalizedMessage.includes('turnstile');
 
@@ -510,6 +602,11 @@ const pageScript = String.raw`
     }
     setStatus(errorPrefix + rawMessage);
 
+    if (normalizedMessage.includes('binding')) {
+      state.security.turnstileBinding = null;
+      syncTurnstilePrompt();
+    }
+
     state.downloadBtnMode = 'download';
     state.infoReady = false;
     downloadBtn.textContent = requiresTurnstileReset ? '等待验证' : '获取失败';
@@ -517,6 +614,11 @@ const pageScript = String.raw`
 
     retryBtn.disabled = requiresTurnstileReset;
     clearCacheBtn.disabled = false;
+    if (normalizedMessage.includes('binding')) {
+      downloadBtn.textContent = '验证已过期';
+      retryBtn.disabled = true;
+      state.awaitingRetryUnlock = true;
+    }
   };
 
   const fetchInfo = async ({ forceRefresh = false } = {}) => {
@@ -535,9 +637,31 @@ const pageScript = String.raw`
       ? startAltchaComputation()
       : Promise.resolve(null);
 
+    let turnstileBindingEncoded = '';
+    let turnstileBindingExpiresAt = 0;
+    if (shouldEnforceTurnstile()) {
+      const binding = ensureTurnstileBinding();
+      if (binding) {
+        turnstileBindingExpiresAt = Number(binding.bindingExpiresAt) || 0;
+        const payload = {
+          pathHash: binding.pathHash,
+          ipHash: binding.ipHash,
+          binding: binding.binding || '',
+          bindingExpiresAt: binding.bindingExpiresAt,
+        };
+        turnstileBindingEncoded = base64urlEncode(JSON.stringify(payload));
+      }
+    }
+
     let turnstileToken = '';
     if (shouldEnforceTurnstile()) {
       turnstileToken = await waitForTurnstileToken();
+      if (turnstileBindingExpiresAt > 0) {
+        const nowSeconds = Math.floor(Date.now() / 1000);
+        if (nowSeconds >= turnstileBindingExpiresAt) {
+          throw new Error('Turnstile 绑定已过期，请刷新页面后重试');
+        }
+      }
     }
 
     let altchaSolution = null;
@@ -565,6 +689,9 @@ const pageScript = String.raw`
     const headers = new Headers();
     if (turnstileToken) {
       headers.set('cf-turnstile-response', turnstileToken);
+    }
+    if (turnstileBindingEncoded) {
+      headers.set('x-turnstile-binding', turnstileBindingEncoded);
     }
 
     setStatus('正在获取下载信息...');
@@ -844,11 +971,39 @@ const renderLandingPageHtml = (path, options = {}) => {
             : 0,
       }
     : null;
+  const rawTurnstileBinding =
+    normalizedOptions.turnstileBinding && typeof normalizedOptions.turnstileBinding === 'object'
+      ? normalizedOptions.turnstileBinding
+      : null;
+  const normalizedTurnstileBinding = rawTurnstileBinding
+    ? {
+        pathHash:
+          typeof rawTurnstileBinding.pathHash === 'string' ? rawTurnstileBinding.pathHash : '',
+        ipHash: typeof rawTurnstileBinding.ipHash === 'string' ? rawTurnstileBinding.ipHash : '',
+        binding:
+          typeof rawTurnstileBinding.binding === 'string'
+            ? rawTurnstileBinding.binding
+            : typeof rawTurnstileBinding.bindingMac === 'string'
+            ? rawTurnstileBinding.bindingMac
+            : '',
+        bindingExpiresAt:
+          typeof rawTurnstileBinding.bindingExpiresAt === 'number'
+            ? rawTurnstileBinding.bindingExpiresAt
+            : typeof rawTurnstileBinding.bindingExpiresAt === 'string'
+            ? Number.parseInt(rawTurnstileBinding.bindingExpiresAt, 10)
+            : typeof rawTurnstileBinding.expiresAt === 'number'
+            ? rawTurnstileBinding.expiresAt
+            : typeof rawTurnstileBinding.expiresAt === 'string'
+            ? Number.parseInt(rawTurnstileBinding.expiresAt, 10)
+            : 0,
+      }
+    : null;
   const securityConfig = {
     underAttack: normalizedOptions.underAttack === true,
     turnstileSiteKey:
       typeof normalizedOptions.turnstileSiteKey === 'string' ? normalizedOptions.turnstileSiteKey : '',
     altchaChallenge: normalizedAltchaChallenge,
+    turnstileBinding: normalizedTurnstileBinding,
   };
   const securityJson = JSON.stringify(securityConfig).replace(/</g, '\\u003c');
   const autoRedirectEnabled = normalizedOptions.autoRedirect === true;

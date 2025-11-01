@@ -21,6 +21,8 @@ const REQUIRED_ENV = ['TOKEN', 'WORKER_ADDRESS_DOWNLOAD'];
 
 const TURNSTILE_VERIFY_ENDPOINT = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
 const TURNSTILE_HEADER = 'cf-turnstile-response';
+const TURNSTILE_BINDING_HEADER = 'x-turnstile-binding';
+const TURNSTILE_BINDING_QUERY = 'turnstile_binding';
 const TOKEN_BINDING_ERROR_MESSAGES = {
   1: 'turnstile token ip mismatch',
   2: 'turnstile token expired',
@@ -191,6 +193,13 @@ const resolveConfig = (env = {}) => {
   const turnstileTokenTableName = env.TURNSTILE_TOKEN_TABLE && typeof env.TURNSTILE_TOKEN_TABLE === 'string'
     ? env.TURNSTILE_TOKEN_TABLE.trim()
     : 'TURNSTILE_TOKEN_BINDING';
+  const rawTurnstileCookieExpire = env.TURNSTILE_COOKIE_EXPIRE_TIME && typeof env.TURNSTILE_COOKIE_EXPIRE_TIME === 'string'
+    ? env.TURNSTILE_COOKIE_EXPIRE_TIME.trim()
+    : '';
+  let turnstileCookieExpireSeconds = parseWindowTime(rawTurnstileCookieExpire || '2m');
+  if (turnstileCookieExpireSeconds <= 0) {
+    turnstileCookieExpireSeconds = parseWindowTime('2m');
+  }
 
   // Parse prefix lists (comma-separated)
   const parsePrefixList = (value) => {
@@ -481,6 +490,7 @@ const resolveConfig = (env = {}) => {
     turnstileTokenTTL: rawTurnstileTokenTTL,
     turnstileTokenTTLSeconds,
     turnstileTokenTableName,
+    turnstileCookieExpireSeconds,
     cleanupPercentage,
     blacklistPrefixes,
     whitelistPrefixes,
@@ -578,12 +588,12 @@ const computeClientIpHash = async (clientIP) => {
   try {
     return await sha256Hash(clientIP.trim());
   } catch (error) {
-    console.error('[ALTCHA] Failed to compute client IP hash:', error instanceof Error ? error.message : String(error));
+    console.error('[Binding] Failed to compute client IP hash:', error instanceof Error ? error.message : String(error));
     return '';
   }
 };
 
-const buildAltchaBinding = async (secret, pathHash, ipHash, expiresAtSeconds) => {
+const buildBindingPayload = async (secret, pathHash, ipHash, expiresAtSeconds, context = 'Binding') => {
   const normalizedPathHash = typeof pathHash === 'string' ? pathHash : '';
   const normalizedIpHash = typeof ipHash === 'string' ? ipHash : '';
   const normalizedExpires =
@@ -603,7 +613,7 @@ const buildAltchaBinding = async (secret, pathHash, ipHash, expiresAtSeconds) =>
       expiresAt: normalizedExpires,
     };
   } catch (error) {
-    console.error('[ALTCHA] Failed to compute binding MAC:', error instanceof Error ? error.message : String(error));
+    console.error(`[${context}] Failed to compute binding MAC:`, error instanceof Error ? error.message : String(error));
     return {
       pathHash: normalizedPathHash,
       ipHash: normalizedIpHash,
@@ -612,6 +622,9 @@ const buildAltchaBinding = async (secret, pathHash, ipHash, expiresAtSeconds) =>
     };
   }
 };
+
+const buildAltchaBinding = async (secret, pathHash, ipHash, expiresAtSeconds) =>
+  buildBindingPayload(secret, pathHash, ipHash, expiresAtSeconds, 'ALTCHA');
 
 const hmacSha256Sign = async (secret, data, expire) => {
   const bytes = await computeHmac(secret, `${data}:${expire}`);
@@ -1070,6 +1083,20 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
     url.searchParams.get(TURNSTILE_HEADER) ||
     url.searchParams.get('turnstile_token') ||
     '';
+  const rawTurnstileBinding =
+    request.headers.get(TURNSTILE_BINDING_HEADER) ||
+    url.searchParams.get(TURNSTILE_BINDING_QUERY) ||
+    '';
+  let turnstileBindingPayload = null;
+  if (rawTurnstileBinding) {
+    try {
+      const decodedBinding = base64urlDecode(rawTurnstileBinding);
+      turnstileBindingPayload = JSON.parse(decodedBinding);
+    } catch (error) {
+      console.error('[Turnstile Binding] Failed to decode binding payload:', error instanceof Error ? error.message : String(error));
+      return respondJson(origin, { code: 400, message: 'invalid turnstile binding format' }, 400);
+    }
+  }
   const altChallengeResultParam = url.searchParams.get('altChallengeResult');
   let altchaPayload = null;
   if (altChallengeResultParam) {
@@ -1372,6 +1399,47 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
   }
 
   let altchaTokenHash = null;
+  if (needTurnstile && config.turnstileCookieExpireSeconds > 0) {
+    if (!turnstileBindingPayload) {
+      return respondJson(origin, { code: 463, message: 'turnstile binding required' }, 403);
+    }
+    const payloadPathHash = typeof turnstileBindingPayload.pathHash === 'string' ? turnstileBindingPayload.pathHash : '';
+    const payloadIpHash = typeof turnstileBindingPayload.ipHash === 'string' ? turnstileBindingPayload.ipHash : '';
+    const payloadBindingMac = typeof turnstileBindingPayload.binding === 'string'
+      ? turnstileBindingPayload.binding
+      : typeof turnstileBindingPayload.bindingMac === 'string'
+        ? turnstileBindingPayload.bindingMac
+        : '';
+    const rawBindingExpires = turnstileBindingPayload.bindingExpiresAt ?? turnstileBindingPayload.expiresAt;
+    const payloadBindingExpiresAt = Number.isFinite(rawBindingExpires)
+      ? Math.floor(rawBindingExpires)
+      : Number.parseInt(rawBindingExpires, 10);
+    if (!payloadPathHash || !payloadBindingMac || !Number.isFinite(payloadBindingExpiresAt) || payloadBindingExpiresAt <= 0) {
+      return respondJson(origin, { code: 463, message: 'turnstile binding missing' }, 403);
+    }
+    const expectedPathHash = typeof filepathHash === 'string' ? filepathHash : '';
+    const expectedIpHash = await computeClientIpHash(clientIP);
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    if (payloadBindingExpiresAt < nowSeconds) {
+      return respondJson(origin, { code: 463, message: 'turnstile binding expired' }, 403);
+    }
+    const expectedBinding = await buildBindingPayload(
+      config.pageSecret,
+      expectedPathHash,
+      expectedIpHash,
+      payloadBindingExpiresAt,
+      'Turnstile'
+    );
+    const mismatch =
+      payloadPathHash !== expectedBinding.pathHash ||
+      payloadIpHash !== expectedBinding.ipHash ||
+      payloadBindingMac !== expectedBinding.bindingMac ||
+      payloadBindingExpiresAt !== expectedBinding.expiresAt;
+    if (mismatch) {
+      return respondJson(origin, { code: 463, message: 'turnstile binding mismatch' }, 403);
+    }
+  }
+
   if (needAltcha) {
     if (!altchaPayload) {
       return respondJson(origin, { code: 403, message: 'ALTCHA solution required' }, 403);
@@ -2419,15 +2487,50 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
 
   // Default: render landing page
   let altchaChallengePayload = null;
+  let turnstileBindingPayload = null;
   const needsAltchaChallenge = needAltcha;
+  const needsTurnstileBinding = needTurnstile && config.turnstileCookieExpireSeconds > 0;
+  const shouldGenerateBindings = !shouldRedirect && (needsAltchaChallenge || needsTurnstileBinding);
+  let decodedChallengePath = '';
+  if (shouldGenerateBindings) {
+    try {
+      decodedChallengePath = decodeURIComponent(url.pathname);
+    } catch (error) {
+      decodedChallengePath = url.pathname;
+    }
+  }
+
+  if (!shouldRedirect && needsTurnstileBinding) {
+    try {
+      const bindingPathHash = decodedChallengePath ? await sha256Hash(decodedChallengePath) : '';
+      const bindingIpHash = await computeClientIpHash(clientIP);
+      const nowSeconds = Math.floor(Date.now() / 1000);
+      const ttlSeconds = Number.isFinite(config.turnstileCookieExpireSeconds)
+        ? Math.floor(config.turnstileCookieExpireSeconds)
+        : 0;
+      if (ttlSeconds > 0) {
+        const expiresAt = nowSeconds + ttlSeconds;
+        const binding = await buildBindingPayload(
+          config.pageSecret,
+          bindingPathHash,
+          bindingIpHash,
+          expiresAt,
+          'Turnstile'
+        );
+        turnstileBindingPayload = {
+          pathHash: binding.pathHash,
+          ipHash: binding.ipHash,
+          binding: binding.bindingMac,
+          bindingExpiresAt: binding.expiresAt,
+        };
+      }
+    } catch (error) {
+      console.error('[Turnstile Binding] Failed to generate challenge binding:', error instanceof Error ? error.message : String(error));
+    }
+  }
+
   if (!shouldRedirect && needsAltchaChallenge) {
     try {
-      let decodedChallengePath = '';
-      try {
-        decodedChallengePath = decodeURIComponent(url.pathname);
-      } catch (error) {
-        decodedChallengePath = url.pathname;
-      }
       const challengePathHash = decodedChallengePath ? await sha256Hash(decodedChallengePath) : '';
       const challengeIpHash = await computeClientIpHash(clientIP);
       const baseNowSeconds = Math.floor(Date.now() / 1000);
@@ -2466,6 +2569,7 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
     underAttack: needTurnstile,
     turnstileSiteKey: config.turnstileSiteKey,
     altchaChallenge: altchaChallengePayload,
+    turnstileBinding: turnstileBindingPayload,
     autoRedirect: config.autoRedirect,
   });
 };
