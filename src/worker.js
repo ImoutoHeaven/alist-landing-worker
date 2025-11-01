@@ -622,7 +622,7 @@ const generateNonce = (byteLength = 16) => {
     const length = Number.isInteger(byteLength) && byteLength > 0 ? byteLength : 16;
     const nonceBytes = new Uint8Array(length);
     crypto.getRandomValues(nonceBytes);
-    return encodeUrlSafeBase64(nonceBytes);
+    return encodeUrlSafeBase64(nonceBytes).replace(/=+$/u, '');
   } catch (error) {
     console.error('[Binding] Failed to generate nonce:', error instanceof Error ? error.message : String(error));
     return '';
@@ -702,7 +702,7 @@ const buildTurnstileCData = async (secret, bindingMac, nonce) => {
   }
   try {
     const macBytes = await computeHmac(secret, `${bindingMac}:${nonce}`);
-    return encodeUrlSafeBase64(macBytes);
+    return encodeUrlSafeBase64(macBytes).replace(/=+$/u, '');
   } catch (error) {
     console.error('[Turnstile Binding] Failed to compute cData:', error instanceof Error ? error.message : String(error));
     return '';
@@ -1499,8 +1499,13 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
     const payloadBindingExpiresAt = Number.isFinite(rawBindingExpires)
       ? Math.floor(rawBindingExpires)
       : Number.parseInt(rawBindingExpires, 10);
-    payloadTurnstileNonce = typeof turnstileBindingPayload.nonce === 'string' ? turnstileBindingPayload.nonce : '';
-    const payloadBindingCData = typeof turnstileBindingPayload.cdata === 'string' ? turnstileBindingPayload.cdata : '';
+    payloadTurnstileNonce = typeof turnstileBindingPayload.nonce === 'string'
+      ? turnstileBindingPayload.nonce.replace(/=+$/u, '')
+      : '';
+    const payloadBindingCDataRaw = typeof turnstileBindingPayload.cdata === 'string'
+      ? turnstileBindingPayload.cdata
+      : '';
+    const payloadBindingCData = payloadBindingCDataRaw.replace(/=+$/u, '');
     if (!payloadPathHash || !payloadBindingMac || !Number.isFinite(payloadBindingExpiresAt) || payloadBindingExpiresAt <= 0) {
       return respondJson(origin, { code: 463, message: 'turnstile binding missing' }, 403);
     }
@@ -1622,7 +1627,9 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
       return respondJson(origin, { code: 462, message: verification.message || 'turnstile verification failed' }, 403);
     }
     if (expectedTurnstileCData) {
-      const responseCData = typeof verification.cdata === 'string' ? verification.cdata : '';
+      const responseCData = typeof verification.cdata === 'string'
+        ? verification.cdata.replace(/=+$/u, '')
+        : '';
       if (!responseCData || responseCData !== expectedTurnstileCData) {
         return respondJson(origin, { code: 463, message: 'turnstile cdata mismatch' }, 403);
       }
@@ -1853,7 +1860,9 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
       }, 403);
     }
     if (expectedTurnstileCData) {
-      const responseCData = typeof verification.cdata === 'string' ? verification.cdata : '';
+      const responseCData = typeof verification.cdata === 'string'
+        ? verification.cdata.replace(/=+$/u, '')
+        : '';
       if (!responseCData || responseCData !== expectedTurnstileCData) {
         console.error('[Turnstile] Stateless verification cdata mismatch');
         return respondJson(origin, { code: 463, message: 'turnstile cdata mismatch' }, 403);

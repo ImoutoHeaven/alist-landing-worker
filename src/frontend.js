@@ -203,8 +203,8 @@ const pageScript = String.raw`
     if (expiresAt <= nowSeconds) {
       return { valid: false, binding, reason: 'expired' };
     }
-    const nonce = typeof binding.nonce === 'string' ? binding.nonce : '';
-    const cdata = typeof binding.cdata === 'string' ? binding.cdata : '';
+    const nonce = typeof binding.nonce === 'string' ? binding.nonce.replace(/=+$/u, '') : '';
+    const cdata = typeof binding.cdata === 'string' ? binding.cdata.replace(/=+$/u, '') : '';
     if (!nonce || !cdata) {
       return { valid: false, binding, reason: 'invalid' };
     }
@@ -519,9 +519,13 @@ const pageScript = String.raw`
       const ipHash =
         typeof rawTurnstileBinding.ipHash === 'string' ? rawTurnstileBinding.ipHash : '';
       const nonce =
-        typeof rawTurnstileBinding.nonce === 'string' ? rawTurnstileBinding.nonce : '';
+        typeof rawTurnstileBinding.nonce === 'string'
+          ? rawTurnstileBinding.nonce.replace(/=+$/u, '')
+          : '';
       const cdata =
-        typeof rawTurnstileBinding.cdata === 'string' ? rawTurnstileBinding.cdata : '';
+        typeof rawTurnstileBinding.cdata === 'string'
+          ? rawTurnstileBinding.cdata.replace(/=+$/u, '')
+          : '';
       if (bindingValue && bindingExpiresAt > 0 && pathHash && nonce && cdata) {
         state.security.turnstileBinding = {
           pathHash,
@@ -675,13 +679,15 @@ const pageScript = String.raw`
       const binding = ensureTurnstileBinding();
       if (binding) {
         turnstileBindingExpiresAt = Number(binding.bindingExpiresAt) || 0;
+        const sanitizedNonce = typeof binding.nonce === 'string' ? binding.nonce.replace(/=+$/u, '') : '';
+        const sanitizedCData = typeof binding.cdata === 'string' ? binding.cdata.replace(/=+$/u, '') : '';
         const payload = {
           pathHash: binding.pathHash,
           ipHash: binding.ipHash,
           binding: binding.binding || '',
           bindingExpiresAt: binding.bindingExpiresAt,
-          nonce: binding.nonce,
-          cdata: binding.cdata,
+          nonce: sanitizedNonce,
+          cdata: sanitizedCData,
         };
         turnstileBindingEncoded = base64urlEncode(JSON.stringify(payload));
       }
