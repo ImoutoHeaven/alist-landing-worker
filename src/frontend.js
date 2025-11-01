@@ -342,6 +342,11 @@ const pageScript = String.raw`
           binding: challenge.binding,
           bindingExpiresAt: challenge.bindingExpiresAt,
         };
+        const secondsUntilExpiry = Math.max(
+          0,
+          Math.floor(challenge.bindingExpiresAt - Date.now() / 1000)
+        );
+        log('PoW计算完成，' + secondsUntilExpiry + '秒后失效');
         state.verification.altchaSolution = solution;
         state.verification.altchaIssuedAt = Date.now();
         state.verification.altchaReady = true;
