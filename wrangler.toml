@@ -244,6 +244,7 @@ persist = true
 # ALIST_ADDRESS = "https://alist.example.com"  # Fallback AList base URL when appending expiry (ADDRESS/ALIST_BASE_URL also supported)
 # MIN_ALLOWED_BANDWIDTH = "10"            # Minimum allowed download bandwidth (Mbps)
 # MIN_DURATION_TIME = "1h"                # Minimum expiry duration for generated links (supports h/m/s suffix)
+# MAX_DURATION_TIME = "4h"               # Optional: cap download link lifetime (supports h/m/s suffix, e.g. "4h", "1d")
 # # ACTION 可选值:
 # # - block: 返回 403
 # # - verify-pow: 仅要求 ALTCHA PoW 验证
@@ -346,6 +347,17 @@ persist = true
 # POSTGREST_URL = "https://your-domain.com/postgrest"  # PostgREST API endpoint (without table name)
 # POSTGREST_TABLE_NAME = "IP_LIMIT_TABLE"  # Optional, defaults to IP_LIMIT_TABLE
 # # Note: VERIFY_HEADER and VERIFY_SECRET (already defined above) are used for PostgREST authentication
+#
+# # Session-Based Download Tickets (optional)
+# SESSION_ENABLED = "false"                       # Enable UUID session tickets; default disabled
+# SESSION_DB_MODE = ""                            # Optional override ("d1", "d1-rest", "custom-pg-rest"); falls back to DB_MODE
+# SESSION_D1_DATABASE_BINDING = "SESSIONDB"       # D1 binding for session storage (when SESSION_DB_MODE="d1")
+# SESSION_D1_TABLE_NAME = "SESSION_MAPPING_TABLE" # Session table name for D1 / D1-REST
+# SESSION_D1_ACCOUNT_ID = ""                      # Required when SESSION_DB_MODE="d1-rest"
+# SESSION_D1_DATABASE_ID = ""
+# SESSION_D1_API_TOKEN = ""
+# SESSION_POSTGREST_URL = "https://your-domain.com/postgrest"  # Required when SESSION_DB_MODE="custom-pg-rest"
+# SESSION_POSTGREST_TABLE_NAME = "SESSION_MAPPING_TABLE"
 #
 # # ═══════════════════════════════════════════════════════════════
 # # ⚠️ NEW: Filesize Cache System (Reduce /api/fs/get API Calls)

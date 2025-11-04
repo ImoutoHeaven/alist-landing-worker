@@ -13,6 +13,7 @@ import { createChallenge, verifySolution } from 'altcha-lib';
 import { renderLandingPage } from './frontend.js';
 import { createRateLimiter } from './ratelimit/factory.js';
 import { createCacheManager } from './cache/factory.js';
+import { createSessionDBManager } from './session-db/factory.js';
 import { unifiedCheck } from './unified-check.js';
 import { unifiedCheckD1 } from './unified-check-d1.js';
 import { unifiedCheckD1Rest } from './unified-check-d1-rest.js';
@@ -480,6 +481,17 @@ const resolveConfig = (env = {}) => {
     : '';
   const parsedMinDurationSeconds = parseWindowTime(minDurationLabel);
   const minDurationSeconds = parsedMinDurationSeconds > 0 ? parsedMinDurationSeconds : 3600;
+  const rawMaxDurationLabel =
+    typeof env.MAX_DURATION_TIME === 'string' ? env.MAX_DURATION_TIME.trim() : '';
+  let maxDurationMilliseconds = null;
+  let maxDurationSeconds = 0;
+  if (rawMaxDurationLabel) {
+    const parsedMaxDurationSeconds = parseWindowTime(rawMaxDurationLabel);
+    if (parsedMaxDurationSeconds > 0) {
+      maxDurationMilliseconds = parsedMaxDurationSeconds * 1000;
+      maxDurationSeconds = parsedMaxDurationSeconds;
+    }
+  }
 
   if (appendAdditional && !normalizedAlistAddress) {
     throw new Error('ALIST_ADDRESS (or ADDRESS) is required when IF_APPEND_ADDITIONAL is true');
@@ -490,6 +502,88 @@ const resolveConfig = (env = {}) => {
     if (!ratelimiter || typeof ratelimiter.limit !== 'function') {
       throw new Error(
         `ENABLE_CF_RATELIMITER is true but binding "${cfRatelimiterBinding}" not found or invalid. Please configure [[rate_limit]] binding in wrangler.toml with name="${cfRatelimiterBinding}".`
+      );
+    }
+  }
+
+  const sessionEnabled = parseBoolean(env.SESSION_ENABLED, false);
+  const rawSessionDbMode = typeof env.SESSION_DB_MODE === 'string' ? env.SESSION_DB_MODE.trim() : '';
+  const sessionDbMode = rawSessionDbMode || dbMode || '';
+  const sessionTableNameRaw = typeof env.SESSION_D1_TABLE_NAME === 'string' ? env.SESSION_D1_TABLE_NAME.trim() : '';
+  const sessionDefaultTable = sessionTableNameRaw || 'SESSION_MAPPING_TABLE';
+  const sessionPostgrestTableRaw = typeof env.SESSION_POSTGREST_TABLE_NAME === 'string'
+    ? env.SESSION_POSTGREST_TABLE_NAME.trim()
+    : '';
+  const sessionPostgrestTableName = sessionPostgrestTableRaw || sessionDefaultTable;
+
+  let sessionDbConfig = null;
+  const normalizedSessionDbMode = sessionDbMode ? sessionDbMode.toLowerCase() : '';
+
+  if (sessionEnabled) {
+    if (!normalizedSessionDbMode) {
+      throw new Error('SESSION_ENABLED is true but SESSION_DB_MODE (or DB_MODE fallback) is missing');
+    }
+
+    if (normalizedSessionDbMode === 'd1') {
+      const explicitBinding = normalizeString(env.SESSION_D1_DATABASE_BINDING, '');
+      const fallbackBinding =
+        normalizeString(cacheConfig?.databaseBinding, '') ||
+        normalizeString(rateLimitConfig?.databaseBinding, '') ||
+        'SESSIONDB';
+      const databaseBinding = explicitBinding || fallbackBinding;
+      sessionDbConfig = {
+        env,
+        databaseBinding,
+        tableName: sessionDefaultTable,
+      };
+    } else if (normalizedSessionDbMode === 'd1-rest') {
+      const accountId =
+        normalizeString(env.SESSION_D1_ACCOUNT_ID, '') ||
+        normalizeString(rateLimitConfig?.accountId, '') ||
+        normalizeString(cacheConfig?.accountId, '') ||
+        normalizeString(d1RestConfig?.accountId, '');
+      const databaseId =
+        normalizeString(env.SESSION_D1_DATABASE_ID, '') ||
+        normalizeString(rateLimitConfig?.databaseId, '') ||
+        normalizeString(cacheConfig?.databaseId, '') ||
+        normalizeString(d1RestConfig?.databaseId, '');
+      const apiToken =
+        normalizeString(env.SESSION_D1_API_TOKEN, '') ||
+        normalizeString(rateLimitConfig?.apiToken, '') ||
+        normalizeString(cacheConfig?.apiToken, '') ||
+        normalizeString(d1RestConfig?.apiToken, '');
+
+      if (!accountId || !databaseId || !apiToken) {
+        throw new Error(
+          'SESSION_DB_MODE is "d1-rest" but SESSION_D1_ACCOUNT_ID, SESSION_D1_DATABASE_ID, or SESSION_D1_API_TOKEN is missing'
+        );
+      }
+
+      sessionDbConfig = {
+        accountId,
+        databaseId,
+        apiToken,
+        tableName: sessionDefaultTable,
+      };
+    } else if (normalizedSessionDbMode === 'custom-pg-rest') {
+      const postgrestUrl =
+        normalizeString(env.SESSION_POSTGREST_URL, '') ||
+        normalizeString(rateLimitConfig?.postgrestUrl, '') ||
+        normalizeString(cacheConfig?.postgrestUrl, '');
+
+      if (!postgrestUrl) {
+        throw new Error('SESSION_DB_MODE is "custom-pg-rest" but SESSION_POSTGREST_URL is missing');
+      }
+
+      sessionDbConfig = {
+        postgrestUrl,
+        tableName: sessionPostgrestTableName,
+        verifyHeader: verifyHeaders,
+        verifySecret: verifySecrets,
+      };
+    } else {
+      throw new Error(
+        `Invalid SESSION_DB_MODE: "${sessionDbMode}". Valid options are: "d1", "d1-rest", "custom-pg-rest".`
       );
     }
   }
@@ -557,6 +651,11 @@ const resolveConfig = (env = {}) => {
     alistAddress: normalizedAlistAddress,
     minBandwidthBytesPerSecond: bandwidthBytesPerSecond,
     minDurationSeconds,
+    maxDurationTime: maxDurationMilliseconds,
+    maxDurationSeconds,
+    sessionEnabled,
+    sessionDbMode: normalizedSessionDbMode,
+    sessionDbConfig,
   };
 };
 
@@ -869,11 +968,23 @@ const parseFileSize = (rawSize) => {
   return 0;
 };
 
-const calculateExpireTimestamp = (sizeBytes, minDurationSeconds, bandwidthBytesPerSecond) => {
+const calculateExpireTimestamp = (
+  sizeBytes,
+  minDurationSeconds,
+  bandwidthBytesPerSecond,
+  maxDurationSeconds = 0
+) => {
   const safeMinDuration = minDurationSeconds > 0 ? minDurationSeconds : 3600;
   const safeBandwidth = bandwidthBytesPerSecond > 0 ? bandwidthBytesPerSecond : (10 * 1_000_000) / 8;
   const estimatedDuration = sizeBytes > 0 ? Math.ceil(sizeBytes / safeBandwidth) : 0;
-  const totalDuration = Math.max(safeMinDuration, estimatedDuration);
+  let totalDuration = Math.max(safeMinDuration, estimatedDuration);
+  if (Number.isFinite(maxDurationSeconds) && maxDurationSeconds > 0) {
+    const safeMaxDuration = Math.floor(maxDurationSeconds);
+    totalDuration = Math.min(totalDuration, safeMaxDuration);
+    if (totalDuration < 0) {
+      totalDuration = 0;
+    }
+  }
   const nowSeconds = Math.floor(Date.now() / 1000);
   return nowSeconds + totalDuration;
 };
@@ -1039,7 +1150,16 @@ const createAdditionalParams = async (config, decodedPath, clientIP, signExpire,
   sizeBytes = resolvedSize;
 
   if (!Number.isFinite(expireTime) || expireTime <= 0) {
-    expireTime = calculateExpireTimestamp(sizeBytes, config.minDurationSeconds, config.minBandwidthBytesPerSecond);
+    expireTime = calculateExpireTimestamp(
+      sizeBytes,
+      config.minDurationSeconds,
+      config.minBandwidthBytesPerSecond,
+      config.maxDurationSeconds
+    );
+  } else if (Number.isFinite(config.maxDurationSeconds) && config.maxDurationSeconds > 0) {
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const maxAllowedExpire = nowSeconds + Math.floor(config.maxDurationSeconds);
+    expireTime = Math.min(expireTime, maxAllowedExpire);
   }
 
   const payload = JSON.stringify({
@@ -1053,14 +1173,74 @@ const createAdditionalParams = async (config, decodedPath, clientIP, signExpire,
   return { additionalInfo, additionalInfoSign };
 };
 
-const createDownloadURL = async (config, { encodedPath, decodedPath, sign, clientIP, sizeBytes, expireTime, fileInfo }) => {
+const createDownloadURL = async (
+  config,
+  { encodedPath, decodedPath, sign, clientIP, sizeBytes, expireTime, fileInfo },
+  sessionDBManager = null,
+  ctx = null
+) => {
+  const workerBaseURL = selectRandomWorker(config.workerAddresses);
+  const normalizedSizeBytes = Number.isFinite(sizeBytes) && sizeBytes > 0 ? sizeBytes : 0;
+  let resolvedExpireTime =
+    Number.isFinite(expireTime) && expireTime > 0
+      ? expireTime
+      : calculateExpireTimestamp(
+          normalizedSizeBytes,
+          config.minDurationSeconds,
+          config.minBandwidthBytesPerSecond,
+          config.maxDurationSeconds
+        );
+  if (Number.isFinite(config.maxDurationSeconds) && config.maxDurationSeconds > 0) {
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const maxAllowedExpire = nowSeconds + Math.floor(config.maxDurationSeconds);
+    resolvedExpireTime = Math.min(resolvedExpireTime, maxAllowedExpire);
+  }
+
+  if (config.sessionEnabled && sessionDBManager) {
+    if (!clientIP) {
+      console.warn('[Session Download] Missing client IP; falling back to signed URL');
+    } else {
+      const ipSubnet = calculateIPSubnet(clientIP, config.ipv4Suffix, config.ipv6Suffix);
+      if (ipSubnet) {
+        const sessionTicket = crypto.randomUUID();
+        const createdAt = Math.floor(Date.now() / 1000);
+        const insertPromise = Promise.resolve(
+          sessionDBManager.insert(
+            sessionTicket,
+            decodedPath,
+            ipSubnet,
+            workerBaseURL,
+            resolvedExpireTime,
+            createdAt
+          )
+        );
+
+        const handleInsertError = (error) => {
+          console.error(
+            '[Session Download] Failed to insert session ticket:',
+            error instanceof Error ? error.message : String(error)
+          );
+        };
+
+        if (ctx && typeof ctx.waitUntil === 'function') {
+          ctx.waitUntil(insertPromise.catch(handleInsertError));
+        } else {
+          await insertPromise.catch(handleInsertError);
+        }
+
+        return `${workerBaseURL}/session?q=${encodeURIComponent(sessionTicket)}`;
+      } else {
+        console.warn('[Session Download] Unable to compute IP subnet; falling back to signed URL');
+      }
+    }
+  }
+
   const expire = extractExpireFromSign(sign);
 
   const pathBytes = new TextEncoder().encode(decodedPath);
   const base64Path = uint8ToBase64(pathBytes);
   const hashSign = await hmacSha256Sign(config.signSecret, base64Path, expire);
 
-  const workerBaseURL = selectRandomWorker(config.workerAddresses);
   const workerSignData = JSON.stringify({ path: decodedPath, worker_addr: workerBaseURL });
   const workerSign = await hmacSha256Sign(config.signSecret, workerSignData, expire);
 
@@ -1228,7 +1408,7 @@ const checkPathListAction = (path, config) => {
 
 const handleOptions = (request) => new Response(null, { headers: safeHeaders(request.headers.get('Origin')) });
 
-const handleInfo = async (request, env, config, rateLimiter, ctx) => {
+const handleInfo = async (request, env, config, rateLimiter, sessionDBManager, ctx) => {
   const origin = request.headers.get('origin') || '*';
   const url = new URL(request.url);
   const path = url.searchParams.get('path');
@@ -1957,7 +2137,7 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
   }
 
   // Unified cleanup scheduler (handles all tables)
-  await scheduleAllCleanups(config, env, ctx);
+  await scheduleAllCleanups(config, env, ctx, sessionDBManager);
 
   // 当 unified check 未能启用 token binding 时，尝试回落到无状态的 Turnstile siteverify
   if (shouldBindToken && !tokenBindingAllowed && needTurnstile) {
@@ -2060,7 +2240,12 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
     }
   }
 
-  const expireTime = calculateExpireTimestamp(sizeBytes, config.minDurationSeconds, config.minBandwidthBytesPerSecond);
+  const expireTime = calculateExpireTimestamp(
+    sizeBytes,
+    config.minDurationSeconds,
+    config.minBandwidthBytesPerSecond,
+    config.maxDurationSeconds
+  );
   let downloadURL = await createDownloadURL(config, {
     encodedPath,
     decodedPath,
@@ -2069,7 +2254,7 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
     sizeBytes,
     expireTime,
     fileInfo,
-  });
+  }, sessionDBManager, ctx);
 
   const responsePayload = {
     code: 200,
@@ -2461,10 +2646,11 @@ async function cleanupExpiredCache(config, env) {
  * @param {object} env - 环境变量
  * @param {ExecutionContext} ctx - Workers ExecutionContext
  */
-async function scheduleAllCleanups(config, env, ctx) {
+async function scheduleAllCleanups(config, env, ctx, sessionDBManager) {
   const hasDbMode = typeof config.dbMode === 'string' && config.dbMode.length > 0;
-  if (!hasDbMode || config.cleanupPercentage <= 0) {
-    return; // Skip if no DB or cleanup disabled
+  const hasSessionDb = Boolean(config.sessionEnabled && sessionDBManager);
+  if ((!hasDbMode && !hasSessionDb) || config.cleanupPercentage <= 0) {
+    return; // Skip if no DB configured and no session DB, or cleanup disabled
   }
 
   // Probabilistic trigger
@@ -2474,12 +2660,27 @@ async function scheduleAllCleanups(config, env, ctx) {
   }
 
   // Run all cleanups in parallel (Promise.allSettled ensures one failure doesn't block others)
-  const cleanupTasks = [
-    { name: 'Rate Limit', fn: () => cleanupExpiredRateLimits(config, env) },
-    { name: 'Filesize Cache', fn: () => cleanupExpiredCache(config, env) },
-    { name: 'ALTCHA Token', fn: () => cleanupExpiredAltchaTokens(config, env) },
-    { name: 'Turnstile Token', fn: () => cleanupExpiredTurnstileTokens(config, env) },
-  ];
+  const cleanupTasks = [];
+
+  if (hasDbMode) {
+    cleanupTasks.push(
+      { name: 'Rate Limit', fn: () => cleanupExpiredRateLimits(config, env) },
+      { name: 'Filesize Cache', fn: () => cleanupExpiredCache(config, env) },
+      { name: 'ALTCHA Token', fn: () => cleanupExpiredAltchaTokens(config, env) },
+      { name: 'Turnstile Token', fn: () => cleanupExpiredTurnstileTokens(config, env) },
+    );
+  }
+
+  if (hasSessionDb) {
+    cleanupTasks.push({
+      name: 'Session Mapping',
+      fn: () => sessionDBManager.cleanup(),
+    });
+  }
+
+  if (cleanupTasks.length === 0) {
+    return;
+  }
 
   const cleanupPromise = Promise.allSettled(
     cleanupTasks.map(task =>
@@ -2491,10 +2692,12 @@ async function scheduleAllCleanups(config, env, ctx) {
 
   if (ctx && ctx.waitUntil) {
     ctx.waitUntil(cleanupPromise);
+  } else {
+    await cleanupPromise;
   }
 }
 
-const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
+const handleFileRequest = async (request, env, config, rateLimiter, sessionDBManager, ctx) => {
   if (request.method !== 'GET' && request.method !== 'HEAD') {
     return respondJson(request.headers.get('origin') || '*', { code: 405, message: 'method not allowed' }, 405);
   }
@@ -2530,7 +2733,7 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
   }
 
   // Unified cleanup scheduler (handles all tables)
-  await scheduleAllCleanups(config, env, ctx);
+  await scheduleAllCleanups(config, env, ctx, sessionDBManager);
 
   if (request.method === 'HEAD') {
     return new Response(null, {
@@ -2734,7 +2937,12 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
       }
     }
 
-    const expireTime = calculateExpireTimestamp(sizeBytes, config.minDurationSeconds, config.minBandwidthBytesPerSecond);
+    const expireTime = calculateExpireTimestamp(
+      sizeBytes,
+      config.minDurationSeconds,
+      config.minBandwidthBytesPerSecond,
+      config.maxDurationSeconds
+    );
 
     const downloadURL = await createDownloadURL(config, {
       encodedPath,
@@ -2744,7 +2952,7 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
       sizeBytes,
       expireTime,
       fileInfo,
-    });
+    }, sessionDBManager, ctx);
 
     // Return 302 redirect
     return new Response(null, {
@@ -2859,7 +3067,7 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
   });
 };
 
-const routeRequest = async (request, env, config, rateLimiter, ctx) => {
+const routeRequest = async (request, env, config, rateLimiter, sessionDBManager, ctx) => {
   if (request.method === 'OPTIONS') {
     return handleOptions(request);
   }
@@ -2868,9 +3076,9 @@ const routeRequest = async (request, env, config, rateLimiter, ctx) => {
   if (request.method === 'GET' && pathname === '/info') {
     const ipv4Error = ensureIPv4(request, config.ipv4Only);
     if (ipv4Error) return ipv4Error;
-    return handleInfo(request, env, config, rateLimiter, ctx);
+    return handleInfo(request, env, config, rateLimiter, sessionDBManager, ctx);
   }
-  return handleFileRequest(request, env, config, rateLimiter, ctx);
+  return handleFileRequest(request, env, config, rateLimiter, sessionDBManager, ctx);
 };
 
 export default {
@@ -2879,8 +3087,9 @@ export default {
     try {
       // Create rate limiter instance based on DB_MODE
       const rateLimiter = config.rateLimitEnabled ? createRateLimiter(config.dbMode) : null;
+      const sessionDBManager = config.sessionEnabled ? createSessionDBManager(config) : null;
 
-      return await routeRequest(request, env, config, rateLimiter, ctx);
+      return await routeRequest(request, env, config, rateLimiter, sessionDBManager, ctx);
     } catch (error) {
       const origin = request.headers.get('origin') || '*';
       const message = error instanceof Error ? error.message : String(error);
