@@ -260,6 +260,50 @@ persist = true
 # EXCEPT_PREFIX = "/guest,/public"
 # EXCEPT_ACTION = "block-except"   # 支持所有 ACTION 值 + "-except" 后缀（如 block-except, verify-both-except, pass-asis-except）
 #
+# # ⚠️ NEW: Path INCLUDES Matching (Match keywords anywhere in path)
+# # In addition to PREFIX (startsWith) matching, you can now use INCLUDES (contains) matching
+# # Path is split into: dirPath (folder) + fileName (file name) + fullPath (complete path)
+# # Example: "/folder1/folder2/file.txt"
+# #   - dirPath: "/folder1/folder2"
+# #   - fileName: "file.txt"
+# #   - fullPath: "/folder1/folder2/file.txt"
+# #
+# # INCLUDES matching modes (comma-separated keywords, no spaces):
+# BLACKLIST_DIR_INCLUDES = "private,confidential,secret"     # Match folder path containing keywords
+# BLACKLIST_NAME_INCLUDES = "backup,bak,.tmp"                # Match file name containing keywords
+# BLACKLIST_PATH_INCLUDES = "temp,cache"                     # Match full path containing keywords
+# WHITELIST_DIR_INCLUDES = "public,shared"                   # Match folder path containing keywords
+# WHITELIST_NAME_INCLUDES = "readme,license"                 # Match file name containing keywords
+# WHITELIST_PATH_INCLUDES = "docs,assets"                    # Match full path containing keywords
+# EXCEPT_DIR_INCLUDES = "test,debug"                         # Match folder path containing keywords
+# EXCEPT_NAME_INCLUDES = "log,tmp"                           # Match file name containing keywords
+# EXCEPT_PATH_INCLUDES = "staging,dev"                       # Match full path containing keywords
+# #
+# # Union Logic (OR):
+# # - PREFIX and INCLUDES are evaluated together (any match triggers action)
+# # - Multiple keywords in INCLUDES are OR-ed (any keyword match triggers)
+# # Example: BLACKLIST_PREFIX="/admin" + BLACKLIST_DIR_INCLUDES="private,secret"
+# #   → Matches: /admin/file.txt (prefix) OR /test/private/file.txt (dir includes) OR /test/secret/file.txt (dir includes)
+# #
+# # Matching Examples:
+# # 1. BLACKLIST_DIR_INCLUDES = "private"
+# #    → Blocks: /test/private/file.txt (dirPath "/test/private" contains "private")
+# #    → Action: "block"
+# #
+# # 2. WHITELIST_NAME_INCLUDES = "readme"
+# #    → Matches: /docs/readme.md (fileName "readme.md" contains "readme")
+# #    → Action: "pass-asis" (or configured WHITELIST_ACTION)
+# #
+# # 3. BLACKLIST_PATH_INCLUDES = "temp"
+# #    → Blocks: /test/temp/file.txt (fullPath contains "temp")
+# #    → Blocks: /test/file_temp.txt (fullPath contains "temp")
+# #    → Action: "block"
+# #
+# # 4. EXCEPT_DIR_INCLUDES = "staging"
+# #    → Paths NOT containing "staging" in dirPath trigger EXCEPT_ACTION
+# #    → Example: /prod/file.txt → triggers "block-except" (blocks)
+# #    → Example: /staging/file.txt → no action (normal flow)
+#
 # # Database Mode for IP Rate Limiting
 # # Options: "d1" (Cloudflare D1 Binding), "d1-rest" (Cloudflare D1 REST API), "custom-pg-rest" (Custom PostgreSQL + PostgREST)
 # # If not set, rate limiting is completely disabled

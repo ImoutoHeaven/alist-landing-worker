@@ -233,15 +233,29 @@ const resolveConfig = (env = {}) => {
 
   const blacklistPrefixes = parsePrefixList(env.BLACKLIST_PREFIX);
   const whitelistPrefixes = parsePrefixList(env.WHITELIST_PREFIX);
+  const exceptPrefixes = parsePrefixList(env.EXCEPT_PREFIX);
+  const blacklistDirIncludes = parsePrefixList(env.BLACKLIST_DIR_INCLUDES);
+  const blacklistNameIncludes = parsePrefixList(env.BLACKLIST_NAME_INCLUDES);
+  const blacklistPathIncludes = parsePrefixList(env.BLACKLIST_PATH_INCLUDES);
+  const whitelistDirIncludes = parsePrefixList(env.WHITELIST_DIR_INCLUDES);
+  const whitelistNameIncludes = parsePrefixList(env.WHITELIST_NAME_INCLUDES);
+  const whitelistPathIncludes = parsePrefixList(env.WHITELIST_PATH_INCLUDES);
+  const exceptDirIncludes = parsePrefixList(env.EXCEPT_DIR_INCLUDES);
+  const exceptNameIncludes = parsePrefixList(env.EXCEPT_NAME_INCLUDES);
+  const exceptPathIncludes = parsePrefixList(env.EXCEPT_PATH_INCLUDES);
   const blacklistAction = validateAction(env.BLACKLIST_ACTION, 'BLACKLIST_ACTION');
   const whitelistAction = validateAction(env.WHITELIST_ACTION, 'WHITELIST_ACTION');
 
   // Parse except action (format: {action}-except)
-  const exceptPrefixes = parsePrefixList(env.EXCEPT_PREFIX);
   let exceptAction = '';
+  const hasExceptRules =
+    exceptPrefixes.length > 0 ||
+    exceptDirIncludes.length > 0 ||
+    exceptNameIncludes.length > 0 ||
+    exceptPathIncludes.length > 0;
   if (env.EXCEPT_ACTION && typeof env.EXCEPT_ACTION === 'string') {
     const rawExceptAction = env.EXCEPT_ACTION.trim().toLowerCase();
-    if (rawExceptAction && exceptPrefixes.length > 0) {
+    if (rawExceptAction && hasExceptRules) {
       // Validate format: must end with '-except'
       if (!rawExceptAction.endsWith('-except')) {
         throw new Error('EXCEPT_ACTION must be in format "{action}-except" (e.g., "block-except")');
@@ -510,9 +524,18 @@ const resolveConfig = (env = {}) => {
     cleanupPercentage,
     blacklistPrefixes,
     whitelistPrefixes,
+    blacklistDirIncludes,
+    blacklistNameIncludes,
+    blacklistPathIncludes,
+    whitelistDirIncludes,
+    whitelistNameIncludes,
+    whitelistPathIncludes,
     blacklistAction,
     whitelistAction,
     exceptPrefixes,
+    exceptDirIncludes,
+    exceptNameIncludes,
+    exceptPathIncludes,
     exceptAction,
     // Rate limit configuration
     dbMode,
@@ -1074,11 +1097,41 @@ const checkPathListAction = (path, config) => {
     decodedPath = path;
   }
 
+  const lastSlashIndex = decodedPath.lastIndexOf('/');
+  const dirPath = lastSlashIndex > 0 ? decodedPath.substring(0, lastSlashIndex) : '';
+  const fileName = lastSlashIndex >= 0 ? decodedPath.substring(lastSlashIndex + 1) : decodedPath;
+
   // Check blacklist first (higher priority)
   if (config.blacklistPrefixes.length > 0 && config.blacklistAction) {
     for (const prefix of config.blacklistPrefixes) {
       if (decodedPath.startsWith(prefix)) {
         return ensureValidActionValue(config.blacklistAction);
+      }
+    }
+  }
+
+  if (config.blacklistAction) {
+    if (config.blacklistDirIncludes.length > 0) {
+      for (const keyword of config.blacklistDirIncludes) {
+        if (dirPath.includes(keyword)) {
+          return ensureValidActionValue(config.blacklistAction);
+        }
+      }
+    }
+
+    if (config.blacklistNameIncludes.length > 0) {
+      for (const keyword of config.blacklistNameIncludes) {
+        if (fileName.includes(keyword)) {
+          return ensureValidActionValue(config.blacklistAction);
+        }
+      }
+    }
+
+    if (config.blacklistPathIncludes.length > 0) {
+      for (const keyword of config.blacklistPathIncludes) {
+        if (decodedPath.includes(keyword)) {
+          return ensureValidActionValue(config.blacklistAction);
+        }
       }
     }
   }
@@ -1092,18 +1145,79 @@ const checkPathListAction = (path, config) => {
     }
   }
 
-  // Check except third (inverse logic)
-  if (config.exceptPrefixes.length > 0 && config.exceptAction) {
-    // Check if path matches any except prefix
-    let matchesExceptPrefix = false;
-    for (const prefix of config.exceptPrefixes) {
-      if (decodedPath.startsWith(prefix)) {
-        matchesExceptPrefix = true;
-        break;
+  if (config.whitelistAction) {
+    if (config.whitelistDirIncludes.length > 0) {
+      for (const keyword of config.whitelistDirIncludes) {
+        if (dirPath.includes(keyword)) {
+          return ensureValidActionValue(config.whitelistAction);
+        }
       }
     }
-    // If path does NOT match any except prefix, apply the except action
-    if (!matchesExceptPrefix) {
+
+    if (config.whitelistNameIncludes.length > 0) {
+      for (const keyword of config.whitelistNameIncludes) {
+        if (fileName.includes(keyword)) {
+          return ensureValidActionValue(config.whitelistAction);
+        }
+      }
+    }
+
+    if (config.whitelistPathIncludes.length > 0) {
+      for (const keyword of config.whitelistPathIncludes) {
+        if (decodedPath.includes(keyword)) {
+          return ensureValidActionValue(config.whitelistAction);
+        }
+      }
+    }
+  }
+
+  // Check except third (inverse logic)
+  const hasExceptRules =
+    config.exceptPrefixes.length > 0 ||
+    config.exceptDirIncludes.length > 0 ||
+    config.exceptNameIncludes.length > 0 ||
+    config.exceptPathIncludes.length > 0;
+
+  if (config.exceptAction && hasExceptRules) {
+    let matchesExceptRule = false;
+
+    if (config.exceptPrefixes.length > 0) {
+      for (const prefix of config.exceptPrefixes) {
+        if (decodedPath.startsWith(prefix)) {
+          matchesExceptRule = true;
+          break;
+        }
+      }
+    }
+
+    if (!matchesExceptRule && config.exceptDirIncludes.length > 0) {
+      for (const keyword of config.exceptDirIncludes) {
+        if (dirPath.includes(keyword)) {
+          matchesExceptRule = true;
+          break;
+        }
+      }
+    }
+
+    if (!matchesExceptRule && config.exceptNameIncludes.length > 0) {
+      for (const keyword of config.exceptNameIncludes) {
+        if (fileName.includes(keyword)) {
+          matchesExceptRule = true;
+          break;
+        }
+      }
+    }
+
+    if (!matchesExceptRule && config.exceptPathIncludes.length > 0) {
+      for (const keyword of config.exceptPathIncludes) {
+        if (decodedPath.includes(keyword)) {
+          matchesExceptRule = true;
+          break;
+        }
+      }
+    }
+
+    if (!matchesExceptRule) {
       return ensureValidActionValue(config.exceptAction);
     }
   }
