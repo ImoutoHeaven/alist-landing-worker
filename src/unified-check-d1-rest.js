@@ -39,7 +39,7 @@ const executeQuery = async (accountId, databaseId, apiToken, sqlOrBatch, params 
   return payload.result?.[0] || { results: [], success: true };
 };
 
-const ensureTables = async (accountId, databaseId, apiToken, { cacheTableName, rateLimitTableName, tokenTableName, altchaTableName }) => {
+const ensureTables = async (accountId, databaseId, apiToken, { cacheTableName, rateLimitTableName, tokenTableName, altchaTableName, sessionTableName }) => {
   await executeQuery(accountId, databaseId, apiToken, `
     CREATE TABLE IF NOT EXISTS ${cacheTableName} (
       PATH_HASH TEXT PRIMARY KEY,
@@ -82,6 +82,26 @@ const ensureTables = async (accountId, databaseId, apiToken, { cacheTableName, r
     )
   `);
   await executeQuery(accountId, databaseId, apiToken, `CREATE INDEX IF NOT EXISTS idx_altcha_token_expires ON ${altchaTableName}(EXPIRES_AT)`);
+
+  if (sessionTableName) {
+    await executeQuery(accountId, databaseId, apiToken, [
+      {
+        sql: `
+          CREATE TABLE IF NOT EXISTS ${sessionTableName} (
+            SESSION_TICKET TEXT PRIMARY KEY,
+            FILE_PATH TEXT NOT NULL,
+            IP_SUBNET TEXT NOT NULL,
+            WORKER_ADDRESS TEXT NOT NULL,
+            EXPIRE_AT INTEGER NOT NULL,
+            CREATED_AT INTEGER NOT NULL
+          )
+        `,
+      },
+      {
+        sql: `CREATE INDEX IF NOT EXISTS idx_session_expire ON ${sessionTableName}(EXPIRE_AT)`,
+      },
+    ]);
+  }
 };
 
 export const unifiedCheckD1Rest = async (path, clientIP, altchaTableName, config) => {
@@ -107,6 +127,16 @@ export const unifiedCheckD1Rest = async (path, clientIP, altchaTableName, config
   const altchaTokenIP = config.altchaTokenIP || clientIP || null;
   const resolvedAltchaTableName = altchaTableName || 'ALTCHA_TOKEN_LIST';
 
+  let sessionTableName = null;
+  if (config.sessionEnabled === true && config.sessionDbMode === 'd1-rest') {
+    const sessionConfig = config.sessionDbConfig || {};
+    const accountMatches = !sessionConfig.accountId || sessionConfig.accountId === accountId;
+    const databaseMatches = !sessionConfig.databaseId || sessionConfig.databaseId === databaseId;
+    if (accountMatches && databaseMatches) {
+      sessionTableName = sessionConfig.tableName || 'SESSION_MAPPING_TABLE';
+    }
+  }
+
   if (cacheTTL <= 0) {
     throw new Error('[Unified Check D1-REST] sizeTTL must be greater than zero');
   }
@@ -114,7 +144,13 @@ export const unifiedCheckD1Rest = async (path, clientIP, altchaTableName, config
     throw new Error('[Unified Check D1-REST] windowTimeSeconds and limit are required');
   }
 
-  await ensureTables(accountId, databaseId, apiToken, { cacheTableName, rateLimitTableName, tokenTableName, altchaTableName: resolvedAltchaTableName });
+  await ensureTables(accountId, databaseId, apiToken, {
+    cacheTableName,
+    rateLimitTableName,
+    tokenTableName,
+    altchaTableName: resolvedAltchaTableName,
+    sessionTableName,
+  });
 
   console.log('[Unified Check D1-REST] Starting unified check for path:', path);
 

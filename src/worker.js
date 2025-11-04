@@ -2041,6 +2041,9 @@ const handleInfo = async (request, env, config, rateLimiter, sessionDBManager, c
           altchaTokenHash,
           altchaTokenIP: clientIP,
           altchaTableName,
+          sessionEnabled: config.sessionEnabled,
+          sessionDbMode: config.sessionDbMode,
+          sessionDbConfig: config.sessionDbConfig,
         });
       } else if (config.dbMode === 'd1-rest') {
         unifiedResult = await unifiedCheckD1Rest(decodedPath, clientIP, config.altchaTableName, {
@@ -2063,6 +2066,9 @@ const handleInfo = async (request, env, config, rateLimiter, sessionDBManager, c
           altchaTokenHash,
           altchaTokenIP: clientIP,
           altchaTableName,
+          sessionEnabled: config.sessionEnabled,
+          sessionDbMode: config.sessionDbMode,
+          sessionDbConfig: config.sessionDbConfig,
         });
       } else {
         unifiedResult = null;
@@ -2839,6 +2845,9 @@ const handleFileRequest = async (request, env, config, rateLimiter, sessionDBMan
             rateLimitTableName: config.rateLimitConfig.tableName || 'IP_LIMIT_TABLE',
             ipv4Suffix: config.rateLimitConfig.ipv4Suffix,
             ipv6Suffix: config.rateLimitConfig.ipv6Suffix,
+            sessionEnabled: config.sessionEnabled,
+            sessionDbMode: config.sessionDbMode,
+            sessionDbConfig: config.sessionDbConfig,
           });
         } else if (config.dbMode === 'd1-rest') {
           unifiedResult = await unifiedCheckD1Rest(decodedPath, clientIP, config.altchaTableName, {
@@ -2853,6 +2862,9 @@ const handleFileRequest = async (request, env, config, rateLimiter, sessionDBMan
             rateLimitTableName: config.rateLimitConfig.tableName || 'IP_LIMIT_TABLE',
             ipv4Suffix: config.rateLimitConfig.ipv4Suffix,
             ipv6Suffix: config.rateLimitConfig.ipv6Suffix,
+            sessionEnabled: config.sessionEnabled,
+            sessionDbMode: config.sessionDbMode,
+            sessionDbConfig: config.sessionDbConfig,
           });
         } else {
           unifiedResult = null;

@@ -1,6 +1,8 @@
 const DEFAULT_TABLE_NAME = 'SESSION_MAPPING_TABLE';
 
 export class SessionDBManagerD1 {
+  #ensureTablePromise = null;
+
   constructor(options = {}) {
     this.env = options.env || null;
     this.databaseBinding = options.databaseBinding || 'SESSIONDB';
@@ -18,8 +20,40 @@ export class SessionDBManagerD1 {
     return db;
   }
 
+  async #ensureTable(db) {
+    if (!this.#ensureTablePromise) {
+      this.#ensureTablePromise = (async () => {
+        try {
+          await db.batch([
+            db.prepare(`
+              CREATE TABLE IF NOT EXISTS ${this.tableName} (
+                SESSION_TICKET TEXT PRIMARY KEY,
+                FILE_PATH TEXT NOT NULL,
+                IP_SUBNET TEXT NOT NULL,
+                WORKER_ADDRESS TEXT NOT NULL,
+                EXPIRE_AT INTEGER NOT NULL,
+                CREATED_AT INTEGER NOT NULL
+              )
+            `),
+            db.prepare(`CREATE INDEX IF NOT EXISTS idx_session_expire ON ${this.tableName}(EXPIRE_AT)`),
+          ]);
+        } catch (error) {
+          console.error(
+            '[SessionDB][D1] Failed to ensure session table:',
+            error instanceof Error ? error.message : String(error)
+          );
+          this.#ensureTablePromise = null;
+          throw error;
+        }
+      })();
+    }
+
+    return this.#ensureTablePromise;
+  }
+
   async insert(sessionTicket, filePath, ipSubnet, workerAddress, expireAt, createdAt) {
     const db = this.#getDatabase();
+    await this.#ensureTable(db);
     const sql = `INSERT INTO ${this.tableName} (
       SESSION_TICKET,
       FILE_PATH,
@@ -37,6 +71,7 @@ export class SessionDBManagerD1 {
 
   async cleanup() {
     const db = this.#getDatabase();
+    await this.#ensureTable(db);
     const nowSeconds = Math.floor(Date.now() / 1000);
     const sql = `DELETE FROM ${this.tableName} WHERE EXPIRE_AT < ?`;
     return db.prepare(sql).bind(nowSeconds).run();

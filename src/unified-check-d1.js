@@ -1,7 +1,7 @@
 import { sha256Hash, calculateIPSubnet } from './utils.js';
 
-const ensureTables = async (db, { cacheTableName, rateLimitTableName, tokenTableName, altchaTableName }) => {
-  await db.batch([
+const ensureTables = async (db, { cacheTableName, rateLimitTableName, tokenTableName, altchaTableName, sessionTableName }) => {
+  const statements = [
     db.prepare(`
       CREATE TABLE IF NOT EXISTS ${cacheTableName} (
         PATH_HASH TEXT PRIMARY KEY,
@@ -43,7 +43,25 @@ const ensureTables = async (db, { cacheTableName, rateLimitTableName, tokenTable
       )
     `),
     db.prepare(`CREATE INDEX IF NOT EXISTS idx_altcha_token_expires ON ${altchaTableName}(EXPIRES_AT)`),
-  ]);
+  ];
+
+  if (sessionTableName) {
+    statements.push(
+      db.prepare(`
+        CREATE TABLE IF NOT EXISTS ${sessionTableName} (
+          SESSION_TICKET TEXT PRIMARY KEY,
+          FILE_PATH TEXT NOT NULL,
+          IP_SUBNET TEXT NOT NULL,
+          WORKER_ADDRESS TEXT NOT NULL,
+          EXPIRE_AT INTEGER NOT NULL,
+          CREATED_AT INTEGER NOT NULL
+        )
+      `),
+      db.prepare(`CREATE INDEX IF NOT EXISTS idx_session_expire ON ${sessionTableName}(EXPIRE_AT)`)
+    );
+  }
+
+  await db.batch(statements);
 };
 
 export const unifiedCheckD1 = async (path, clientIP, altchaTableName, config) => {
@@ -80,7 +98,22 @@ export const unifiedCheckD1 = async (path, clientIP, altchaTableName, config) =>
     throw new Error('[Unified Check D1] windowTimeSeconds and limit are required');
   }
 
-  await ensureTables(db, { cacheTableName, rateLimitTableName, tokenTableName, altchaTableName: resolvedAltchaTableName });
+  let sessionTableName = null;
+  if (config.sessionEnabled === true && config.sessionDbMode === 'd1') {
+    const sessionBinding = config.sessionDbConfig?.databaseBinding;
+    const bindingMatches = !sessionBinding || sessionBinding === config.databaseBinding;
+    if (bindingMatches) {
+      sessionTableName = config.sessionDbConfig?.tableName || 'SESSION_MAPPING_TABLE';
+    }
+  }
+
+  await ensureTables(db, {
+    cacheTableName,
+    rateLimitTableName,
+    tokenTableName,
+    altchaTableName: resolvedAltchaTableName,
+    sessionTableName,
+  });
 
   console.log('[Unified Check D1] Starting unified check for path:', path);
 
