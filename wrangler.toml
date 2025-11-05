@@ -317,6 +317,54 @@ persist = true
 # CLEANUP_PERCENTAGE = "5"  # 0-100（可为小数），触发过期令牌清理的概率，默认 5%
 # BLOCK_TIME = "10m"
 #
+# # ═══════════════════════════════════════════════════════════════
+# # ⚠️ Database Table Initialization Control (Performance Optimization)
+# # ═══════════════════════════════════════════════════════════════
+# #
+# # INIT_TABLES controls whether to create database tables before each RPC/SQL batch call
+# # Default: "false" (skip table initialization for optimal performance)
+# #
+# # How it works:
+# # - When "true": Worker calls ensureTables() before every unified check
+# #                Creates tables if they don't exist (CREATE TABLE IF NOT EXISTS)
+# #                Ensures tables are always available but adds overhead
+# # - When "false": Worker skips ensureTables() call completely
+# #                 Reduces database round-trips and improves response time
+# #                 Tables must be created manually before first use
+# #
+# # Performance Impact:
+# # - "false" (recommended): ~10-50ms faster per request (no table check overhead)
+# # - "true" (legacy): Safe but slower (adds CREATE TABLE queries to every request)
+# #
+# # When to use "true":
+# # - First deployment (tables don't exist yet)
+# # - Table schema changes (need to update table structure)
+# # - Development/testing environments
+# # - Automatic recovery after database reset
+# #
+# # When to use "false":
+# # - Production environments (tables already exist)
+# # - Performance-critical scenarios
+# # - After initial deployment is successful
+# #
+# # Recommended Workflow:
+# # 1. First deployment: INIT_TABLES="true" → Creates all tables
+# # 2. Verify tables exist: Check D1 dashboard or run SELECT on tables
+# # 3. Switch to production: INIT_TABLES="false" → Optimal performance
+# # 4. Schema updates: Temporarily set to "true" → Apply changes → Set back to "false"
+# #
+# # Tables Created (when INIT_TABLES="true"):
+# # - FILESIZE_CACHE_TABLE (filesize cache)
+# # - IP_LIMIT_TABLE (IP rate limiting)
+# # - TURNSTILE_TOKEN_BINDING (Turnstile token binding)
+# # - ALTCHA_TOKEN_LIST (ALTCHA PoW token replay prevention)
+# # - SESSION_MAPPING_TABLE (optional, if SESSION_ENABLED="true")
+# #
+# # Note: For custom-pg-rest mode, you should still run init.sql manually for stored procedures
+# #       INIT_TABLES only creates tables, not functions/procedures
+# #
+# INIT_TABLES = "false"
+#
 # # D1 (Cloudflare D1 Binding) Rate Limiting - requires DB_MODE="d1"
 # # Note: You must also configure d1_databases binding below
 # D1_DATABASE_BINDING = "DB"  # Optional, defaults to "DB"
