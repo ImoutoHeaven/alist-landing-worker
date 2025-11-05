@@ -1181,6 +1181,14 @@ const createDownloadURL = async (
 ) => {
   const workerBaseURL = selectRandomWorker(config.workerAddresses);
   const normalizedSizeBytes = Number.isFinite(sizeBytes) && sizeBytes > 0 ? sizeBytes : 0;
+  const normalizedDbMode = typeof config.dbMode === 'string' ? config.dbMode.trim() : '';
+  const normalizedSessionDbMode = typeof config.sessionDbMode === 'string' ? config.sessionDbMode.trim() : '';
+  const isStateless = (!normalizedDbMode || normalizedDbMode.length === 0) && (!normalizedSessionDbMode || normalizedSessionDbMode.length === 0);
+  if (config.sessionEnabled && isStateless) {
+    const normalizedFilePath = decodedPath.startsWith('/') ? decodedPath : `/${decodedPath}`;
+    return `${workerBaseURL}${normalizedFilePath}`;
+  }
+
   let resolvedExpireTime =
     Number.isFinite(expireTime) && expireTime > 0
       ? expireTime
