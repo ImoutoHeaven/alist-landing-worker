@@ -107,13 +107,15 @@ export const unifiedCheckD1 = async (path, clientIP, altchaTableName, config) =>
     }
   }
 
-  await ensureTables(db, {
-    cacheTableName,
-    rateLimitTableName,
-    tokenTableName,
-    altchaTableName: resolvedAltchaTableName,
-    sessionTableName,
-  });
+  if (config.initTables === true) {
+    await ensureTables(db, {
+      cacheTableName,
+      rateLimitTableName,
+      tokenTableName,
+      altchaTableName: resolvedAltchaTableName,
+      sessionTableName,
+    });
+  }
 
   console.log('[Unified Check D1] Starting unified check for path:', path);
 

@@ -507,6 +507,7 @@ const resolveConfig = (env = {}) => {
   }
 
   const sessionEnabled = parseBoolean(env.SESSION_ENABLED, false);
+  const initTables = parseBoolean(env.INIT_TABLES, false);
   const rawSessionDbMode = typeof env.SESSION_DB_MODE === 'string' ? env.SESSION_DB_MODE.trim() : '';
   const sessionDbMode = rawSessionDbMode || dbMode || '';
   const sessionTableNameRaw = typeof env.SESSION_D1_TABLE_NAME === 'string' ? env.SESSION_D1_TABLE_NAME.trim() : '';
@@ -656,6 +657,7 @@ const resolveConfig = (env = {}) => {
     sessionEnabled,
     sessionDbMode: normalizedSessionDbMode,
     sessionDbConfig,
+    initTables,
   };
 };
 
@@ -2056,6 +2058,7 @@ const handleInfo = async (request, env, config, rateLimiter, sessionDBManager, c
           sessionEnabled: config.sessionEnabled,
           sessionDbMode: config.sessionDbMode,
           sessionDbConfig: config.sessionDbConfig,
+          initTables: config.initTables,
         });
       } else if (config.dbMode === 'd1-rest') {
         unifiedResult = await unifiedCheckD1Rest(decodedPath, clientIP, config.altchaTableName, {
@@ -2081,6 +2084,7 @@ const handleInfo = async (request, env, config, rateLimiter, sessionDBManager, c
           sessionEnabled: config.sessionEnabled,
           sessionDbMode: config.sessionDbMode,
           sessionDbConfig: config.sessionDbConfig,
+          initTables: config.initTables,
         });
       } else {
         unifiedResult = null;
@@ -2846,39 +2850,41 @@ const handleFileRequest = async (request, env, config, rateLimiter, sessionDBMan
           };
           unifiedResult = await unifiedCheck(decodedPath, clientIP, config.altchaTableName, unifiedConfig);
         } else if (config.dbMode === 'd1') {
-          unifiedResult = await unifiedCheckD1(decodedPath, clientIP, config.altchaTableName, {
-            env: config.cacheConfig.env || config.rateLimitConfig.env,
-            databaseBinding: config.cacheConfig.databaseBinding || config.rateLimitConfig.databaseBinding || 'DB',
-            sizeTTL: config.cacheConfig.sizeTTL ?? config.sizeTTLSeconds,
-            cacheTableName: config.cacheConfig.tableName || config.filesizeCacheTableName || 'FILESIZE_CACHE_TABLE',
-            windowTimeSeconds: config.rateLimitConfig.windowTimeSeconds,
-            limit: limitValue,
-            blockTimeSeconds: config.rateLimitConfig.blockTimeSeconds,
-            rateLimitTableName: config.rateLimitConfig.tableName || 'IP_LIMIT_TABLE',
-            ipv4Suffix: config.rateLimitConfig.ipv4Suffix,
-            ipv6Suffix: config.rateLimitConfig.ipv6Suffix,
-            sessionEnabled: config.sessionEnabled,
-            sessionDbMode: config.sessionDbMode,
-            sessionDbConfig: config.sessionDbConfig,
-          });
-        } else if (config.dbMode === 'd1-rest') {
-          unifiedResult = await unifiedCheckD1Rest(decodedPath, clientIP, config.altchaTableName, {
-            accountId: config.rateLimitConfig.accountId || config.cacheConfig.accountId,
-            databaseId: config.rateLimitConfig.databaseId || config.cacheConfig.databaseId,
-            apiToken: config.rateLimitConfig.apiToken || config.cacheConfig.apiToken,
-            sizeTTL: config.cacheConfig.sizeTTL ?? config.sizeTTLSeconds,
-            cacheTableName: config.cacheConfig.tableName || config.filesizeCacheTableName || 'FILESIZE_CACHE_TABLE',
-            windowTimeSeconds: config.rateLimitConfig.windowTimeSeconds,
-            limit: limitValue,
-            blockTimeSeconds: config.rateLimitConfig.blockTimeSeconds,
-            rateLimitTableName: config.rateLimitConfig.tableName || 'IP_LIMIT_TABLE',
-            ipv4Suffix: config.rateLimitConfig.ipv4Suffix,
-            ipv6Suffix: config.rateLimitConfig.ipv6Suffix,
-            sessionEnabled: config.sessionEnabled,
-            sessionDbMode: config.sessionDbMode,
-            sessionDbConfig: config.sessionDbConfig,
-          });
-        } else {
+        unifiedResult = await unifiedCheckD1(decodedPath, clientIP, config.altchaTableName, {
+          env: config.cacheConfig.env || config.rateLimitConfig.env,
+          databaseBinding: config.cacheConfig.databaseBinding || config.rateLimitConfig.databaseBinding || 'DB',
+          sizeTTL: config.cacheConfig.sizeTTL ?? config.sizeTTLSeconds,
+          cacheTableName: config.cacheConfig.tableName || config.filesizeCacheTableName || 'FILESIZE_CACHE_TABLE',
+          windowTimeSeconds: config.rateLimitConfig.windowTimeSeconds,
+          limit: limitValue,
+          blockTimeSeconds: config.rateLimitConfig.blockTimeSeconds,
+          rateLimitTableName: config.rateLimitConfig.tableName || 'IP_LIMIT_TABLE',
+          ipv4Suffix: config.rateLimitConfig.ipv4Suffix,
+          ipv6Suffix: config.rateLimitConfig.ipv6Suffix,
+          sessionEnabled: config.sessionEnabled,
+          sessionDbMode: config.sessionDbMode,
+          sessionDbConfig: config.sessionDbConfig,
+          initTables: config.initTables,
+        });
+      } else if (config.dbMode === 'd1-rest') {
+        unifiedResult = await unifiedCheckD1Rest(decodedPath, clientIP, config.altchaTableName, {
+          accountId: config.rateLimitConfig.accountId || config.cacheConfig.accountId,
+          databaseId: config.rateLimitConfig.databaseId || config.cacheConfig.databaseId,
+          apiToken: config.rateLimitConfig.apiToken || config.cacheConfig.apiToken,
+          sizeTTL: config.cacheConfig.sizeTTL ?? config.sizeTTLSeconds,
+          cacheTableName: config.cacheConfig.tableName || config.filesizeCacheTableName || 'FILESIZE_CACHE_TABLE',
+          windowTimeSeconds: config.rateLimitConfig.windowTimeSeconds,
+          limit: limitValue,
+          blockTimeSeconds: config.rateLimitConfig.blockTimeSeconds,
+          rateLimitTableName: config.rateLimitConfig.tableName || 'IP_LIMIT_TABLE',
+          ipv4Suffix: config.rateLimitConfig.ipv4Suffix,
+          ipv6Suffix: config.rateLimitConfig.ipv6Suffix,
+          sessionEnabled: config.sessionEnabled,
+          sessionDbMode: config.sessionDbMode,
+          sessionDbConfig: config.sessionDbConfig,
+          initTables: config.initTables,
+        });
+      } else {
           unifiedResult = null;
         }
 

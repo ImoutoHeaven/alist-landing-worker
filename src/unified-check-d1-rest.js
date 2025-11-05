@@ -144,13 +144,15 @@ export const unifiedCheckD1Rest = async (path, clientIP, altchaTableName, config
     throw new Error('[Unified Check D1-REST] windowTimeSeconds and limit are required');
   }
 
-  await ensureTables(accountId, databaseId, apiToken, {
-    cacheTableName,
-    rateLimitTableName,
-    tokenTableName,
-    altchaTableName: resolvedAltchaTableName,
-    sessionTableName,
-  });
+  if (config.initTables === true) {
+    await ensureTables(accountId, databaseId, apiToken, {
+      cacheTableName,
+      rateLimitTableName,
+      tokenTableName,
+      altchaTableName: resolvedAltchaTableName,
+      sessionTableName,
+    });
+  }
 
   console.log('[Unified Check D1-REST] Starting unified check for path:', path);
 
