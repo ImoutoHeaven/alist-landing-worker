@@ -1235,11 +1235,9 @@ const createDownloadURL = async (
           );
         };
 
-        if (ctx && typeof ctx.waitUntil === 'function') {
-          ctx.waitUntil(insertPromise.catch(handleInsertError));
-        } else {
-          await insertPromise.catch(handleInsertError);
-        }
+        // IMPORTANT: Must await to prevent race condition with simple-alist-cf-proxy
+        // If we use ctx.waitUntil (async), simple worker may query session before it's written
+        await insertPromise.catch(handleInsertError);
 
         const filename = decodedPath.split('/').filter(Boolean).pop() || 'download';
         return `${workerBaseURL}/session/${encodeURIComponent(filename)}?q=${encodeURIComponent(uuid)}&qs=${encodeURIComponent(qsSign)}`;
