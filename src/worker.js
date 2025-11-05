@@ -1229,7 +1229,8 @@ const createDownloadURL = async (
           await insertPromise.catch(handleInsertError);
         }
 
-        return `${workerBaseURL}/session?q=${encodeURIComponent(uuid)}&qs=${encodeURIComponent(qsSign)}`;
+        const filename = decodedPath.split('/').filter(Boolean).pop() || 'download';
+        return `${workerBaseURL}/session/${encodeURIComponent(filename)}?q=${encodeURIComponent(uuid)}&qs=${encodeURIComponent(qsSign)}`;
       } else {
         console.warn('[Session Download] Unable to compute IP subnet; falling back to signed URL');
       }
