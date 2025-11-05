@@ -1202,11 +1202,12 @@ const createDownloadURL = async (
     } else {
       const ipSubnet = calculateIPSubnet(clientIP, config.ipv4Suffix, config.ipv6Suffix);
       if (ipSubnet) {
-        const sessionTicket = crypto.randomUUID();
+        const uuid = crypto.randomUUID();
+        const qsSign = await hmacSha256Sign(config.signSecret, uuid, resolvedExpireTime);
         const createdAt = Math.floor(Date.now() / 1000);
         const insertPromise = Promise.resolve(
           sessionDBManager.insert(
-            sessionTicket,
+            uuid,
             decodedPath,
             ipSubnet,
             workerBaseURL,
@@ -1228,7 +1229,7 @@ const createDownloadURL = async (
           await insertPromise.catch(handleInsertError);
         }
 
-        return `${workerBaseURL}/session?q=${encodeURIComponent(sessionTicket)}`;
+        return `${workerBaseURL}/session?q=${encodeURIComponent(uuid)}&qs=${encodeURIComponent(qsSign)}`;
       } else {
         console.warn('[Session Download] Unable to compute IP subnet; falling back to signed URL');
       }
