@@ -37,10 +37,19 @@ export class SessionDBManagerPostgREST {
     return null;
   }
 
-  async insert(sessionTicket, filePath, ipSubnet, workerAddress, expireAt, createdAt) {
+  async insert({
+    sessionTicket,
+    filePath,
+    filePathHash,
+    ipSubnet,
+    workerAddress,
+    expireAt,
+    createdAt,
+  }) {
     const payload = {
       p_session_ticket: sessionTicket,
       p_file_path: filePath,
+      p_file_path_hash: filePathHash,
       p_ip_subnet: ipSubnet,
       p_worker_address: workerAddress,
       p_expire_at: expireAt,

@@ -5,6 +5,7 @@
 CREATE TABLE IF NOT EXISTS "SESSION_MAPPING_TABLE" (
   "SESSION_TICKET" TEXT PRIMARY KEY,
   "FILE_PATH" TEXT NOT NULL,
+  "FILE_PATH_HASH" TEXT NOT NULL,
   "IP_SUBNET" TEXT NOT NULL,
   "WORKER_ADDRESS" TEXT NOT NULL,
   "EXPIRE_AT" BIGINT NOT NULL,
@@ -13,6 +14,8 @@ CREATE TABLE IF NOT EXISTS "SESSION_MAPPING_TABLE" (
 
 CREATE INDEX IF NOT EXISTS idx_session_expire
   ON "SESSION_MAPPING_TABLE" ("EXPIRE_AT");
+CREATE INDEX IF NOT EXISTS idx_session_file_path_hash
+  ON "SESSION_MAPPING_TABLE" ("FILE_PATH_HASH");
 
 -- ========================================
 -- Stored Procedure: Insert Session Mapping
@@ -21,6 +24,7 @@ CREATE INDEX IF NOT EXISTS idx_session_expire
 CREATE OR REPLACE FUNCTION session_insert(
   p_session_ticket TEXT,
   p_file_path TEXT,
+  p_file_path_hash TEXT,
   p_ip_subnet TEXT,
   p_worker_address TEXT,
   p_expire_at BIGINT,
@@ -31,6 +35,7 @@ BEGIN
   INSERT INTO "SESSION_MAPPING_TABLE" (
     "SESSION_TICKET",
     "FILE_PATH",
+    "FILE_PATH_HASH",
     "IP_SUBNET",
     "WORKER_ADDRESS",
     "EXPIRE_AT",
@@ -39,6 +44,7 @@ BEGIN
   VALUES (
     p_session_ticket,
     p_file_path,
+    p_file_path_hash,
     p_ip_subnet,
     p_worker_address,
     p_expire_at,

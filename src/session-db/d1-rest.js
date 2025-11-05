@@ -84,6 +84,7 @@ export class SessionDBManagerD1Rest {
                 CREATE TABLE IF NOT EXISTS ${this.tableName} (
                   SESSION_TICKET TEXT PRIMARY KEY,
                   FILE_PATH TEXT NOT NULL,
+                  FILE_PATH_HASH TEXT NOT NULL,
                   IP_SUBNET TEXT NOT NULL,
                   WORKER_ADDRESS TEXT NOT NULL,
                   EXPIRE_AT INTEGER NOT NULL,
@@ -93,6 +94,9 @@ export class SessionDBManagerD1Rest {
             },
             {
               sql: `CREATE INDEX IF NOT EXISTS idx_session_expire ON ${this.tableName}(EXPIRE_AT)`,
+            },
+            {
+              sql: `CREATE INDEX IF NOT EXISTS idx_session_file_path_hash ON ${this.tableName}(FILE_PATH_HASH)`,
             },
           ]);
           this.tableEnsured = true;
@@ -112,19 +116,36 @@ export class SessionDBManagerD1Rest {
     return this.tableEnsured;
   }
 
-  async insert(sessionTicket, filePath, ipSubnet, workerAddress, expireAt, createdAt) {
+  async insert({
+    sessionTicket,
+    filePath,
+    filePathHash,
+    ipSubnet,
+    workerAddress,
+    expireAt,
+    createdAt,
+  }) {
     await this.ensureTable();
 
     const sql = `INSERT INTO ${this.tableName} (
       SESSION_TICKET,
       FILE_PATH,
+      FILE_PATH_HASH,
       IP_SUBNET,
       WORKER_ADDRESS,
       EXPIRE_AT,
       CREATED_AT
-    ) VALUES (?, ?, ?, ?, ?, ?)`;
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)`;
 
-    await this.#execute(sql, [sessionTicket, filePath, ipSubnet, workerAddress, expireAt, createdAt]);
+    await this.#execute(sql, [
+      sessionTicket,
+      filePath,
+      filePathHash,
+      ipSubnet,
+      workerAddress,
+      expireAt,
+      createdAt,
+    ]);
   }
 
   async cleanup() {

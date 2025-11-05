@@ -1180,12 +1180,12 @@ const createDownloadURL = async (
   ctx = null
 ) => {
   const workerBaseURL = selectRandomWorker(config.workerAddresses);
+  const normalizedFilePath = decodedPath.startsWith('/') ? decodedPath : `/${decodedPath}`;
   const normalizedSizeBytes = Number.isFinite(sizeBytes) && sizeBytes > 0 ? sizeBytes : 0;
   const normalizedDbMode = typeof config.dbMode === 'string' ? config.dbMode.trim() : '';
   const normalizedSessionDbMode = typeof config.sessionDbMode === 'string' ? config.sessionDbMode.trim() : '';
   const isStateless = (!normalizedDbMode || normalizedDbMode.length === 0) && (!normalizedSessionDbMode || normalizedSessionDbMode.length === 0);
   if (config.sessionEnabled && isStateless) {
-    const normalizedFilePath = decodedPath.startsWith('/') ? decodedPath : `/${decodedPath}`;
     return `${workerBaseURL}${normalizedFilePath}`;
   }
 
@@ -1213,15 +1213,17 @@ const createDownloadURL = async (
         const uuid = crypto.randomUUID();
         const qsSign = await hmacSha256Sign(config.signSecret, uuid, resolvedExpireTime);
         const createdAt = Math.floor(Date.now() / 1000);
+        const filePathHash = await sha256Hash(decodedPath);
         const insertPromise = Promise.resolve(
-          sessionDBManager.insert(
-            uuid,
-            decodedPath,
+          sessionDBManager.insert({
+            sessionTicket: uuid,
+            filePath: decodedPath,
+            filePathHash,
             ipSubnet,
-            workerBaseURL,
-            resolvedExpireTime,
-            createdAt
-          )
+            workerAddress: workerBaseURL,
+            expireAt: resolvedExpireTime,
+            createdAt,
+          })
         );
 
         const handleInsertError = (error) => {

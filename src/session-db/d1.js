@@ -29,6 +29,7 @@ export class SessionDBManagerD1 {
               CREATE TABLE IF NOT EXISTS ${this.tableName} (
                 SESSION_TICKET TEXT PRIMARY KEY,
                 FILE_PATH TEXT NOT NULL,
+                FILE_PATH_HASH TEXT NOT NULL,
                 IP_SUBNET TEXT NOT NULL,
                 WORKER_ADDRESS TEXT NOT NULL,
                 EXPIRE_AT INTEGER NOT NULL,
@@ -36,6 +37,7 @@ export class SessionDBManagerD1 {
               )
             `),
             db.prepare(`CREATE INDEX IF NOT EXISTS idx_session_expire ON ${this.tableName}(EXPIRE_AT)`),
+            db.prepare(`CREATE INDEX IF NOT EXISTS idx_session_file_path_hash ON ${this.tableName}(FILE_PATH_HASH)`),
           ]);
         } catch (error) {
           console.error(
@@ -51,21 +53,30 @@ export class SessionDBManagerD1 {
     return this.#ensureTablePromise;
   }
 
-  async insert(sessionTicket, filePath, ipSubnet, workerAddress, expireAt, createdAt) {
+  async insert({
+    sessionTicket,
+    filePath,
+    filePathHash,
+    ipSubnet,
+    workerAddress,
+    expireAt,
+    createdAt,
+  }) {
     const db = this.#getDatabase();
     await this.#ensureTable(db);
     const sql = `INSERT INTO ${this.tableName} (
       SESSION_TICKET,
       FILE_PATH,
+      FILE_PATH_HASH,
       IP_SUBNET,
       WORKER_ADDRESS,
       EXPIRE_AT,
       CREATED_AT
-    ) VALUES (?, ?, ?, ?, ?, ?)`;
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)`;
 
     return db
       .prepare(sql)
-      .bind(sessionTicket, filePath, ipSubnet, workerAddress, expireAt, createdAt)
+      .bind(sessionTicket, filePath, filePathHash, ipSubnet, workerAddress, expireAt, createdAt)
       .run();
   }
 
