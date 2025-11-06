@@ -281,6 +281,11 @@ const resolveConfig = (env = {}) => {
   const dbMode = env.DB_MODE && typeof env.DB_MODE === 'string' ? env.DB_MODE.trim() : '';
   const enableCfRatelimiter = normalizeString(env.ENABLE_CF_RATELIMITER, 'false').toLowerCase() === 'true';
   const cfRatelimiterBinding = normalizeString(env.CF_RATELIMITER_BINDING, 'CF_RATE_LIMITER');
+  let d1DatabaseBinding = '';
+  let d1AccountId = '';
+  let d1DatabaseId = '';
+  let d1ApiToken = '';
+  let postgrestUrl = '';
 
   if (!dbMode) {
     turnstileTokenBindingEnabled = false;
@@ -352,7 +357,7 @@ const resolveConfig = (env = {}) => {
 
     if (normalizedDbMode === 'd1') {
       // D1 (Cloudflare D1 Binding) configuration
-      const d1DatabaseBinding = env.D1_DATABASE_BINDING && typeof env.D1_DATABASE_BINDING === 'string' ? env.D1_DATABASE_BINDING.trim() : 'DB';
+      d1DatabaseBinding = env.D1_DATABASE_BINDING && typeof env.D1_DATABASE_BINDING === 'string' ? env.D1_DATABASE_BINDING.trim() : 'DB';
       const d1TableName = env.D1_TABLE_NAME && typeof env.D1_TABLE_NAME === 'string' ? env.D1_TABLE_NAME.trim() : '';
 
       if (d1DatabaseBinding && windowTimeSeconds > 0 && ipSubnetLimit > 0) {
@@ -384,9 +389,9 @@ const resolveConfig = (env = {}) => {
       }
     } else if (normalizedDbMode === 'd1-rest') {
       // D1 REST API configuration
-      const d1AccountId = env.D1_ACCOUNT_ID && typeof env.D1_ACCOUNT_ID === 'string' ? env.D1_ACCOUNT_ID.trim() : '';
-      const d1DatabaseId = env.D1_DATABASE_ID && typeof env.D1_DATABASE_ID === 'string' ? env.D1_DATABASE_ID.trim() : '';
-      const d1ApiToken = env.D1_API_TOKEN && typeof env.D1_API_TOKEN === 'string' ? env.D1_API_TOKEN.trim() : '';
+      d1AccountId = env.D1_ACCOUNT_ID && typeof env.D1_ACCOUNT_ID === 'string' ? env.D1_ACCOUNT_ID.trim() : '';
+      d1DatabaseId = env.D1_DATABASE_ID && typeof env.D1_DATABASE_ID === 'string' ? env.D1_DATABASE_ID.trim() : '';
+      d1ApiToken = env.D1_API_TOKEN && typeof env.D1_API_TOKEN === 'string' ? env.D1_API_TOKEN.trim() : '';
       const d1TableName = env.D1_TABLE_NAME && typeof env.D1_TABLE_NAME === 'string' ? env.D1_TABLE_NAME.trim() : '';
 
       if (d1AccountId && d1DatabaseId && d1ApiToken && windowTimeSeconds > 0 && ipSubnetLimit > 0) {
@@ -425,7 +430,7 @@ const resolveConfig = (env = {}) => {
       }
     } else if (normalizedDbMode === 'custom-pg-rest') {
       // Custom PostgreSQL REST API (PostgREST) configuration
-      const postgrestUrl = env.POSTGREST_URL && typeof env.POSTGREST_URL === 'string' ? env.POSTGREST_URL.trim() : '';
+      postgrestUrl = env.POSTGREST_URL && typeof env.POSTGREST_URL === 'string' ? env.POSTGREST_URL.trim() : '';
       const postgrestTableName = env.POSTGREST_TABLE_NAME && typeof env.POSTGREST_TABLE_NAME === 'string' ? env.POSTGREST_TABLE_NAME.trim() : '';
 
       if (postgrestUrl && verifyHeaders.length > 0 && verifySecrets.length > 0 && windowTimeSeconds > 0 && ipSubnetLimit > 0) {
@@ -463,6 +468,24 @@ const resolveConfig = (env = {}) => {
       throw new Error(`Invalid DB_MODE: "${dbMode}". Valid options are: "d1", "d1-rest", "custom-pg-rest"`);
     }
   }
+
+  const idleTimeoutRaw = normalizeString(env.IDLE_TIMEOUT, '0');
+  let idleTimeoutSeconds = parseWindowTime(idleTimeoutRaw);
+  if (!Number.isFinite(idleTimeoutSeconds) || idleTimeoutSeconds < 0) {
+    idleTimeoutSeconds = 0;
+  }
+
+  const idleDbModeCandidate = env.IDLE_DB_MODE && typeof env.IDLE_DB_MODE === 'string'
+    ? env.IDLE_DB_MODE.trim()
+    : '';
+  const idleDbMode = idleDbModeCandidate || dbMode;
+
+  const idleD1DatabaseBinding = normalizeString(env.IDLE_D1_DATABASE_BINDING, '') || d1DatabaseBinding;
+  const idleD1AccountId = normalizeString(env.IDLE_D1_ACCOUNT_ID, '') || d1AccountId;
+  const idleD1DatabaseId = normalizeString(env.IDLE_D1_DATABASE_ID, '') || d1DatabaseId;
+  const idleD1ApiToken = normalizeString(env.IDLE_D1_API_TOKEN, '') || d1ApiToken;
+  const idlePostgrestUrl = normalizeString(env.IDLE_POSTGREST_URL, '') || postgrestUrl;
+  const idleTableName = normalizeString(env.IDLE_TABLE_NAME, 'DOWNLOAD_LAST_ACTIVE_TABLE');
 
   const appendAdditional = parseBoolean(env.IF_APPEND_ADDITIONAL, true);
   const addressCandidates = [
@@ -654,10 +677,20 @@ const resolveConfig = (env = {}) => {
     minDurationSeconds,
     maxDurationTime: maxDurationMilliseconds,
     maxDurationSeconds,
+    idleTimeoutRaw,
+    idleTimeoutSeconds,
+    idleDbMode,
+    idleD1DatabaseBinding,
+    idleD1AccountId,
+    idleD1DatabaseId,
+    idleD1ApiToken,
+    idlePostgrestUrl,
+    idleTableName,
     sessionEnabled,
     sessionDbMode: normalizedSessionDbMode,
     sessionDbConfig,
     initTables,
+    env,
   };
 };
 
@@ -1120,9 +1153,13 @@ const fetchFilesizeFromCache = async (config, pathHash) => {
   return 0;
 };
 
-const createAdditionalParams = async (config, decodedPath, clientIP, signExpire, options = {}) => {
+const createAdditionalParams = async (config, decodedPath, clientIP, signExpire, idleTimeoutSeconds, options = {}) => {
   if (!config.appendAdditional) return null;
   let { sizeBytes, expireTime, fileInfo } = options;
+  const safeIdleTimeoutSeconds =
+    Number.isFinite(idleTimeoutSeconds) && idleTimeoutSeconds >= 0
+      ? Math.floor(idleTimeoutSeconds)
+      : 0;
 
   const pathHash = await sha256Hash(decodedPath);
 
@@ -1168,6 +1205,7 @@ const createAdditionalParams = async (config, decodedPath, clientIP, signExpire,
     pathHash,
     filesize: sizeBytes,
     expireTime,
+    idle_timeout: safeIdleTimeoutSeconds,
   });
   const rawAdditionalInfo = encodeTextToBase64(payload);
   const additionalInfo = rawAdditionalInfo.replace(/=+$/, '');
@@ -1186,6 +1224,10 @@ const createDownloadURL = async (
   const normalizedSizeBytes = Number.isFinite(sizeBytes) && sizeBytes > 0 ? sizeBytes : 0;
   const normalizedDbMode = typeof config.dbMode === 'string' ? config.dbMode.trim() : '';
   const normalizedSessionDbMode = typeof config.sessionDbMode === 'string' ? config.sessionDbMode.trim() : '';
+  const idleTimeoutSeconds =
+    Number.isFinite(config.idleTimeoutSeconds) && config.idleTimeoutSeconds >= 0
+      ? Math.floor(config.idleTimeoutSeconds)
+      : 0;
   const isStateless = (!normalizedDbMode || normalizedDbMode.length === 0) && (!normalizedSessionDbMode || normalizedSessionDbMode.length === 0);
   if (config.sessionEnabled && isStateless) {
     return `${workerBaseURL}${normalizedFilePath}`;
@@ -1266,7 +1308,7 @@ const createDownloadURL = async (
   downloadURLObj.searchParams.set('ipSign', ipSign);
 
   if (config.appendAdditional) {
-    const additionalParams = await createAdditionalParams(config, decodedPath, clientIP, expire, {
+    const additionalParams = await createAdditionalParams(config, decodedPath, clientIP, expire, idleTimeoutSeconds, {
       sizeBytes,
       expireTime,
       fileInfo,
@@ -1277,8 +1319,186 @@ const createDownloadURL = async (
     }
   }
 
+  if (idleTimeoutSeconds > 0 && ctx && typeof ctx.waitUntil === 'function') {
+    ctx.waitUntil(
+      writeIdleInitialRecord(ctx, {
+        clientIP,
+        path: decodedPath,
+        idleDbMode: config.idleDbMode,
+        idleD1DatabaseBinding: config.idleD1DatabaseBinding,
+        idleD1AccountId: config.idleD1AccountId,
+        idleD1DatabaseId: config.idleD1DatabaseId,
+        idleD1ApiToken: config.idleD1ApiToken,
+        idlePostgrestUrl: config.idlePostgrestUrl,
+        verifyHeader: config.verifyHeader,
+        verifySecret: config.verifySecret,
+        idleTableName: config.idleTableName,
+        ipv4Suffix: config.ipv4Suffix,
+        ipv6Suffix: config.ipv6Suffix,
+        env: config.env,
+      })
+    );
+  }
+
   return downloadURLObj.toString();
 };
+
+/**
+ * Write initial IDLE record when download link is generated.
+ * @param {ExecutionContext|null} ctx
+ * @param {object} config
+ */
+async function writeIdleInitialRecord(ctx, config) {
+  const {
+    clientIP,
+    path,
+    idleDbMode,
+    idleD1DatabaseBinding,
+    idleD1AccountId,
+    idleD1DatabaseId,
+    idleD1ApiToken,
+    idlePostgrestUrl,
+    verifyHeader,
+    verifySecret,
+    idleTableName,
+    ipv4Suffix,
+    ipv6Suffix,
+    env,
+  } = config || {};
+
+  if (!clientIP || !path) {
+    return;
+  }
+
+  try {
+    const normalizedIdleDbMode =
+      typeof idleDbMode === 'string' ? idleDbMode.trim().toLowerCase() : '';
+    if (!normalizedIdleDbMode) {
+      return;
+    }
+
+    if (!idleTableName) {
+      console.log('[IDLE] Table name missing');
+      return;
+    }
+
+    const ipSubnet = calculateIPSubnet(clientIP, ipv4Suffix, ipv6Suffix);
+    if (!ipSubnet) {
+      console.log('[IDLE] Failed to calculate IP subnet');
+      return;
+    }
+
+    const [ipHash, pathHash] = await Promise.all([
+      sha256Hash(ipSubnet),
+      sha256Hash(path),
+    ]);
+
+    if (!ipHash || !pathHash) {
+      console.log('[IDLE] Failed to calculate hashes');
+      return;
+    }
+
+    const now = Math.floor(Date.now() / 1000);
+
+    if (normalizedIdleDbMode === 'd1') {
+      if (!env) {
+        console.log('[IDLE] Env binding not available for D1 mode');
+        return;
+      }
+      const bindingName = idleD1DatabaseBinding || 'DB';
+      const db = env[bindingName];
+      if (!db || typeof db.prepare !== 'function') {
+        console.log('[IDLE] D1 database binding not found');
+        return;
+      }
+
+      await db
+        .prepare(`
+        INSERT INTO ${idleTableName} (IP_HASH, PATH_HASH, LAST_ACCESS_TIME, TOTAL_ACCESS_COUNT)
+        VALUES (?, ?, ?, 0)
+        ON CONFLICT (IP_HASH, PATH_HASH) DO UPDATE SET
+          LAST_ACCESS_TIME = excluded.LAST_ACCESS_TIME
+      `)
+        .bind(ipHash, pathHash, now)
+        .run();
+
+      console.log('[IDLE] D1 write success');
+      return;
+    }
+
+    if (normalizedIdleDbMode === 'd1-rest') {
+      if (!idleD1AccountId || !idleD1DatabaseId || !idleD1ApiToken) {
+        console.log('[IDLE] D1 REST configuration incomplete');
+        return;
+      }
+
+      const response = await fetch(
+        `https://api.cloudflare.com/client/v4/accounts/${idleD1AccountId}/d1/database/${idleD1DatabaseId}/query`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${idleD1ApiToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            sql: `INSERT INTO ${idleTableName} (IP_HASH, PATH_HASH, LAST_ACCESS_TIME, TOTAL_ACCESS_COUNT) VALUES (?, ?, ?, 0) ON CONFLICT (IP_HASH, PATH_HASH) DO UPDATE SET LAST_ACCESS_TIME = excluded.LAST_ACCESS_TIME`,
+            params: [ipHash, pathHash, now],
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => '');
+        console.log('[IDLE] D1 REST write failed:', response.status, errorText);
+        return;
+      }
+
+      console.log('[IDLE] D1 REST write success');
+      return;
+    }
+
+    if (normalizedIdleDbMode === 'custom-pg-rest') {
+      if (!idlePostgrestUrl) {
+        console.log('[IDLE] PostgREST URL missing');
+        return;
+      }
+
+      const headers = {
+        'Content-Type': 'application/json',
+        Prefer: 'return=representation',
+      };
+
+      if (Array.isArray(verifyHeader) && Array.isArray(verifySecret)) {
+        for (let i = 0; i < verifyHeader.length && i < verifySecret.length; i += 1) {
+          if (verifyHeader[i] && verifySecret[i]) {
+            headers[verifyHeader[i]] = verifySecret[i];
+          }
+        }
+      }
+
+      const response = await fetch(`${idlePostgrestUrl}/rpc/download_update_last_active`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          p_ip_hash: ipHash,
+          p_path_hash: pathHash,
+          p_last_access_time: now,
+          p_table_name: idleTableName,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => '');
+        console.log('[IDLE] PostgREST write failed:', response.status, errorText);
+        return;
+      }
+
+      console.log('[IDLE] PostgREST write success');
+    }
+  } catch (error) {
+    console.error('[IDLE] Failed to write initial record:', error instanceof Error ? error.message : String(error));
+  }
+}
 
 const checkPathListAction = (path, config) => {
   let decodedPath;

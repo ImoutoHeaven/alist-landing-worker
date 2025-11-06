@@ -452,6 +452,78 @@ persist = true
 # #   IPSUBNET_WINDOWTIME_LIMIT = "100"
 
 # # ═══════════════════════════════════════════════════════════════
+# # ⚠️ NEW: IDLE Timeout System (Force Active Download Usage)
+# # ═══════════════════════════════════════════════════════════════
+# #
+# # Purpose: Enforce users to download immediately after link generation
+# # Prevents hoarding download links for later batch downloading
+# #
+# # How it works:
+# # 1. Landing worker generates download link → writes initial IDLE record (ACCESS_COUNT=0)
+# # 2. Proxy worker checks idle timeout → updates ACCESS_COUNT and LAST_ACCESS_TIME
+# # 3. If idle timeout exceeded → proxy returns 410 Gone (link expired due to inactivity)
+# # 4. additionalInfo.idle_timeout overrides proxy's environment variable (central control)
+# #
+# # Requirements:
+# # - IDLE_TIMEOUT must be non-zero to enable IDLE writes
+# # - IDLE_DB_MODE falls back to DB_MODE when not specified
+# # - For custom-pg-rest: DOWNLOAD_LAST_ACTIVE_TABLE must exist (see simple-alist-cf-proxy/init.sql)
+# #
+# # Configuration:
+# IDLE_TIMEOUT = "0"                            # IDLE timeout duration (0 = disabled)
+#                                                # Format: {number}{unit} where unit is h/m/s
+#                                                # Examples: "30m", "1h", "60s"
+#                                                # Default: "0" (disabled)
+#                                                # When >0: Landing writes initial record, proxy enforces timeout
+#
+# IDLE_TABLE_NAME = "DOWNLOAD_LAST_ACTIVE_TABLE"  # IDLE tracking table name
+#                                                   # Default: "DOWNLOAD_LAST_ACTIVE_TABLE"
+#                                                   # Must match table in simple-alist-cf-proxy
+#
+# # IDLE DB Configuration (fallback to main DB_MODE if not specified)
+# # Only configure these if you want separate database for IDLE tracking
+# # IDLE_DB_MODE = ""                            # Optional override ("d1", "d1-rest", "custom-pg-rest"); falls back to DB_MODE
+# # IDLE_D1_DATABASE_BINDING = ""                # D1 binding for IDLE storage (when IDLE_DB_MODE="d1"); defaults to D1_DATABASE_BINDING
+# # IDLE_D1_ACCOUNT_ID = ""                      # Required when IDLE_DB_MODE="d1-rest"; defaults to D1_ACCOUNT_ID
+# # IDLE_D1_DATABASE_ID = ""                     # Required when IDLE_DB_MODE="d1-rest"; defaults to D1_DATABASE_ID
+# # IDLE_D1_API_TOKEN = ""                       # Required when IDLE_DB_MODE="d1-rest"; defaults to D1_API_TOKEN
+# # IDLE_POSTGREST_URL = ""                      # Required when IDLE_DB_MODE="custom-pg-rest"; defaults to POSTGREST_URL
+# #
+# # Data Flow:
+# # 1. Landing worker generates link → includes idle_timeout in additionalInfo (signed)
+# # 2. Landing worker writes: (IP_HASH, PATH_HASH, now, ACCESS_COUNT=0) via ctx.waitUntil (async)
+# # 3. Proxy receives request → extracts idle_timeout from additionalInfo
+# # 4. Proxy checks: (now - LAST_ACCESS_TIME > idle_timeout) → 410 if expired
+# # 5. Proxy updates: ACCESS_COUNT++ and LAST_ACCESS_TIME=now
+# #
+# # Priority:
+# # - additionalInfo.idle_timeout (from landing) > proxy env IDLE_TIMEOUT (local)
+# # - This allows central control: landing decides timeout policy
+# # - Proxy respects per-link timeout: idle_timeout=0 → disables check completely
+# #
+# # Example Configuration (Enable IDLE with 30min timeout):
+# #   IDLE_TIMEOUT = "30m"
+# #   IDLE_TABLE_NAME = "DOWNLOAD_LAST_ACTIVE_TABLE"
+# #   DB_MODE = "custom-pg-rest"  # IDLE_DB_MODE will fall back to this
+# #   POSTGREST_URL = "https://postgrest.example.com"
+# #
+# # Example Configuration (Separate IDLE Database):
+# #   IDLE_TIMEOUT = "1h"
+# #   IDLE_DB_MODE = "custom-pg-rest"
+# #   IDLE_POSTGREST_URL = "https://idle-postgrest.example.com"
+# #   IDLE_TABLE_NAME = "DOWNLOAD_LAST_ACTIVE_TABLE"
+# #
+# # Performance Notes:
+# # - Landing writes IDLE record asynchronously (ctx.waitUntil) - no response blocking
+# # - Proxy checks IDLE as part of unified check (1 RTT includes cache + rate + idle)
+# # - Table uses composite primary key (IP_HASH, PATH_HASH) for efficient UPSERT
+# #
+# # Error Handling:
+# # - Landing write failure → silent (doesn't block link generation)
+# # - Proxy check failure → continues (fail-open for IDLE feature)
+# #
+
+# # ═══════════════════════════════════════════════════════════════
 # # ⚠️ NEW: Cloudflare Rate Limiter (Binding-based, Stateless/Stateful)
 # # ═══════════════════════════════════════════════════════════════
 # #
