@@ -363,7 +363,6 @@ persist = true
 # # - IP_LIMIT_TABLE (IP rate limiting)
 # # - TURNSTILE_TOKEN_BINDING (Turnstile token binding)
 # # - ALTCHA_TOKEN_LIST (ALTCHA PoW token replay prevention)
-# # - SESSION_MAPPING_TABLE (optional, if SESSION_ENABLED="true")
 # #
 # # Note: For custom-pg-rest mode, you should still run init.sql manually for stored procedures
 # #       INIT_TABLES only creates tables, not functions/procedures
@@ -400,17 +399,6 @@ persist = true
 # POSTGREST_URL = "https://your-domain.com/postgrest"  # PostgREST API endpoint (without table name)
 # POSTGREST_TABLE_NAME = "IP_LIMIT_TABLE"  # Optional, defaults to IP_LIMIT_TABLE
 # # Note: VERIFY_HEADER and VERIFY_SECRET (already defined above) are used for PostgREST authentication
-#
-# # Session-Based Download Tickets (optional)
-# SESSION_ENABLED = "false"                       # Enable UUID session tickets; default disabled
-# SESSION_DB_MODE = ""                            # Optional override ("d1", "d1-rest", "custom-pg-rest"); falls back to DB_MODE
-# SESSION_D1_DATABASE_BINDING = "SESSIONDB"       # D1 binding for session storage (when SESSION_DB_MODE="d1")
-# SESSION_D1_TABLE_NAME = "SESSION_MAPPING_TABLE" # Session table name for D1 / D1-REST
-# SESSION_D1_ACCOUNT_ID = ""                      # Required when SESSION_DB_MODE="d1-rest"
-# SESSION_D1_DATABASE_ID = ""
-# SESSION_D1_API_TOKEN = ""
-# SESSION_POSTGREST_URL = "https://your-domain.com/postgrest"  # Required when SESSION_DB_MODE="custom-pg-rest"
-# SESSION_POSTGREST_TABLE_NAME = "SESSION_MAPPING_TABLE"
 #
 # # ═══════════════════════════════════════════════════════════════
 # # ⚠️ NEW: Filesize Cache System (Reduce /api/fs/get API Calls)

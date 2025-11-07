@@ -13,7 +13,6 @@ import { createChallenge, verifySolution } from 'altcha-lib';
 import { renderLandingPage } from './frontend.js';
 import { createRateLimiter } from './ratelimit/factory.js';
 import { createCacheManager } from './cache/factory.js';
-import { createSessionDBManager } from './session-db/factory.js';
 import { unifiedCheck } from './unified-check.js';
 import { unifiedCheckD1 } from './unified-check-d1.js';
 import { unifiedCheckD1Rest } from './unified-check-d1-rest.js';
@@ -599,88 +598,7 @@ const resolveConfig = (env = {}) => {
     }
   }
 
-  const sessionEnabled = parseBoolean(env.SESSION_ENABLED, false);
   const initTables = parseBoolean(env.INIT_TABLES, false);
-  const rawSessionDbMode = typeof env.SESSION_DB_MODE === 'string' ? env.SESSION_DB_MODE.trim() : '';
-  const sessionDbMode = rawSessionDbMode || dbMode || '';
-  const sessionTableNameRaw = typeof env.SESSION_D1_TABLE_NAME === 'string' ? env.SESSION_D1_TABLE_NAME.trim() : '';
-  const sessionDefaultTable = sessionTableNameRaw || 'SESSION_MAPPING_TABLE';
-  const sessionPostgrestTableRaw = typeof env.SESSION_POSTGREST_TABLE_NAME === 'string'
-    ? env.SESSION_POSTGREST_TABLE_NAME.trim()
-    : '';
-  const sessionPostgrestTableName = sessionPostgrestTableRaw || sessionDefaultTable;
-
-  let sessionDbConfig = null;
-  const normalizedSessionDbMode = sessionDbMode ? sessionDbMode.toLowerCase() : '';
-
-  if (sessionEnabled) {
-    if (!normalizedSessionDbMode) {
-      throw new Error('SESSION_ENABLED is true but SESSION_DB_MODE (or DB_MODE fallback) is missing');
-    }
-
-    if (normalizedSessionDbMode === 'd1') {
-      const explicitBinding = normalizeString(env.SESSION_D1_DATABASE_BINDING, '');
-      const fallbackBinding =
-        normalizeString(cacheConfig?.databaseBinding, '') ||
-        normalizeString(rateLimitConfig?.databaseBinding, '') ||
-        'SESSIONDB';
-      const databaseBinding = explicitBinding || fallbackBinding;
-      sessionDbConfig = {
-        env,
-        databaseBinding,
-        tableName: sessionDefaultTable,
-      };
-    } else if (normalizedSessionDbMode === 'd1-rest') {
-      const accountId =
-        normalizeString(env.SESSION_D1_ACCOUNT_ID, '') ||
-        normalizeString(rateLimitConfig?.accountId, '') ||
-        normalizeString(cacheConfig?.accountId, '') ||
-        normalizeString(d1RestConfig?.accountId, '');
-      const databaseId =
-        normalizeString(env.SESSION_D1_DATABASE_ID, '') ||
-        normalizeString(rateLimitConfig?.databaseId, '') ||
-        normalizeString(cacheConfig?.databaseId, '') ||
-        normalizeString(d1RestConfig?.databaseId, '');
-      const apiToken =
-        normalizeString(env.SESSION_D1_API_TOKEN, '') ||
-        normalizeString(rateLimitConfig?.apiToken, '') ||
-        normalizeString(cacheConfig?.apiToken, '') ||
-        normalizeString(d1RestConfig?.apiToken, '');
-
-      if (!accountId || !databaseId || !apiToken) {
-        throw new Error(
-          'SESSION_DB_MODE is "d1-rest" but SESSION_D1_ACCOUNT_ID, SESSION_D1_DATABASE_ID, or SESSION_D1_API_TOKEN is missing'
-        );
-      }
-
-      sessionDbConfig = {
-        accountId,
-        databaseId,
-        apiToken,
-        tableName: sessionDefaultTable,
-      };
-    } else if (normalizedSessionDbMode === 'custom-pg-rest') {
-      const postgrestUrl =
-        normalizeString(env.SESSION_POSTGREST_URL, '') ||
-        normalizeString(rateLimitConfig?.postgrestUrl, '') ||
-        normalizeString(cacheConfig?.postgrestUrl, '');
-
-      if (!postgrestUrl) {
-        throw new Error('SESSION_DB_MODE is "custom-pg-rest" but SESSION_POSTGREST_URL is missing');
-      }
-
-      sessionDbConfig = {
-        postgrestUrl,
-        tableName: sessionPostgrestTableName,
-        verifyHeader: verifyHeaders,
-        verifySecret: verifySecrets,
-      };
-    } else {
-      throw new Error(
-        `Invalid SESSION_DB_MODE: "${sessionDbMode}". Valid options are: "d1", "d1-rest", "custom-pg-rest".`
-      );
-    }
-  }
 
   return {
     token: env.TOKEN,
@@ -762,9 +680,6 @@ const resolveConfig = (env = {}) => {
     idleD1ApiToken,
     idlePostgrestUrl,
     idleTableName,
-    sessionEnabled,
-    sessionDbMode: normalizedSessionDbMode,
-    sessionDbConfig,
     initTables,
     env,
   };
@@ -1325,22 +1240,16 @@ const createAdditionalParams = async (config, decodedPath, clientIP, signExpire,
 const createDownloadURL = async (
   config,
   { encodedPath, decodedPath, sign, clientIP, sizeBytes, expireTime, fileInfo },
-  sessionDBManager = null,
   ctx = null
 ) => {
   const workerBaseURL = selectRandomWorker(config.workerAddresses);
   const normalizedFilePath = decodedPath.startsWith('/') ? decodedPath : `/${decodedPath}`;
   const normalizedSizeBytes = Number.isFinite(sizeBytes) && sizeBytes > 0 ? sizeBytes : 0;
   const normalizedDbMode = typeof config.dbMode === 'string' ? config.dbMode.trim() : '';
-  const normalizedSessionDbMode = typeof config.sessionDbMode === 'string' ? config.sessionDbMode.trim() : '';
   const idleTimeoutSeconds =
     Number.isFinite(config.idleTimeoutSeconds) && config.idleTimeoutSeconds >= 0
       ? Math.floor(config.idleTimeoutSeconds)
       : 0;
-  const isStateless = (!normalizedDbMode || normalizedDbMode.length === 0) && (!normalizedSessionDbMode || normalizedSessionDbMode.length === 0);
-  if (config.sessionEnabled && isStateless) {
-    return `${workerBaseURL}${normalizedFilePath}`;
-  }
 
   let resolvedExpireTime =
     Number.isFinite(expireTime) && expireTime > 0
@@ -1355,47 +1264,6 @@ const createDownloadURL = async (
     const nowSeconds = Math.floor(Date.now() / 1000);
     const maxAllowedExpire = nowSeconds + Math.floor(config.maxDurationSeconds);
     resolvedExpireTime = Math.min(resolvedExpireTime, maxAllowedExpire);
-  }
-
-  if (config.sessionEnabled && sessionDBManager) {
-    if (!clientIP) {
-      console.warn('[Session Download] Missing client IP; falling back to signed URL');
-    } else {
-      const ipSubnet = calculateIPSubnet(clientIP, config.ipv4Suffix, config.ipv6Suffix);
-      if (ipSubnet) {
-        const uuid = crypto.randomUUID();
-        const qsSign = await hmacSha256Sign(config.signSecret, uuid, resolvedExpireTime);
-        const createdAt = Math.floor(Date.now() / 1000);
-        const filePathHash = await sha256Hash(decodedPath);
-        const insertPromise = Promise.resolve(
-          sessionDBManager.insert({
-            sessionTicket: uuid,
-            filePath: decodedPath,
-            filePathHash,
-            ipSubnet,
-            workerAddress: workerBaseURL,
-            expireAt: resolvedExpireTime,
-            createdAt,
-          })
-        );
-
-        const handleInsertError = (error) => {
-          console.error(
-            '[Session Download] Failed to insert session ticket:',
-            error instanceof Error ? error.message : String(error)
-          );
-        };
-
-        // IMPORTANT: Must await to prevent race condition with simple-alist-cf-proxy
-        // If we use ctx.waitUntil (async), simple worker may query session before it's written
-        await insertPromise.catch(handleInsertError);
-
-        const filename = decodedPath.split('/').filter(Boolean).pop() || 'download';
-        return `${workerBaseURL}/session/${encodeURIComponent(filename)}?q=${encodeURIComponent(uuid)}&qs=${encodeURIComponent(qsSign)}`;
-      } else {
-        console.warn('[Session Download] Unable to compute IP subnet; falling back to signed URL');
-      }
-    }
   }
 
   const expire = extractExpireFromSign(sign);
@@ -1750,7 +1618,7 @@ const checkPathListAction = (path, config) => {
 
 const handleOptions = (request) => new Response(null, { headers: safeHeaders(request.headers.get('Origin')) });
 
-const handleInfo = async (request, env, config, rateLimiter, sessionDBManager, ctx) => {
+const handleInfo = async (request, env, config, rateLimiter, ctx) => {
   const origin = request.headers.get('origin') || '*';
   const url = new URL(request.url);
   const path = url.searchParams.get('path');
@@ -2391,9 +2259,6 @@ const handleInfo = async (request, env, config, rateLimiter, sessionDBManager, c
           altchaTokenHash,
           altchaTokenIP: clientIP,
           altchaTableName,
-          sessionEnabled: config.sessionEnabled,
-          sessionDbMode: config.sessionDbMode,
-          sessionDbConfig: config.sessionDbConfig,
           initTables: config.initTables,
         });
       } else if (config.dbMode === 'd1-rest') {
@@ -2421,9 +2286,6 @@ const handleInfo = async (request, env, config, rateLimiter, sessionDBManager, c
           altchaTokenHash,
           altchaTokenIP: clientIP,
           altchaTableName,
-          sessionEnabled: config.sessionEnabled,
-          sessionDbMode: config.sessionDbMode,
-          sessionDbConfig: config.sessionDbConfig,
           initTables: config.initTables,
         });
       } else {
@@ -2500,7 +2362,7 @@ const handleInfo = async (request, env, config, rateLimiter, sessionDBManager, c
   }
 
   // Unified cleanup scheduler (handles all tables)
-  await scheduleAllCleanups(config, env, ctx, sessionDBManager);
+  await scheduleAllCleanups(config, env, ctx);
 
   // 当 unified check 未能启用 token binding 时，尝试回落到无状态的 Turnstile siteverify
   if (shouldBindToken && !tokenBindingAllowed && needTurnstile) {
@@ -2613,7 +2475,7 @@ const handleInfo = async (request, env, config, rateLimiter, sessionDBManager, c
     sizeBytes,
     expireTime,
     fileInfo,
-  }, sessionDBManager, ctx);
+  }, ctx);
 
   const responsePayload = {
     code: 200,
@@ -3041,11 +2903,10 @@ async function cleanupExpiredCache(config, env) {
  * @param {object} env - 环境变量
  * @param {ExecutionContext} ctx - Workers ExecutionContext
  */
-async function scheduleAllCleanups(config, env, ctx, sessionDBManager) {
+async function scheduleAllCleanups(config, env, ctx) {
   const hasDbMode = typeof config.dbMode === 'string' && config.dbMode.length > 0;
-  const hasSessionDb = Boolean(config.sessionEnabled && sessionDBManager);
-  if ((!hasDbMode && !hasSessionDb) || config.cleanupPercentage <= 0) {
-    return; // Skip if no DB configured and no session DB, or cleanup disabled
+  if (!hasDbMode || config.cleanupPercentage <= 0) {
+    return; // Skip if no DB configured or cleanup disabled
   }
 
   // Probabilistic trigger
@@ -3057,21 +2918,12 @@ async function scheduleAllCleanups(config, env, ctx, sessionDBManager) {
   // Run all cleanups in parallel (Promise.allSettled ensures one failure doesn't block others)
   const cleanupTasks = [];
 
-  if (hasDbMode) {
-    cleanupTasks.push(
-      { name: 'Rate Limit', fn: () => cleanupExpiredRateLimits(config, env) },
-      { name: 'Filesize Cache', fn: () => cleanupExpiredCache(config, env) },
-      { name: 'ALTCHA Token', fn: () => cleanupExpiredAltchaTokens(config, env) },
-      { name: 'Turnstile Token', fn: () => cleanupExpiredTurnstileTokens(config, env) },
-    );
-  }
-
-  if (hasSessionDb) {
-    cleanupTasks.push({
-      name: 'Session Mapping',
-      fn: () => sessionDBManager.cleanup(),
-    });
-  }
+  cleanupTasks.push(
+    { name: 'Rate Limit', fn: () => cleanupExpiredRateLimits(config, env) },
+    { name: 'Filesize Cache', fn: () => cleanupExpiredCache(config, env) },
+    { name: 'ALTCHA Token', fn: () => cleanupExpiredAltchaTokens(config, env) },
+    { name: 'Turnstile Token', fn: () => cleanupExpiredTurnstileTokens(config, env) },
+  );
 
   if (cleanupTasks.length === 0) {
     return;
@@ -3092,7 +2944,7 @@ async function scheduleAllCleanups(config, env, ctx, sessionDBManager) {
   }
 }
 
-const handleFileRequest = async (request, env, config, rateLimiter, sessionDBManager, ctx) => {
+const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
   if (request.method !== 'GET' && request.method !== 'HEAD') {
     return respondJson(request.headers.get('origin') || '*', { code: 405, message: 'method not allowed' }, 405);
   }
@@ -3128,7 +2980,7 @@ const handleFileRequest = async (request, env, config, rateLimiter, sessionDBMan
   }
 
   // Unified cleanup scheduler (handles all tables)
-  await scheduleAllCleanups(config, env, ctx, sessionDBManager);
+  await scheduleAllCleanups(config, env, ctx);
 
   if (request.method === 'HEAD') {
     return new Response(null, {
@@ -3242,9 +3094,6 @@ const handleFileRequest = async (request, env, config, rateLimiter, sessionDBMan
           fileRateLimitTableName: config.rateLimitConfig.fileTableName || 'IP_FILE_LIMIT_TABLE',
           ipv4Suffix: config.rateLimitConfig.ipv4Suffix,
           ipv6Suffix: config.rateLimitConfig.ipv6Suffix,
-          sessionEnabled: config.sessionEnabled,
-          sessionDbMode: config.sessionDbMode,
-          sessionDbConfig: config.sessionDbConfig,
           initTables: config.initTables,
         });
       } else if (config.dbMode === 'd1-rest') {
@@ -3264,9 +3113,6 @@ const handleFileRequest = async (request, env, config, rateLimiter, sessionDBMan
           fileRateLimitTableName: config.rateLimitConfig.fileTableName || 'IP_FILE_LIMIT_TABLE',
           ipv4Suffix: config.rateLimitConfig.ipv4Suffix,
           ipv6Suffix: config.rateLimitConfig.ipv6Suffix,
-          sessionEnabled: config.sessionEnabled,
-          sessionDbMode: config.sessionDbMode,
-          sessionDbConfig: config.sessionDbConfig,
           initTables: config.initTables,
         });
       } else {
@@ -3364,7 +3210,7 @@ const handleFileRequest = async (request, env, config, rateLimiter, sessionDBMan
       sizeBytes,
       expireTime,
       fileInfo,
-    }, sessionDBManager, ctx);
+    }, ctx);
 
     // Return 302 redirect
     return new Response(null, {
@@ -3479,7 +3325,7 @@ const handleFileRequest = async (request, env, config, rateLimiter, sessionDBMan
   });
 };
 
-const routeRequest = async (request, env, config, rateLimiter, sessionDBManager, ctx) => {
+const routeRequest = async (request, env, config, rateLimiter, ctx) => {
   if (request.method === 'OPTIONS') {
     return handleOptions(request);
   }
@@ -3488,9 +3334,9 @@ const routeRequest = async (request, env, config, rateLimiter, sessionDBManager,
   if (request.method === 'GET' && pathname === '/info') {
     const ipv4Error = ensureIPv4(request, config.ipv4Only);
     if (ipv4Error) return ipv4Error;
-    return handleInfo(request, env, config, rateLimiter, sessionDBManager, ctx);
+    return handleInfo(request, env, config, rateLimiter, ctx);
   }
-  return handleFileRequest(request, env, config, rateLimiter, sessionDBManager, ctx);
+  return handleFileRequest(request, env, config, rateLimiter, ctx);
 };
 
 export default {
@@ -3499,9 +3345,8 @@ export default {
     try {
       // Create rate limiter instance based on DB_MODE
       const rateLimiter = config.rateLimitEnabled ? createRateLimiter(config.dbMode) : null;
-      const sessionDBManager = config.sessionEnabled ? createSessionDBManager(config) : null;
 
-      return await routeRequest(request, env, config, rateLimiter, sessionDBManager, ctx);
+      return await routeRequest(request, env, config, rateLimiter, ctx);
     } catch (error) {
       const origin = request.headers.get('origin') || '*';
       const message = error instanceof Error ? error.message : String(error);

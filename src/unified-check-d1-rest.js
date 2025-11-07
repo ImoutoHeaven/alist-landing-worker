@@ -43,7 +43,7 @@ const ensureTables = async (
   accountId,
   databaseId,
   apiToken,
-  { cacheTableName, rateLimitTableName, fileRateLimitTableName, tokenTableName, altchaTableName, sessionTableName }
+  { cacheTableName, rateLimitTableName, fileRateLimitTableName, tokenTableName, altchaTableName }
 ) => {
   await executeQuery(accountId, databaseId, apiToken, `
     CREATE TABLE IF NOT EXISTS ${cacheTableName} (
@@ -112,26 +112,6 @@ const ensureTables = async (
     )
   `);
   await executeQuery(accountId, databaseId, apiToken, `CREATE INDEX IF NOT EXISTS idx_altcha_token_expires ON ${altchaTableName}(EXPIRES_AT)`);
-
-  if (sessionTableName) {
-    await executeQuery(accountId, databaseId, apiToken, [
-      {
-        sql: `
-          CREATE TABLE IF NOT EXISTS ${sessionTableName} (
-            SESSION_TICKET TEXT PRIMARY KEY,
-            FILE_PATH TEXT NOT NULL,
-            IP_SUBNET TEXT NOT NULL,
-            WORKER_ADDRESS TEXT NOT NULL,
-            EXPIRE_AT INTEGER NOT NULL,
-            CREATED_AT INTEGER NOT NULL
-          )
-        `,
-      },
-      {
-        sql: `CREATE INDEX IF NOT EXISTS idx_session_expire ON ${sessionTableName}(EXPIRE_AT)`,
-      },
-    ]);
-  }
 };
 
 export const unifiedCheckD1Rest = async (path, clientIP, altchaTableName, config) => {
@@ -163,16 +143,6 @@ export const unifiedCheckD1Rest = async (path, clientIP, altchaTableName, config
   const ipCheckEnabled = windowSeconds > 0 && limit > 0;
   const fileCheckEnabled = fileWindowSeconds > 0 && fileLimit > 0;
 
-  let sessionTableName = null;
-  if (config.sessionEnabled === true && config.sessionDbMode === 'd1-rest') {
-    const sessionConfig = config.sessionDbConfig || {};
-    const accountMatches = !sessionConfig.accountId || sessionConfig.accountId === accountId;
-    const databaseMatches = !sessionConfig.databaseId || sessionConfig.databaseId === databaseId;
-    if (accountMatches && databaseMatches) {
-      sessionTableName = sessionConfig.tableName || 'SESSION_MAPPING_TABLE';
-    }
-  }
-
   if (cacheTTL <= 0) {
     throw new Error('[Unified Check D1-REST] sizeTTL must be greater than zero');
   }
@@ -184,7 +154,6 @@ export const unifiedCheckD1Rest = async (path, clientIP, altchaTableName, config
       fileRateLimitTableName,
       tokenTableName,
       altchaTableName: resolvedAltchaTableName,
-      sessionTableName,
     });
   }
 

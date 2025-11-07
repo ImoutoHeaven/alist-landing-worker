@@ -1,6 +1,6 @@
 import { sha256Hash, calculateIPSubnet } from './utils.js';
 
-const ensureTables = async (db, { cacheTableName, rateLimitTableName, fileRateLimitTableName, tokenTableName, altchaTableName, sessionTableName }) => {
+const ensureTables = async (db, { cacheTableName, rateLimitTableName, fileRateLimitTableName, tokenTableName, altchaTableName }) => {
   const statements = [
     db.prepare(`
       CREATE TABLE IF NOT EXISTS ${cacheTableName} (
@@ -66,23 +66,6 @@ const ensureTables = async (db, { cacheTableName, rateLimitTableName, fileRateLi
     `),
     db.prepare(`CREATE INDEX IF NOT EXISTS idx_altcha_token_expires ON ${altchaTableName}(EXPIRES_AT)`),
   );
-
-  if (sessionTableName) {
-    statements.push(
-      db.prepare(`
-        CREATE TABLE IF NOT EXISTS ${sessionTableName} (
-          SESSION_TICKET TEXT PRIMARY KEY,
-          FILE_PATH TEXT NOT NULL,
-          IP_SUBNET TEXT NOT NULL,
-          WORKER_ADDRESS TEXT NOT NULL,
-          EXPIRE_AT INTEGER NOT NULL,
-          CREATED_AT INTEGER NOT NULL
-        )
-      `),
-      db.prepare(`CREATE INDEX IF NOT EXISTS idx_session_expire ON ${sessionTableName}(EXPIRE_AT)`)
-    );
-  }
-
   await db.batch(statements);
 };
 
@@ -123,15 +106,6 @@ export const unifiedCheckD1 = async (path, clientIP, altchaTableName, config) =>
     throw new Error('[Unified Check D1] sizeTTL must be greater than zero');
   }
 
-  let sessionTableName = null;
-  if (config.sessionEnabled === true && config.sessionDbMode === 'd1') {
-    const sessionBinding = config.sessionDbConfig?.databaseBinding;
-    const bindingMatches = !sessionBinding || sessionBinding === config.databaseBinding;
-    if (bindingMatches) {
-      sessionTableName = config.sessionDbConfig?.tableName || 'SESSION_MAPPING_TABLE';
-    }
-  }
-
   if (config.initTables === true) {
     await ensureTables(db, {
       cacheTableName,
@@ -139,7 +113,6 @@ export const unifiedCheckD1 = async (path, clientIP, altchaTableName, config) =>
       fileRateLimitTableName,
       tokenTableName,
       altchaTableName: resolvedAltchaTableName,
-      sessionTableName,
     });
   }
 
