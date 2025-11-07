@@ -1407,7 +1407,8 @@ const createDownloadURL = async (
   const workerSignData = JSON.stringify({ path: decodedPath, worker_addr: workerBaseURL });
   const workerSign = await hmacSha256Sign(config.signSecret, workerSignData, expire);
 
-  const ipSignData = JSON.stringify({ path: decodedPath, ip: clientIP });
+  const ipRange = calculateIPSubnet(clientIP, config.ipv4Suffix, config.ipv6Suffix) || clientIP || '';
+  const ipSignData = JSON.stringify({ path: decodedPath, ip: ipRange });
   const ipSign = await hmacSha256Sign(config.signSecret, ipSignData, expire);
 
   const downloadURLObj = new URL(encodedPath, workerBaseURL);
