@@ -62,9 +62,25 @@ const ensureTable = async (accountId, databaseId, apiToken, tableName) => {
   await executeQuery(accountId, databaseId, apiToken, sql);
 };
 
+const ensureFileTable = async (accountId, databaseId, apiToken, tableName) => {
+  const sql = `
+    CREATE TABLE IF NOT EXISTS ${tableName} (
+      IP_HASH TEXT NOT NULL,
+      PATH_HASH TEXT NOT NULL,
+      IP_RANGE TEXT NOT NULL,
+      ACCESS_COUNT INTEGER NOT NULL,
+      LAST_WINDOW_TIME INTEGER NOT NULL,
+      BLOCK_UNTIL INTEGER,
+      PRIMARY KEY (IP_HASH, PATH_HASH)
+    )
+  `;
+  await executeQuery(accountId, databaseId, apiToken, sql);
+};
+
 /**
  * Check and update rate limit for an IP address using D1 REST API
  * @param {string} ip - Client IP address
+ * @param {string} path - File path for per-file enforcement
  * @param {Object} config - Rate limit configuration
  * @param {string} config.accountId - Cloudflare account ID
  * @param {string} config.databaseId - D1 database ID
@@ -78,115 +94,192 @@ const ensureTable = async (accountId, databaseId, apiToken, tableName) => {
  * @param {number} config.cleanupProbability - Probability of triggering cleanup (0.0 to 1.0)
  * @param {number} config.blockTimeSeconds - Additional block time in seconds when limit exceeded
  * @param {Object} config.ctx - ExecutionContext for waitUntil (optional)
- * @returns {Promise<{allowed: boolean, ipSubnet?: string, retryAfter?: number, error?: string}>}
+ * @returns {Promise<{allowed: boolean, ipAllowed: boolean, ipSubnet?: string, ipRetryAfter?: number, fileAllowed: boolean, fileRetryAfter?: number, error?: string}>}
  */
-export const checkRateLimit = async (ip, config) => {
-  // If any required config is missing, skip rate limiting
-  if (!config.accountId || !config.databaseId || !config.apiToken || !config.windowTimeSeconds || !config.limit) {
-    return { allowed: true };
+export const checkRateLimit = async (ip, path, config) => {
+  if (!config?.accountId || !config?.databaseId || !config?.apiToken || !ip || typeof ip !== 'string') {
+    return { allowed: true, ipAllowed: true, fileAllowed: true };
   }
 
-  if (!ip || typeof ip !== 'string') {
-    return { allowed: true };
+  const ipLimitValue = Number(config.limit) || 0;
+  const ipWindowSeconds = Number(config.windowTimeSeconds) || 0;
+  const fileLimitValue = Number(config.fileLimit) || 0;
+  const fileWindowSeconds = Number(config.fileWindowTimeSeconds) || 0;
+
+  let ipCheckEnabled = Boolean((config.ipRateLimitEnabled ?? true) && ipLimitValue > 0 && ipWindowSeconds > 0);
+  let fileCheckEnabled = Boolean((config.fileRateLimitEnabled ?? true) && fileLimitValue > 0 && fileWindowSeconds > 0);
+
+  const normalizedPath = typeof path === 'string' ? path : '';
+  if (fileCheckEnabled && normalizedPath.length === 0) {
+    fileCheckEnabled = false;
+  }
+
+  if (!ipCheckEnabled && !fileCheckEnabled) {
+    return { allowed: true, ipAllowed: true, fileAllowed: true };
   }
 
   try {
     const { accountId, databaseId, apiToken } = config;
     const tableName = config.tableName || 'IP_LIMIT_TABLE';
+    const fileTableName = config.fileTableName || 'IP_FILE_LIMIT_TABLE';
 
     // Ensure table exists
-    await ensureTable(accountId, databaseId, apiToken, tableName);
+    if (ipCheckEnabled) {
+      await ensureTable(accountId, databaseId, apiToken, tableName);
+    }
+    if (fileCheckEnabled) {
+      await ensureFileTable(accountId, databaseId, apiToken, fileTableName);
+    }
 
     // Calculate IP subnet
     const ipSubnet = calculateIPSubnet(ip, config.ipv4Suffix, config.ipv6Suffix);
     if (!ipSubnet) {
-      return { allowed: true };
+      return { allowed: true, ipAllowed: true, fileAllowed: true };
     }
 
     // Calculate SHA256 hash of IP subnet
     const ipHash = await sha256Hash(ipSubnet);
     if (!ipHash) {
-      return { allowed: true };
+      return { allowed: true, ipAllowed: true, fileAllowed: true };
+    }
+
+    let pathHash = null;
+    if (fileCheckEnabled) {
+      pathHash = await sha256Hash(normalizedPath);
+      if (!pathHash) {
+        fileCheckEnabled = false;
+      }
     }
 
     // Get current timestamp (in seconds)
     const now = Math.floor(Date.now() / 1000);
 
-    // Atomic UPSERT with RETURNING - single database round-trip, no locks needed
-    // D1 (SQLite) supports RETURNING since SQLite 3.35.0
-    const blockTimeSeconds = config.blockTimeSeconds || 0;
-    const upsertSql = `
-      INSERT INTO ${tableName} (IP_HASH, IP_RANGE, ACCESS_COUNT, LAST_WINDOW_TIME, BLOCK_UNTIL)
-      VALUES (?, ?, 1, ?, NULL)
-      ON CONFLICT (IP_HASH) DO UPDATE SET
-        ACCESS_COUNT = CASE
-          WHEN ? - ${tableName}.LAST_WINDOW_TIME >= ? THEN 1
-          WHEN ${tableName}.BLOCK_UNTIL IS NOT NULL AND ${tableName}.BLOCK_UNTIL <= ? THEN 1
-          WHEN ${tableName}.ACCESS_COUNT >= ? THEN ${tableName}.ACCESS_COUNT
-          ELSE ${tableName}.ACCESS_COUNT + 1
-        END,
-        LAST_WINDOW_TIME = CASE
-          WHEN ? - ${tableName}.LAST_WINDOW_TIME >= ? THEN ?
-          WHEN ${tableName}.BLOCK_UNTIL IS NOT NULL AND ${tableName}.BLOCK_UNTIL <= ? THEN ?
-          ELSE ${tableName}.LAST_WINDOW_TIME
-        END,
-        BLOCK_UNTIL = CASE
-          WHEN ? - ${tableName}.LAST_WINDOW_TIME >= ? THEN NULL
-          WHEN ${tableName}.BLOCK_UNTIL IS NOT NULL AND ${tableName}.BLOCK_UNTIL <= ? THEN NULL
-          WHEN ${tableName}.ACCESS_COUNT >= ? AND ? > 0
-            THEN ? + ?
-          ELSE ${tableName}.BLOCK_UNTIL
-        END
-      RETURNING ACCESS_COUNT, LAST_WINDOW_TIME, BLOCK_UNTIL
-    `;
+    let ipAllowed = true;
+    let ipRetryAfter = null;
 
-    const upsertParams = [
-      // INSERT VALUES
-      ipHash, ipSubnet, now,
-      // ACCESS_COUNT CASE parameters
-      now, config.windowTimeSeconds, now, config.limit,
-      // LAST_WINDOW_TIME CASE parameters
-      now, config.windowTimeSeconds, now, now, now,
-      // BLOCK_UNTIL CASE parameters
-      now, config.windowTimeSeconds, now, config.limit, blockTimeSeconds, now, blockTimeSeconds
-    ];
+    if (ipCheckEnabled) {
+      const blockTimeSeconds = config.blockTimeSeconds || 0;
+      const upsertSql = `
+        INSERT INTO ${tableName} (IP_HASH, IP_RANGE, ACCESS_COUNT, LAST_WINDOW_TIME, BLOCK_UNTIL)
+        VALUES (?, ?, 1, ?, NULL)
+        ON CONFLICT (IP_HASH) DO UPDATE SET
+          ACCESS_COUNT = CASE
+            WHEN ? - ${tableName}.LAST_WINDOW_TIME >= ? THEN 1
+            WHEN ${tableName}.BLOCK_UNTIL IS NOT NULL AND ${tableName}.BLOCK_UNTIL <= ? THEN 1
+            WHEN ${tableName}.ACCESS_COUNT >= ? THEN ${tableName}.ACCESS_COUNT
+            ELSE ${tableName}.ACCESS_COUNT + 1
+          END,
+          LAST_WINDOW_TIME = CASE
+            WHEN ? - ${tableName}.LAST_WINDOW_TIME >= ? THEN ?
+            WHEN ${tableName}.BLOCK_UNTIL IS NOT NULL AND ${tableName}.BLOCK_UNTIL <= ? THEN ?
+            ELSE ${tableName}.LAST_WINDOW_TIME
+          END,
+          BLOCK_UNTIL = CASE
+            WHEN ? - ${tableName}.LAST_WINDOW_TIME >= ? THEN NULL
+            WHEN ${tableName}.BLOCK_UNTIL IS NOT NULL AND ${tableName}.BLOCK_UNTIL <= ? THEN NULL
+            WHEN ${tableName}.ACCESS_COUNT >= ? AND ? > 0
+              THEN ? + ?
+            ELSE ${tableName}.BLOCK_UNTIL
+          END
+        RETURNING ACCESS_COUNT, LAST_WINDOW_TIME, BLOCK_UNTIL
+      `;
 
-    const queryResult = await executeQuery(accountId, databaseId, apiToken, upsertSql, upsertParams);
-    const records = queryResult.results || [];
+      const upsertParams = [
+        ipHash, ipSubnet, now,
+        now, ipWindowSeconds, now, ipLimitValue,
+        now, ipWindowSeconds, now, now, now,
+        now, ipWindowSeconds, now, ipLimitValue, blockTimeSeconds, now, blockTimeSeconds,
+      ];
 
-    if (!records || records.length === 0) {
-      throw new Error('D1 REST UPSERT returned no rows');
+      const queryResult = await executeQuery(accountId, databaseId, apiToken, upsertSql, upsertParams);
+      const records = queryResult.results || [];
+
+      if (!records || records.length === 0) {
+        throw new Error('D1 REST UPSERT returned no rows');
+      }
+
+      const row = records[0];
+      const accessCount = Number.parseInt(row.ACCESS_COUNT, 10);
+      const lastWindowTime = Number.parseInt(row.LAST_WINDOW_TIME, 10);
+      const blockUntil = row.BLOCK_UNTIL ? Number.parseInt(row.BLOCK_UNTIL, 10) : null;
+
+      if (blockUntil && blockUntil > now) {
+        ipAllowed = false;
+        ipRetryAfter = Math.max(1, blockUntil - now);
+      } else if (Number.isFinite(accessCount) && accessCount >= ipLimitValue) {
+        const diff = now - (Number.isFinite(lastWindowTime) ? lastWindowTime : now);
+        ipAllowed = false;
+        ipRetryAfter = Math.max(1, ipWindowSeconds - diff);
+      }
     }
 
-    // Parse RETURNING result
-    const row = records[0];
-    const accessCount = Number.parseInt(row.ACCESS_COUNT, 10);
-    const lastWindowTime = Number.parseInt(row.LAST_WINDOW_TIME, 10);
-    const blockUntil = row.BLOCK_UNTIL ? Number.parseInt(row.BLOCK_UNTIL, 10) : null;
+    let fileAllowed = true;
+    let fileRetryAfter = null;
 
-    // Check if currently blocked
-    if (blockUntil && blockUntil > now) {
-      const retryAfter = blockUntil - now;
-      return {
-        allowed: false,
-        ipSubnet,
-        retryAfter: Math.max(1, retryAfter),
-      };
+    if (fileCheckEnabled && pathHash) {
+      const fileBlockSeconds = config.fileBlockTimeSeconds || 0;
+      const fileSql = `
+        INSERT INTO ${fileTableName} (IP_HASH, PATH_HASH, IP_RANGE, ACCESS_COUNT, LAST_WINDOW_TIME, BLOCK_UNTIL)
+        VALUES (?, ?, ?, 1, ?, NULL)
+        ON CONFLICT (IP_HASH, PATH_HASH) DO UPDATE SET
+          ACCESS_COUNT = CASE
+            WHEN ? - ${fileTableName}.LAST_WINDOW_TIME >= ? THEN 1
+            WHEN ${fileTableName}.BLOCK_UNTIL IS NOT NULL AND ${fileTableName}.BLOCK_UNTIL <= ? THEN 1
+            WHEN ${fileTableName}.ACCESS_COUNT >= ? THEN ${fileTableName}.ACCESS_COUNT
+            ELSE ${fileTableName}.ACCESS_COUNT + 1
+          END,
+          LAST_WINDOW_TIME = CASE
+            WHEN ? - ${fileTableName}.LAST_WINDOW_TIME >= ? THEN ?
+            WHEN ${fileTableName}.BLOCK_UNTIL IS NOT NULL AND ${fileTableName}.BLOCK_UNTIL <= ? THEN ?
+            ELSE ${fileTableName}.LAST_WINDOW_TIME
+          END,
+          BLOCK_UNTIL = CASE
+            WHEN ? - ${fileTableName}.LAST_WINDOW_TIME >= ? THEN NULL
+            WHEN ${fileTableName}.BLOCK_UNTIL IS NOT NULL AND ${fileTableName}.BLOCK_UNTIL <= ? THEN NULL
+            WHEN ${fileTableName}.ACCESS_COUNT >= ? AND ? > 0
+              THEN ? + ?
+            ELSE ${fileTableName}.BLOCK_UNTIL
+          END
+        RETURNING ACCESS_COUNT, LAST_WINDOW_TIME, BLOCK_UNTIL
+      `;
+
+      const params = [
+        ipHash, pathHash, ipSubnet, now,
+        now, fileWindowSeconds, now, fileLimitValue,
+        now, fileWindowSeconds, now, now, now,
+        now, fileWindowSeconds, now, fileLimitValue, fileBlockSeconds, now, fileBlockSeconds,
+      ];
+
+      const fileResult = await executeQuery(accountId, databaseId, apiToken, fileSql, params);
+      const fileRecords = fileResult.results || [];
+
+      if (!fileRecords || fileRecords.length === 0) {
+        throw new Error('D1 REST file UPSERT returned no rows');
+      }
+
+      const fileRow = fileRecords[0];
+      const fileAccessCount = Number.parseInt(fileRow.ACCESS_COUNT, 10);
+      const fileLastWindowTime = Number.parseInt(fileRow.LAST_WINDOW_TIME, 10);
+      const fileBlockUntil = fileRow.BLOCK_UNTIL ? Number.parseInt(fileRow.BLOCK_UNTIL, 10) : null;
+
+      if (fileBlockUntil && fileBlockUntil > now) {
+        fileAllowed = false;
+        fileRetryAfter = Math.max(1, fileBlockUntil - now);
+      } else if (Number.isFinite(fileAccessCount) && fileAccessCount >= fileLimitValue) {
+        const diff = now - (Number.isFinite(fileLastWindowTime) ? fileLastWindowTime : now);
+        fileAllowed = false;
+        fileRetryAfter = Math.max(1, fileWindowSeconds - diff);
+      }
     }
 
-    // Check if limit exceeded (without block time configured)
-    if (accessCount >= config.limit) {
-      const diff = now - lastWindowTime;
-      const retryAfter = config.windowTimeSeconds - diff;
-      return {
-        allowed: false,
-        ipSubnet,
-        retryAfter: Math.max(1, retryAfter),
-      };
-    }
-
-    // Request allowed
-    return { allowed: true };
+    return {
+      allowed: ipAllowed && fileAllowed,
+      ipAllowed,
+      ipRetryAfter,
+      ipSubnet,
+      fileAllowed,
+      fileRetryAfter,
+    };
   } catch (error) {
     // Handle errors based on pgErrorHandle strategy
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -194,11 +287,13 @@ export const checkRateLimit = async (ip, config) => {
     if (config.pgErrorHandle === 'fail-open') {
       // Log error and allow request
       console.error('Rate limit check failed (fail-open):', errorMessage);
-      return { allowed: true };
+      return { allowed: true, ipAllowed: true, fileAllowed: true };
     } else {
       // fail-closed: propagate error
       return {
         allowed: false,
+        ipAllowed: false,
+        fileAllowed: true,
         error: `Rate limit check failed: ${errorMessage}`,
       };
     }

@@ -42,6 +42,8 @@ const VALID_ACTIONS = [
 ];
 const VALID_ACTIONS_SET = new Set(VALID_ACTIONS);
 
+let ipRateLimitDisabledLogged = false;
+
 /**
  * 解析 ACTION 值为验证需求对象
  * @param {string} action - ACTION 值
@@ -302,6 +304,22 @@ const resolveConfig = (env = {}) => {
     : 'fail-closed';
   const blockTime = env.BLOCK_TIME && typeof env.BLOCK_TIME === 'string' ? env.BLOCK_TIME.trim() : '10m';
   const blockTimeSeconds = parseWindowTime(blockTime);
+  const rawFileWindowTime = env.FILE_WINDOW_TIME && typeof env.FILE_WINDOW_TIME === 'string'
+    ? env.FILE_WINDOW_TIME.trim()
+    : '60s';
+  let fileWindowTimeSeconds = parseWindowTime(rawFileWindowTime || '60s');
+  if (fileWindowTimeSeconds <= 0) {
+    fileWindowTimeSeconds = parseWindowTime('60s');
+  }
+  const fileWindowTime = rawFileWindowTime && rawFileWindowTime.length > 0 ? rawFileWindowTime : '60s';
+  const fileLimit = parseInteger(env.IPSUBNET_FILE_WINDOWTIME_LIMIT, 4);
+  const rawFileBlockTime = env.FILE_BLOCK_TIME && typeof env.FILE_BLOCK_TIME === 'string'
+    ? env.FILE_BLOCK_TIME.trim()
+    : '4m';
+  let fileBlockTimeSeconds = parseWindowTime(rawFileBlockTime || '4m');
+  if (fileBlockTimeSeconds < 0) {
+    fileBlockTimeSeconds = parseWindowTime('4m');
+  }
 
   // Parse cleanup percentage (默认 5%)
   let cleanupPercentage = Number.parseFloat(typeof env.CLEANUP_PERCENTAGE === 'string' ? env.CLEANUP_PERCENTAGE.trim() : '');
@@ -352,6 +370,14 @@ const resolveConfig = (env = {}) => {
   let cacheConfig = {};
   let d1RestConfig = null;
 
+  const ipRateLimitActive = Boolean(dbMode && windowTimeSeconds > 0 && ipSubnetLimit > 0);
+  const fileRateLimitActive = Boolean(dbMode && fileWindowTimeSeconds > 0 && fileLimit > 0);
+
+  if (dbMode && ipSubnetLimit === 0 && !ipRateLimitDisabledLogged) {
+    console.log('IP rate limiting disabled (limit=0)');
+    ipRateLimitDisabledLogged = true;
+  }
+
   if (dbMode) {
     const normalizedDbMode = dbMode.toLowerCase();
 
@@ -360,32 +386,47 @@ const resolveConfig = (env = {}) => {
       d1DatabaseBinding = env.D1_DATABASE_BINDING && typeof env.D1_DATABASE_BINDING === 'string' ? env.D1_DATABASE_BINDING.trim() : 'DB';
       const d1TableName = env.D1_TABLE_NAME && typeof env.D1_TABLE_NAME === 'string' ? env.D1_TABLE_NAME.trim() : '';
 
-      if (d1DatabaseBinding && windowTimeSeconds > 0 && ipSubnetLimit > 0) {
-        rateLimitEnabled = true;
-        rateLimitConfig = {
-          env, // Pass env object so rate limiter can access the binding
+      if (!d1DatabaseBinding) {
+        throw new Error('DB_MODE is set to "d1" but D1_DATABASE_BINDING is missing');
+      }
+
+      if (ipSubnetLimit > 0 && windowTimeSeconds <= 0) {
+        throw new Error('WINDOW_TIME must be greater than zero when IPSUBNET_WINDOWTIME_LIMIT > 0');
+      }
+      if (fileLimit > 0 && fileWindowTimeSeconds <= 0) {
+        throw new Error('FILE_WINDOW_TIME must be greater than zero when IPSUBNET_FILE_WINDOWTIME_LIMIT > 0');
+      }
+
+      rateLimitConfig = {
+        env, // Pass env object so rate limiter can access the binding
+        databaseBinding: d1DatabaseBinding,
+        tableName: d1TableName || 'IP_LIMIT_TABLE',
+        windowTimeSeconds,
+        limit: ipSubnetLimit,
+        ipv4Suffix,
+        ipv6Suffix,
+        pgErrorHandle: validPgErrorHandle,
+        cleanupProbability,
+        blockTimeSeconds,
+        fileLimit,
+        fileWindowTimeSeconds,
+        fileBlockTimeSeconds,
+        fileTableName: 'IP_FILE_LIMIT_TABLE',
+        ipRateLimitEnabled: ipRateLimitActive,
+        fileRateLimitEnabled: fileRateLimitActive,
+      };
+
+      rateLimitEnabled = Boolean(ipRateLimitActive || fileRateLimitActive);
+
+      if (sizeTTLSeconds > 0) {
+        cacheEnabled = true;
+        cacheConfig = {
+          env,
           databaseBinding: d1DatabaseBinding,
-          tableName: d1TableName || 'IP_LIMIT_TABLE',
-          windowTimeSeconds,
-          limit: ipSubnetLimit,
-          ipv4Suffix,
-          ipv6Suffix,
-          pgErrorHandle: validPgErrorHandle,
+          tableName: filesizeCacheTableName,
+          sizeTTL: sizeTTLSeconds,
           cleanupProbability,
-          blockTimeSeconds,
         };
-        if (sizeTTLSeconds > 0) {
-          cacheEnabled = true;
-          cacheConfig = {
-            env,
-            databaseBinding: d1DatabaseBinding,
-            tableName: filesizeCacheTableName,
-            sizeTTL: sizeTTLSeconds,
-            cleanupProbability,
-          };
-        }
-      } else {
-        throw new Error('DB_MODE is set to "d1" but required environment variables are missing: WINDOW_TIME, IPSUBNET_WINDOWTIME_LIMIT');
       }
     } else if (normalizedDbMode === 'd1-rest') {
       // D1 REST API configuration
@@ -394,75 +435,104 @@ const resolveConfig = (env = {}) => {
       d1ApiToken = env.D1_API_TOKEN && typeof env.D1_API_TOKEN === 'string' ? env.D1_API_TOKEN.trim() : '';
       const d1TableName = env.D1_TABLE_NAME && typeof env.D1_TABLE_NAME === 'string' ? env.D1_TABLE_NAME.trim() : '';
 
-      if (d1AccountId && d1DatabaseId && d1ApiToken && windowTimeSeconds > 0 && ipSubnetLimit > 0) {
-        rateLimitEnabled = true;
-        rateLimitConfig = {
-          accountId: d1AccountId,
-          databaseId: d1DatabaseId,
-          apiToken: d1ApiToken,
-          tableName: d1TableName || 'IP_LIMIT_TABLE',
-          windowTimeSeconds,
-          limit: ipSubnetLimit,
-          ipv4Suffix,
-          ipv6Suffix,
-          pgErrorHandle: validPgErrorHandle,
-          cleanupProbability,
-          blockTimeSeconds,
-        };
-        if (sizeTTLSeconds > 0) {
-          cacheEnabled = true;
-          cacheConfig = {
-            accountId: d1AccountId,
-            databaseId: d1DatabaseId,
-            apiToken: d1ApiToken,
-            tableName: filesizeCacheTableName,
-            sizeTTL: sizeTTLSeconds,
-            cleanupProbability,
-          };
-        }
-        d1RestConfig = {
-          accountId: d1AccountId,
-          databaseId: d1DatabaseId,
-          apiToken: d1ApiToken,
-        };
-      } else {
-        throw new Error('DB_MODE is set to "d1-rest" but required environment variables are missing: D1_ACCOUNT_ID, D1_DATABASE_ID, D1_API_TOKEN, WINDOW_TIME, IPSUBNET_WINDOWTIME_LIMIT');
+      if (!d1AccountId || !d1DatabaseId || !d1ApiToken) {
+        throw new Error('DB_MODE is set to "d1-rest" but D1_ACCOUNT_ID, D1_DATABASE_ID, or D1_API_TOKEN is missing');
       }
+      if (ipSubnetLimit > 0 && windowTimeSeconds <= 0) {
+        throw new Error('WINDOW_TIME must be greater than zero when IPSUBNET_WINDOWTIME_LIMIT > 0');
+      }
+      if (fileLimit > 0 && fileWindowTimeSeconds <= 0) {
+        throw new Error('FILE_WINDOW_TIME must be greater than zero when IPSUBNET_FILE_WINDOWTIME_LIMIT > 0');
+      }
+
+      rateLimitConfig = {
+        accountId: d1AccountId,
+        databaseId: d1DatabaseId,
+        apiToken: d1ApiToken,
+        tableName: d1TableName || 'IP_LIMIT_TABLE',
+        windowTimeSeconds,
+        limit: ipSubnetLimit,
+        ipv4Suffix,
+        ipv6Suffix,
+        pgErrorHandle: validPgErrorHandle,
+        cleanupProbability,
+        blockTimeSeconds,
+        fileLimit,
+        fileWindowTimeSeconds,
+        fileBlockTimeSeconds,
+        fileTableName: 'IP_FILE_LIMIT_TABLE',
+        ipRateLimitEnabled: ipRateLimitActive,
+        fileRateLimitEnabled: fileRateLimitActive,
+      };
+
+      rateLimitEnabled = Boolean(ipRateLimitActive || fileRateLimitActive);
+
+      if (sizeTTLSeconds > 0) {
+        cacheEnabled = true;
+        cacheConfig = {
+          accountId: d1AccountId,
+          databaseId: d1DatabaseId,
+          apiToken: d1ApiToken,
+          tableName: filesizeCacheTableName,
+          sizeTTL: sizeTTLSeconds,
+          cleanupProbability,
+        };
+      }
+
+      d1RestConfig = {
+        accountId: d1AccountId,
+        databaseId: d1DatabaseId,
+        apiToken: d1ApiToken,
+      };
     } else if (normalizedDbMode === 'custom-pg-rest') {
       // Custom PostgreSQL REST API (PostgREST) configuration
       postgrestUrl = env.POSTGREST_URL && typeof env.POSTGREST_URL === 'string' ? env.POSTGREST_URL.trim() : '';
       const postgrestTableName = env.POSTGREST_TABLE_NAME && typeof env.POSTGREST_TABLE_NAME === 'string' ? env.POSTGREST_TABLE_NAME.trim() : '';
 
-      if (postgrestUrl && verifyHeaders.length > 0 && verifySecrets.length > 0 && windowTimeSeconds > 0 && ipSubnetLimit > 0) {
-        rateLimitEnabled = true;
-        rateLimitConfig = {
+      if (!postgrestUrl || verifyHeaders.length === 0 || verifySecrets.length === 0) {
+        throw new Error('DB_MODE is set to "custom-pg-rest" but POSTGREST_URL, VERIFY_HEADER, or VERIFY_SECRET is missing');
+      }
+      if (ipSubnetLimit > 0 && windowTimeSeconds <= 0) {
+        throw new Error('WINDOW_TIME must be greater than zero when IPSUBNET_WINDOWTIME_LIMIT > 0');
+      }
+      if (fileLimit > 0 && fileWindowTimeSeconds <= 0) {
+        throw new Error('FILE_WINDOW_TIME must be greater than zero when IPSUBNET_FILE_WINDOWTIME_LIMIT > 0');
+      }
+
+      rateLimitConfig = {
+        postgrestUrl,
+        verifyHeader: verifyHeaders,
+        verifySecret: verifySecrets,
+        tableName: postgrestTableName || 'IP_LIMIT_TABLE',
+        windowTimeSeconds,
+        limit: ipSubnetLimit,
+        ipv4Suffix,
+        ipv6Suffix,
+        pgErrorHandle: validPgErrorHandle,
+        cleanupProbability,
+        blockTimeSeconds,
+        fileLimit,
+        fileWindowTimeSeconds,
+        fileBlockTimeSeconds,
+        fileTableName: 'IP_FILE_LIMIT_TABLE',
+        ipRateLimitEnabled: ipRateLimitActive,
+        fileRateLimitEnabled: fileRateLimitActive,
+      };
+
+      rateLimitEnabled = Boolean(ipRateLimitActive || fileRateLimitActive);
+
+      if (sizeTTLSeconds > 0) {
+        cacheEnabled = true;
+        cacheConfig = {
           postgrestUrl,
           verifyHeader: verifyHeaders,
           verifySecret: verifySecrets,
-          tableName: postgrestTableName || 'IP_LIMIT_TABLE',
-          windowTimeSeconds,
-          limit: ipSubnetLimit,
-          ipv4Suffix,
-          ipv6Suffix,
-          pgErrorHandle: validPgErrorHandle,
+          tableName: filesizeCacheTableName,
+          sizeTTL: sizeTTLSeconds,
           cleanupProbability,
-          blockTimeSeconds,
         };
-        if (sizeTTLSeconds > 0) {
-          cacheEnabled = true;
-          cacheConfig = {
-            postgrestUrl,
-            verifyHeader: verifyHeaders,
-            verifySecret: verifySecrets,
-            tableName: filesizeCacheTableName,
-            sizeTTL: sizeTTLSeconds,
-            cleanupProbability,
-          };
-        } else {
-          console.warn('[CONFIG] Cache DISABLED: sizeTTLSeconds =', sizeTTLSeconds);
-        }
       } else {
-        throw new Error('DB_MODE is set to "custom-pg-rest" but required environment variables are missing: POSTGREST_URL, VERIFY_HEADER, VERIFY_SECRET, WINDOW_TIME, IPSUBNET_WINDOWTIME_LIMIT');
+        console.warn('[CONFIG] Cache DISABLED: sizeTTLSeconds =', sizeTTLSeconds);
       }
     } else {
       throw new Error(`Invalid DB_MODE: "${dbMode}". Valid options are: "d1", "d1-rest", "custom-pg-rest"`);
@@ -667,10 +737,16 @@ const resolveConfig = (env = {}) => {
     d1RestConfig,
     windowTime,
     ipSubnetLimit,
+    fileWindowTime,
+    fileWindowTimeSeconds,
+    fileLimit,
+    fileBlockTimeSeconds,
     enableCfRatelimiter,
     cfRatelimiterBinding,
     ipv4Suffix,
     ipv6Suffix,
+    ipRateLimitActive,
+    fileRateLimitActive,
     appendAdditional,
     alistAddress: normalizedAlistAddress,
     minBandwidthBytesPerSecond: bandwidthBytesPerSecond,
@@ -913,18 +989,51 @@ const respondJson = (origin, payload, status = 200) => {
   return new Response(JSON.stringify(payload), { status, headers });
 };
 
-const respondRateLimitExceeded = (origin, ipSubnet, limit, windowTime, retryAfter) => {
+const respondRateLimitExceeded = (origin, subject, limit, windowTime, retryAfter) => {
   const headers = safeHeaders(origin);
   headers.set('content-type', 'application/json;charset=UTF-8');
   headers.set('cache-control', 'no-store');
   const retryAfterSeconds = Math.ceil(retryAfter);
   headers.set('Retry-After', String(retryAfterSeconds));
-  const message = `${ipSubnet} exceeds the limit of ${limit} requests in ${windowTime}`;
+  const message = `${subject} exceeds the limit of ${limit} requests in ${windowTime}`;
   return new Response(JSON.stringify({
     code: 429,
     message,
     'retry-after': retryAfterSeconds
   }), { status: 429, headers });
+};
+
+const maybeRespondRateLimit = (origin, clientIP, decodedPath, config, rateLimitState) => {
+  if (!rateLimitState) {
+    return null;
+  }
+
+  const ipFailed = rateLimitState.ipAllowed === false;
+  const fileFailed = rateLimitState.fileAllowed === false;
+
+  if (!ipFailed && !fileFailed) {
+    return null;
+  }
+
+  const ipSubnet = rateLimitState.ipSubnet || clientIP || 'client';
+  const safePath = decodedPath || '/';
+  const ipRetry = ipFailed ? Number(rateLimitState.ipRetryAfter) : Number.POSITIVE_INFINITY;
+  const fileRetry = fileFailed ? Number(rateLimitState.fileRetryAfter) : Number.POSITIVE_INFINITY;
+  let retryAfter = Math.min(ipRetry, fileRetry);
+
+  if (!Number.isFinite(retryAfter) || retryAfter <= 0) {
+    retryAfter = Math.max(
+      1,
+      Number.isFinite(ipRetry) && ipRetry > 0 ? ipRetry : (Number.isFinite(fileRetry) && fileRetry > 0 ? fileRetry : 60)
+    );
+  }
+
+  const preferFile = fileFailed && (fileRetry <= ipRetry);
+  const limitValue = preferFile ? (config.fileLimit || 0) : (config.ipSubnetLimit || 0);
+  const windowLabel = preferFile ? (config.fileWindowTime || config.windowTime) : config.windowTime;
+  const subject = preferFile ? `${ipSubnet} + ${safePath}` : ipSubnet;
+
+  return respondRateLimitExceeded(origin, subject, limitValue, windowLabel, retryAfter);
 };
 
 /**
@@ -2241,6 +2350,10 @@ const handleInfo = async (request, env, config, rateLimiter, sessionDBManager, c
           limit: limitValue,
           blockTimeSeconds: config.rateLimitConfig.blockTimeSeconds,
           rateLimitTableName: config.rateLimitConfig.tableName || 'IP_LIMIT_TABLE',
+          fileLimit: config.fileLimit,
+          fileWindowTimeSeconds: config.fileWindowTimeSeconds,
+          fileBlockTimeSeconds: config.fileBlockTimeSeconds,
+          fileRateLimitTableName: config.rateLimitConfig.fileTableName || 'IP_FILE_LIMIT_TABLE',
           ipv4Suffix: config.rateLimitConfig.ipv4Suffix,
           ipv6Suffix: config.rateLimitConfig.ipv6Suffix,
           turnstileTokenBinding: shouldBindToken,
@@ -2263,6 +2376,10 @@ const handleInfo = async (request, env, config, rateLimiter, sessionDBManager, c
           limit: limitValue,
           blockTimeSeconds: config.rateLimitConfig.blockTimeSeconds,
           rateLimitTableName: config.rateLimitConfig.tableName || 'IP_LIMIT_TABLE',
+          fileLimit: config.fileLimit,
+          fileWindowTimeSeconds: config.fileWindowTimeSeconds,
+          fileBlockTimeSeconds: config.fileBlockTimeSeconds,
+          fileRateLimitTableName: config.rateLimitConfig.fileTableName || 'IP_FILE_LIMIT_TABLE',
           ipv4Suffix: config.rateLimitConfig.ipv4Suffix,
           ipv6Suffix: config.rateLimitConfig.ipv6Suffix,
           turnstileTokenBinding: shouldBindToken,
@@ -2289,6 +2406,10 @@ const handleInfo = async (request, env, config, rateLimiter, sessionDBManager, c
           limit: limitValue,
           blockTimeSeconds: config.rateLimitConfig.blockTimeSeconds,
           rateLimitTableName: config.rateLimitConfig.tableName || 'IP_LIMIT_TABLE',
+          fileLimit: config.fileLimit,
+          fileWindowTimeSeconds: config.fileWindowTimeSeconds,
+          fileBlockTimeSeconds: config.fileBlockTimeSeconds,
+          fileRateLimitTableName: config.rateLimitConfig.fileTableName || 'IP_FILE_LIMIT_TABLE',
           ipv4Suffix: config.rateLimitConfig.ipv4Suffix,
           ipv6Suffix: config.rateLimitConfig.ipv6Suffix,
           turnstileTokenBinding: shouldBindToken,
@@ -2341,14 +2462,15 @@ const handleInfo = async (request, env, config, rateLimiter, sessionDBManager, c
           }
         }
 
-        if (!unifiedResult.rateLimit.allowed) {
-          return respondRateLimitExceeded(
-            origin,
-            unifiedResult.rateLimit.ipSubnet || clientIP,
-            config.ipSubnetLimit,
-            config.windowTime,
-            unifiedResult.rateLimit.retryAfter
-          );
+        const rateLimitResponse = maybeRespondRateLimit(
+          origin,
+          clientIP,
+          decodedPath,
+          config,
+          unifiedResult.rateLimit
+        );
+        if (rateLimitResponse) {
+          return rateLimitResponse;
         }
 
           if (unifiedResult.cache.hit && Number.isFinite(unifiedResult.cache.size)) {
@@ -2432,19 +2554,15 @@ const handleInfo = async (request, env, config, rateLimiter, sessionDBManager, c
 
   if (!canUseUnified || !unifiedResult) {
     if (rateLimiter && clientIP) {
-      const rateLimitResult = await rateLimiter.checkRateLimit(clientIP, { ...config.rateLimitConfig, ctx });
+      const rateLimitResult = await rateLimiter.checkRateLimit(clientIP, decodedPath, { ...config.rateLimitConfig, ctx });
 
-      if (!rateLimitResult.allowed) {
-        if (rateLimitResult.error) {
-          return respondJson(origin, { code: 500, message: rateLimitResult.error }, 500);
-        }
-        return respondRateLimitExceeded(
-          origin,
-          rateLimitResult.ipSubnet,
-          config.ipSubnetLimit,
-          config.windowTime,
-          rateLimitResult.retryAfter
-        );
+      if (rateLimitResult.error) {
+        return respondJson(origin, { code: 500, message: rateLimitResult.error }, 500);
+      }
+
+      const rateLimitResponse = maybeRespondRateLimit(origin, clientIP, decodedPath, config, rateLimitResult);
+      if (rateLimitResponse) {
+        return rateLimitResponse;
       }
     }
 
@@ -2744,72 +2862,108 @@ async function cleanupExpiredTurnstileTokens(config, env) {
  */
 async function cleanupExpiredRateLimits(config, env) {
   try {
+    const tables = [];
+    const ipWindowTimeSeconds = config.rateLimitConfig?.windowTimeSeconds || 0;
+    const ipTableName = config.rateLimitConfig?.tableName || 'IP_LIMIT_TABLE';
+    if (ipWindowTimeSeconds > 0) {
+      tables.push({ tableName: ipTableName, windowTimeSeconds: ipWindowTimeSeconds });
+    }
+
+    const fileWindowTimeSeconds = config.rateLimitConfig?.fileWindowTimeSeconds || 0;
+    const fileTableName = config.rateLimitConfig?.fileTableName || 'IP_FILE_LIMIT_TABLE';
+    if (fileWindowTimeSeconds > 0) {
+      tables.push({ tableName: fileTableName, windowTimeSeconds: fileWindowTimeSeconds });
+    }
+
+    if (tables.length === 0) {
+      return;
+    }
+
     const nowSeconds = Math.floor(Date.now() / 1000);
-    const tableName = config.rateLimitConfig?.tableName || 'IP_LIMIT_TABLE';
-    const windowTimeSeconds = config.rateLimitConfig?.windowTimeSeconds || 0;
-    
-    if (windowTimeSeconds <= 0) {
-      return; // No cleanup if no window time configured
-    }
-
-    const cutoffTime = nowSeconds - (windowTimeSeconds * 2);
-
-    if (config.dbMode === 'custom-pg-rest') {
-      const postgrestUrl = config.rateLimitConfig?.postgrestUrl;
-      if (!postgrestUrl) {
-        console.error('[Rate Limit Cleanup] PostgREST URL missing');
-        return;
-      }
-      
-      // Use direct SQL via PostgREST (no RPC for rate limit cleanup in init.sql)
-      const headers = {
-        'Content-Type': 'application/json',
-        'Prefer': 'return=minimal'
-      };
-      applyVerifyHeaders(headers, config.verifyHeader, config.verifySecret);
-      
-      // PostgREST DELETE syntax: table?condition
-      const deleteUrl = `${postgrestUrl}/${tableName}?LAST_WINDOW_TIME=lt.${cutoffTime}&or=(BLOCK_UNTIL.is.null,BLOCK_UNTIL.lt.${nowSeconds})`;
-      const response = await fetch(deleteUrl, {
-        method: 'DELETE',
-        headers,
-      });
-      
-      if (!response.ok) {
-        const text = await response.text().catch(() => '');
-        console.error('[Rate Limit Cleanup] PostgREST DELETE failed:', response.status, text);
-      }
-      return;
-    }
-
-    if (config.dbMode === 'd1') {
-      const envSource = config.rateLimitConfig?.env || env;
-      const bindingName = config.rateLimitConfig?.databaseBinding || 'DB';
-      const db = envSource ? envSource[bindingName] : null;
-      if (!db) {
-        console.error('[Rate Limit Cleanup] D1 binding not available');
-        return;
-      }
-      const sql = `DELETE FROM ${tableName}
-                   WHERE LAST_WINDOW_TIME < ?
-                     AND (BLOCK_UNTIL IS NULL OR BLOCK_UNTIL < ?)`;
-      await db.prepare(sql).bind(cutoffTime, nowSeconds).run();
-      return;
-    }
-
-    if (config.dbMode === 'd1-rest') {
-      const restConfig = config.d1RestConfig;
-      if (!restConfig) {
-        console.error('[Rate Limit Cleanup] D1 REST config missing');
-        return;
-      }
-      const sql = `DELETE FROM ${tableName}
-                   WHERE LAST_WINDOW_TIME < ?
-                     AND (BLOCK_UNTIL IS NULL OR BLOCK_UNTIL < ?)`;
-      await executeD1RestQuery(restConfig, [{ sql, params: [cutoffTime, nowSeconds] }]);
-    }
+    await Promise.all(
+      tables.map(({ tableName, windowTimeSeconds }) =>
+        cleanupSingleRateLimitTable(config, env, tableName, windowTimeSeconds, nowSeconds)
+      )
+    );
   } catch (error) {
     console.error('[Rate Limit Cleanup] Failed:', error instanceof Error ? error.message : String(error));
+  }
+}
+
+async function cleanupSingleRateLimitTable(config, env, tableName, windowTimeSeconds, nowSeconds) {
+  if (!windowTimeSeconds || windowTimeSeconds <= 0) {
+    return;
+  }
+
+  const cutoffTime = nowSeconds - (windowTimeSeconds * 2);
+
+  if (config.dbMode === 'custom-pg-rest') {
+    const postgrestUrl = config.rateLimitConfig?.postgrestUrl;
+    if (!postgrestUrl) {
+      console.error('[Rate Limit Cleanup] PostgREST URL missing');
+      return;
+    }
+
+    let rpcFunctionName;
+    if (tableName === 'IP_LIMIT_TABLE' || tableName.includes('IP_LIMIT')) {
+      rpcFunctionName = 'landing_cleanup_expired_rate_limits';
+    } else if (tableName === 'IP_FILE_LIMIT_TABLE' || tableName.includes('FILE_LIMIT')) {
+      rpcFunctionName = 'landing_cleanup_expired_file_rate_limits';
+    } else {
+      rpcFunctionName = 'landing_cleanup_expired_rate_limits';
+    }
+
+    const rpcUrl = `${postgrestUrl}/rpc/${rpcFunctionName}`;
+    const headers = { 'Content-Type': 'application/json' };
+    applyVerifyHeaders(headers, config.verifyHeader, config.verifySecret);
+
+    const response = await fetch(rpcUrl, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        p_window_seconds: windowTimeSeconds,
+        p_table_name: tableName,
+      }),
+    });
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      console.error('[Rate Limit Cleanup] PostgREST RPC failed:', response.status, text);
+    } else {
+      const result = await response.json().catch(() => null);
+      if (result !== null && typeof result === 'number') {
+        console.log('[Rate Limit Cleanup] Deleted', result, 'rows from table:', tableName);
+      }
+    }
+    return;
+  }
+
+  if (config.dbMode === 'd1') {
+    const envSource = config.cacheConfig?.env || config.rateLimitConfig?.env || env;
+    const bindingName = config.cacheConfig?.databaseBinding || config.rateLimitConfig?.databaseBinding || 'DB';
+    const db = envSource ? envSource[bindingName] : null;
+    if (!db) {
+      console.error('[Rate Limit Cleanup] D1 binding not available');
+      return;
+    }
+    await db.prepare(
+      `DELETE FROM ${tableName}
+       WHERE LAST_WINDOW_TIME < ?
+         AND (BLOCK_UNTIL IS NULL OR BLOCK_UNTIL < ?)`
+    ).bind(cutoffTime, nowSeconds).run();
+    return;
+  }
+
+  if (config.dbMode === 'd1-rest') {
+    const restConfig = config.d1RestConfig;
+    if (!restConfig) {
+      console.error('[Rate Limit Cleanup] D1 REST config missing');
+      return;
+    }
+    const sql = `DELETE FROM ${tableName}
+                 WHERE LAST_WINDOW_TIME < ?
+                   AND (BLOCK_UNTIL IS NULL OR BLOCK_UNTIL < ?)`;
+    await executeD1RestQuery(restConfig, [{ sql, params: [cutoffTime, nowSeconds] }]);
   }
 }
 
@@ -3063,6 +3217,10 @@ const handleFileRequest = async (request, env, config, rateLimiter, sessionDBMan
             limit: limitValue,
             blockTimeSeconds: config.rateLimitConfig.blockTimeSeconds,
             rateLimitTableName: config.rateLimitConfig.tableName || 'IP_LIMIT_TABLE',
+            fileLimit: config.fileLimit,
+            fileWindowTimeSeconds: config.fileWindowTimeSeconds,
+            fileBlockTimeSeconds: config.fileBlockTimeSeconds,
+            fileRateLimitTableName: config.rateLimitConfig.fileTableName || 'IP_FILE_LIMIT_TABLE',
             ipv4Suffix: config.rateLimitConfig.ipv4Suffix,
             ipv6Suffix: config.rateLimitConfig.ipv6Suffix,
           };
@@ -3077,6 +3235,10 @@ const handleFileRequest = async (request, env, config, rateLimiter, sessionDBMan
           limit: limitValue,
           blockTimeSeconds: config.rateLimitConfig.blockTimeSeconds,
           rateLimitTableName: config.rateLimitConfig.tableName || 'IP_LIMIT_TABLE',
+          fileLimit: config.fileLimit,
+          fileWindowTimeSeconds: config.fileWindowTimeSeconds,
+          fileBlockTimeSeconds: config.fileBlockTimeSeconds,
+          fileRateLimitTableName: config.rateLimitConfig.fileTableName || 'IP_FILE_LIMIT_TABLE',
           ipv4Suffix: config.rateLimitConfig.ipv4Suffix,
           ipv6Suffix: config.rateLimitConfig.ipv6Suffix,
           sessionEnabled: config.sessionEnabled,
@@ -3095,6 +3257,10 @@ const handleFileRequest = async (request, env, config, rateLimiter, sessionDBMan
           limit: limitValue,
           blockTimeSeconds: config.rateLimitConfig.blockTimeSeconds,
           rateLimitTableName: config.rateLimitConfig.tableName || 'IP_LIMIT_TABLE',
+          fileLimit: config.fileLimit,
+          fileWindowTimeSeconds: config.fileWindowTimeSeconds,
+          fileBlockTimeSeconds: config.fileBlockTimeSeconds,
+          fileRateLimitTableName: config.rateLimitConfig.fileTableName || 'IP_FILE_LIMIT_TABLE',
           ipv4Suffix: config.rateLimitConfig.ipv4Suffix,
           ipv6Suffix: config.rateLimitConfig.ipv6Suffix,
           sessionEnabled: config.sessionEnabled,
@@ -3107,14 +3273,15 @@ const handleFileRequest = async (request, env, config, rateLimiter, sessionDBMan
         }
 
         if (unifiedResult) {
-          if (!unifiedResult.rateLimit.allowed) {
-            return respondRateLimitExceeded(
-              origin,
-              unifiedResult.rateLimit.ipSubnet || clientIP,
-              config.ipSubnetLimit,
-              config.windowTime,
-              unifiedResult.rateLimit.retryAfter
-            );
+          const rateLimitResponse = maybeRespondRateLimit(
+            origin,
+            clientIP,
+            decodedPath,
+            config,
+            unifiedResult.rateLimit
+          );
+          if (rateLimitResponse) {
+            return rateLimitResponse;
           }
 
           if (unifiedResult.cache.hit && Number.isFinite(unifiedResult.cache.size)) {
@@ -3138,19 +3305,15 @@ const handleFileRequest = async (request, env, config, rateLimiter, sessionDBMan
 
     if (!canUseUnified || !unifiedResult) {
       if (rateLimiter && clientIP) {
-        const rateLimitResult = await rateLimiter.checkRateLimit(clientIP, { ...config.rateLimitConfig, ctx });
+        const rateLimitResult = await rateLimiter.checkRateLimit(clientIP, decodedPath, { ...config.rateLimitConfig, ctx });
 
-        if (!rateLimitResult.allowed) {
-          if (rateLimitResult.error) {
-            return respondJson(origin, { code: 500, message: rateLimitResult.error }, 500);
-          }
-          return respondRateLimitExceeded(
-            origin,
-            rateLimitResult.ipSubnet,
-            config.ipSubnetLimit,
-            config.windowTime,
-            rateLimitResult.retryAfter
-          );
+        if (rateLimitResult.error) {
+          return respondJson(origin, { code: 500, message: rateLimitResult.error }, 500);
+        }
+
+        const rateLimitResponse = maybeRespondRateLimit(origin, clientIP, decodedPath, config, rateLimitResult);
+        if (rateLimitResponse) {
+          return rateLimitResponse;
         }
       }
 

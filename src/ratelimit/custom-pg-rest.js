@@ -99,6 +99,7 @@ const executeQuery = async (postgrestUrl, verifyHeader, verifySecret, tableName,
  * No optimistic locking or retry loops needed - the database handles all concurrency.
  *
  * @param {string} ip - Client IP address
+ * @param {string} path - Requested file path
  * @param {Object} config - Rate limit configuration
  * @param {string} config.postgrestUrl - PostgREST API base URL
  * @param {string|string[]} config.verifyHeader - Authentication header name(s)
@@ -112,47 +113,77 @@ const executeQuery = async (postgrestUrl, verifyHeader, verifySecret, tableName,
  * @param {number} config.cleanupProbability - Probability of triggering cleanup (0.0 to 1.0)
  * @param {number} config.blockTimeSeconds - Additional block time in seconds when limit exceeded
  * @param {Object} config.ctx - ExecutionContext for waitUntil (optional)
- * @returns {Promise<{allowed: boolean, ipSubnet?: string, retryAfter?: number, error?: string}>}
+ * @returns {Promise<{allowed: boolean, ipAllowed: boolean, ipSubnet?: string, ipRetryAfter?: number, fileAllowed: boolean, fileRetryAfter?: number, error?: string}>}
  */
-export const checkRateLimit = async (ip, config) => {
-  // If any required config is missing, skip rate limiting
-  if (!config.postgrestUrl || !hasVerifyCredentials(config.verifyHeader, config.verifySecret) || !config.windowTimeSeconds || !config.limit) {
-    return { allowed: true };
+export const checkRateLimit = async (ip, path, config) => {
+  if (!config?.postgrestUrl || !hasVerifyCredentials(config.verifyHeader, config.verifySecret) || !ip || typeof ip !== 'string') {
+    return { allowed: true, ipAllowed: true, fileAllowed: true };
   }
 
-  if (!ip || typeof ip !== 'string') {
-    return { allowed: true };
+  const ipLimitValue = Number(config.limit) || 0;
+  const ipWindowSeconds = Number(config.windowTimeSeconds) || 0;
+  const fileLimitValue = Number(config.fileLimit) || 0;
+  const fileWindowSeconds = Number(config.fileWindowTimeSeconds) || 0;
+
+  let ipCheckEnabled = Boolean((config.ipRateLimitEnabled ?? true) && ipLimitValue > 0 && ipWindowSeconds > 0);
+  let fileCheckEnabled = Boolean((config.fileRateLimitEnabled ?? true) && fileLimitValue > 0 && fileWindowSeconds > 0);
+
+  const normalizedPath = typeof path === 'string' ? path : '';
+  if (fileCheckEnabled && normalizedPath.length === 0) {
+    fileCheckEnabled = false;
+  }
+
+  if (!ipCheckEnabled && !fileCheckEnabled) {
+    return { allowed: true, ipAllowed: true, fileAllowed: true };
   }
 
   try {
     const { postgrestUrl, verifyHeader, verifySecret } = config;
     const tableName = config.tableName || 'IP_LIMIT_TABLE';
+    const fileTableName = config.fileTableName || 'IP_FILE_LIMIT_TABLE';
 
-    // Calculate IP subnet
     const ipSubnet = calculateIPSubnet(ip, config.ipv4Suffix, config.ipv6Suffix);
     if (!ipSubnet) {
-      return { allowed: true };
+      return { allowed: true, ipAllowed: true, fileAllowed: true };
     }
 
-    // Calculate SHA256 hash of IP subnet
     const ipHash = await sha256Hash(ipSubnet);
     if (!ipHash) {
-      return { allowed: true };
+      return { allowed: true, ipAllowed: true, fileAllowed: true };
     }
 
-    // Get current timestamp (in seconds)
+    const pathHash = normalizedPath ? await sha256Hash(normalizedPath) : '';
+    if (fileCheckEnabled && !pathHash) {
+      fileCheckEnabled = false;
+    }
+
     const now = Math.floor(Date.now() / 1000);
 
-    // Call atomic RPC stored procedure - single database round-trip
-    // The stored procedure handles all concurrency via ON CONFLICT internally
-    const rpcUrl = `${postgrestUrl}/rpc/upsert_rate_limit`;
+    const rpcUrl = `${postgrestUrl}/rpc/landing_unified_check`;
     const rpcBody = {
+      p_path_hash: pathHash || ipHash,
+      p_cache_ttl: 0,
+      p_cache_table_name: 'FILESIZE_CACHE_TABLE',
       p_ip_hash: ipHash,
       p_ip_range: ipSubnet,
       p_now: now,
-      p_window_seconds: config.windowTimeSeconds,
-      p_limit: config.limit,
+      p_window_seconds: ipCheckEnabled ? ipWindowSeconds : 0,
+      p_limit: ipCheckEnabled ? ipLimitValue : 0,
       p_block_seconds: config.blockTimeSeconds || 0,
+      p_ratelimit_table_name: tableName,
+      p_file_limit: fileCheckEnabled ? fileLimitValue : 0,
+      p_file_window_seconds: fileCheckEnabled ? fileWindowSeconds : 0,
+      p_file_block_seconds: config.fileBlockTimeSeconds || 0,
+      p_file_limit_table_name: fileTableName,
+      p_token_hash: null,
+      p_token_ip: null,
+      p_token_ttl: 0,
+      p_token_table_name: config.tokenTableName || 'TURNSTILE_TOKEN_BINDING',
+      p_filepath_hash: pathHash || ipHash,
+      p_altcha_token_hash: null,
+      p_altcha_token_ip: null,
+      p_altcha_filepath_hash: pathHash || ipHash,
+      p_altcha_table_name: config.altchaTableName || 'ALTCHA_TOKEN_LIST',
     };
 
     const rpcHeaders = {
@@ -171,55 +202,67 @@ export const checkRateLimit = async (ip, config) => {
       throw new Error(`PostgREST RPC error (${rpcResponse.status}): ${errorText}`);
     }
 
-    // Parse RPC result (returns array with single row)
     const rpcResult = await rpcResponse.json();
-    if (!rpcResult || rpcResult.length === 0) {
-      throw new Error('RPC upsert_rate_limit returned no rows');
+    if (!Array.isArray(rpcResult) || rpcResult.length === 0) {
+      throw new Error('landing_unified_check returned no rows');
     }
 
     const row = rpcResult[0];
-    const accessCount = Number.parseInt(row.ACCESS_COUNT, 10);
-    const lastWindowTime = Number.parseInt(row.LAST_WINDOW_TIME, 10);
-    const blockUntil = row.BLOCK_UNTIL ? Number.parseInt(row.BLOCK_UNTIL, 10) : null;
+    const rateAccessCount = row.rate_access_count !== null ? Number.parseInt(row.rate_access_count, 10) : null;
+    const rateLastWindowTime = row.rate_last_window_time !== null ? Number.parseInt(row.rate_last_window_time, 10) : null;
+    const rateBlockUntil = row.rate_block_until !== null ? Number.parseInt(row.rate_block_until, 10) : null;
+    const fileAccessCount = row.file_access_count !== null ? Number.parseInt(row.file_access_count, 10) : null;
+    const fileLastWindowTime = row.file_last_window_time !== null ? Number.parseInt(row.file_last_window_time, 10) : null;
+    const fileBlockUntil = row.file_block_until !== null ? Number.parseInt(row.file_block_until, 10) : null;
 
-    // Check if currently blocked
-    if (blockUntil && blockUntil > now) {
-      const retryAfter = blockUntil - now;
-      return {
-        allowed: false,
-        ipSubnet,
-        retryAfter: Math.max(1, retryAfter),
-      };
+    let ipAllowed = true;
+    let ipRetryAfter = null;
+    if (ipCheckEnabled && Number.isFinite(ipLimitValue) && ipLimitValue > 0) {
+      if (Number.isFinite(rateBlockUntil) && rateBlockUntil > now) {
+        ipAllowed = false;
+        ipRetryAfter = Math.max(1, rateBlockUntil - now);
+      } else if (Number.isFinite(rateAccessCount) && rateAccessCount >= ipLimitValue) {
+        const diff = now - (Number.isFinite(rateLastWindowTime) ? rateLastWindowTime : now);
+        ipAllowed = false;
+        ipRetryAfter = Math.max(1, ipWindowSeconds - diff);
+      }
     }
 
-    // Check if limit exceeded (without block time configured)
-    if (accessCount >= config.limit) {
-      const diff = now - lastWindowTime;
-      const retryAfter = config.windowTimeSeconds - diff;
-      return {
-        allowed: false,
-        ipSubnet,
-        retryAfter: Math.max(1, retryAfter),
-      };
+    let fileAllowed = true;
+    let fileRetryAfter = null;
+    if (fileCheckEnabled && Number.isFinite(fileLimitValue) && fileLimitValue > 0) {
+      if (Number.isFinite(fileBlockUntil) && fileBlockUntil > now) {
+        fileAllowed = false;
+        fileRetryAfter = Math.max(1, fileBlockUntil - now);
+      } else if (Number.isFinite(fileAccessCount) && fileAccessCount >= fileLimitValue) {
+        const diff = now - (Number.isFinite(fileLastWindowTime) ? fileLastWindowTime : now);
+        fileAllowed = false;
+        fileRetryAfter = Math.max(1, fileWindowSeconds - diff);
+      }
     }
 
-    // Request allowed
-    return { allowed: true };
+    return {
+      allowed: ipAllowed && fileAllowed,
+      ipAllowed,
+      ipRetryAfter,
+      ipSubnet,
+      fileAllowed,
+      fileRetryAfter,
+    };
   } catch (error) {
-    // Handle errors based on pgErrorHandle strategy
     const errorMessage = error instanceof Error ? error.message : String(error);
 
     if (config.pgErrorHandle === 'fail-open') {
-      // Log error and allow request
       console.error('Rate limit check failed (fail-open):', errorMessage);
-      return { allowed: true };
-    } else {
-      // fail-closed: propagate error
-      return {
-        allowed: false,
-        error: `Rate limit check failed: ${errorMessage}`,
-      };
+      return { allowed: true, ipAllowed: true, fileAllowed: true };
     }
+
+    return {
+      allowed: false,
+      ipAllowed: false,
+      fileAllowed: true,
+      error: `Rate limit check failed: ${errorMessage}`,
+    };
   }
 };
 

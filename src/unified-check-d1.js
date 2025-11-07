@@ -81,6 +81,10 @@ export const unifiedCheckD1 = async (path, clientIP, altchaTableName, config) =>
   const blockSeconds = Number(config.blockTimeSeconds) || 0;
   const cacheTableName = config.cacheTableName || 'FILESIZE_CACHE_TABLE';
   const rateLimitTableName = config.rateLimitTableName || 'IP_LIMIT_TABLE';
+  const fileRateLimitTableName = config.fileRateLimitTableName || 'IP_FILE_LIMIT_TABLE';
+  const fileLimit = Number(config.fileLimit) || 0;
+  const fileWindowSeconds = Number(config.fileWindowTimeSeconds) || 0;
+  const fileBlockSeconds = Number(config.fileBlockTimeSeconds) || 0;
   const ipv4Suffix = config.ipv4Suffix || '/32';
   const ipv6Suffix = config.ipv6Suffix || '/60';
   const tokenBindingEnabled = config.turnstileTokenBinding !== false;
@@ -90,12 +94,11 @@ export const unifiedCheckD1 = async (path, clientIP, altchaTableName, config) =>
   const altchaTokenHash = config.altchaTokenHash || null;
   const altchaTokenIP = config.altchaTokenIP || clientIP || null;
   const resolvedAltchaTableName = altchaTableName || 'ALTCHA_TOKEN_LIST';
+  const ipCheckEnabled = windowSeconds > 0 && limit > 0;
+  const fileCheckEnabled = fileWindowSeconds > 0 && fileLimit > 0;
 
   if (cacheTTL <= 0) {
     throw new Error('[Unified Check D1] sizeTTL must be greater than zero');
-  }
-  if (!windowSeconds || !limit) {
-    throw new Error('[Unified Check D1] windowTimeSeconds and limit are required');
   }
 
   let sessionTableName = null;
@@ -140,34 +143,66 @@ export const unifiedCheckD1 = async (path, clientIP, altchaTableName, config) =>
 
   const statements = [
     db.prepare(`SELECT SIZE, TIMESTAMP FROM ${cacheTableName} WHERE PATH_HASH = ?`).bind(pathHash),
-    db.prepare(`
-      INSERT INTO ${rateLimitTableName} (IP_HASH, IP_RANGE, ACCESS_COUNT, LAST_WINDOW_TIME, BLOCK_UNTIL)
-      VALUES (?, ?, 1, ?, NULL)
-      ON CONFLICT (IP_HASH) DO UPDATE SET
-        ACCESS_COUNT = CASE
-          WHEN ? - ${rateLimitTableName}.LAST_WINDOW_TIME >= ? THEN 1
-          WHEN ${rateLimitTableName}.BLOCK_UNTIL IS NOT NULL AND ${rateLimitTableName}.BLOCK_UNTIL <= ? THEN 1
-          WHEN ${rateLimitTableName}.ACCESS_COUNT >= ? THEN ${rateLimitTableName}.ACCESS_COUNT
-          ELSE ${rateLimitTableName}.ACCESS_COUNT + 1
-        END,
-        LAST_WINDOW_TIME = CASE
-          WHEN ? - ${rateLimitTableName}.LAST_WINDOW_TIME >= ? THEN ?
-          WHEN ${rateLimitTableName}.BLOCK_UNTIL IS NOT NULL AND ${rateLimitTableName}.BLOCK_UNTIL <= ? THEN ?
-          ELSE ${rateLimitTableName}.LAST_WINDOW_TIME
-        END,
-        BLOCK_UNTIL = CASE
-          WHEN ? - ${rateLimitTableName}.LAST_WINDOW_TIME >= ? THEN NULL
-          WHEN ${rateLimitTableName}.BLOCK_UNTIL IS NOT NULL AND ${rateLimitTableName}.BLOCK_UNTIL <= ? THEN NULL
-          WHEN ${rateLimitTableName}.ACCESS_COUNT >= ? AND ? > 0 THEN ? + ?
-          ELSE ${rateLimitTableName}.BLOCK_UNTIL
-        END
-      RETURNING ACCESS_COUNT, LAST_WINDOW_TIME, BLOCK_UNTIL
-    `).bind(
-      ipHash, ipSubnet, now,
-      now, windowSeconds, now, limit,
-      now, windowSeconds, now, now, now,
-      now, windowSeconds, now, limit, blockSeconds, now, blockSeconds
-    ),
+    ipCheckEnabled
+      ? db.prepare(`
+          INSERT INTO ${rateLimitTableName} (IP_HASH, IP_RANGE, ACCESS_COUNT, LAST_WINDOW_TIME, BLOCK_UNTIL)
+          VALUES (?, ?, 1, ?, NULL)
+          ON CONFLICT (IP_HASH) DO UPDATE SET
+            ACCESS_COUNT = CASE
+              WHEN ? - ${rateLimitTableName}.LAST_WINDOW_TIME >= ? THEN 1
+              WHEN ${rateLimitTableName}.BLOCK_UNTIL IS NOT NULL AND ${rateLimitTableName}.BLOCK_UNTIL <= ? THEN 1
+              WHEN ${rateLimitTableName}.ACCESS_COUNT >= ? THEN ${rateLimitTableName}.ACCESS_COUNT
+              ELSE ${rateLimitTableName}.ACCESS_COUNT + 1
+            END,
+            LAST_WINDOW_TIME = CASE
+              WHEN ? - ${rateLimitTableName}.LAST_WINDOW_TIME >= ? THEN ?
+              WHEN ${rateLimitTableName}.BLOCK_UNTIL IS NOT NULL AND ${rateLimitTableName}.BLOCK_UNTIL <= ? THEN ?
+              ELSE ${rateLimitTableName}.LAST_WINDOW_TIME
+            END,
+            BLOCK_UNTIL = CASE
+              WHEN ? - ${rateLimitTableName}.LAST_WINDOW_TIME >= ? THEN NULL
+              WHEN ${rateLimitTableName}.BLOCK_UNTIL IS NOT NULL AND ${rateLimitTableName}.BLOCK_UNTIL <= ? THEN NULL
+              WHEN ${rateLimitTableName}.ACCESS_COUNT >= ? AND ? > 0 THEN ? + ?
+              ELSE ${rateLimitTableName}.BLOCK_UNTIL
+            END
+          RETURNING ACCESS_COUNT, LAST_WINDOW_TIME, BLOCK_UNTIL
+        `).bind(
+          ipHash, ipSubnet, now,
+          now, windowSeconds, now, limit,
+          now, windowSeconds, now, now, now,
+          now, windowSeconds, now, limit, blockSeconds, now, blockSeconds
+        )
+      : db.prepare('SELECT NULL AS ACCESS_COUNT, NULL AS LAST_WINDOW_TIME, NULL AS BLOCK_UNTIL'),
+    fileCheckEnabled
+      ? db.prepare(`
+          INSERT INTO ${fileRateLimitTableName} (IP_HASH, PATH_HASH, IP_RANGE, ACCESS_COUNT, LAST_WINDOW_TIME, BLOCK_UNTIL)
+          VALUES (?, ?, ?, 1, ?, NULL)
+          ON CONFLICT (IP_HASH, PATH_HASH) DO UPDATE SET
+            ACCESS_COUNT = CASE
+              WHEN ? - ${fileRateLimitTableName}.LAST_WINDOW_TIME >= ? THEN 1
+              WHEN ${fileRateLimitTableName}.BLOCK_UNTIL IS NOT NULL AND ${fileRateLimitTableName}.BLOCK_UNTIL <= ? THEN 1
+              WHEN ${fileRateLimitTableName}.ACCESS_COUNT >= ? THEN ${fileRateLimitTableName}.ACCESS_COUNT
+              ELSE ${fileRateLimitTableName}.ACCESS_COUNT + 1
+            END,
+            LAST_WINDOW_TIME = CASE
+              WHEN ? - ${fileRateLimitTableName}.LAST_WINDOW_TIME >= ? THEN ?
+              WHEN ${fileRateLimitTableName}.BLOCK_UNTIL IS NOT NULL AND ${fileRateLimitTableName}.BLOCK_UNTIL <= ? THEN ?
+              ELSE ${fileRateLimitTableName}.LAST_WINDOW_TIME
+            END,
+            BLOCK_UNTIL = CASE
+              WHEN ? - ${fileRateLimitTableName}.LAST_WINDOW_TIME >= ? THEN NULL
+              WHEN ${fileRateLimitTableName}.BLOCK_UNTIL IS NOT NULL AND ${fileRateLimitTableName}.BLOCK_UNTIL <= ? THEN NULL
+              WHEN ${fileRateLimitTableName}.ACCESS_COUNT >= ? AND ? > 0 THEN ? + ?
+              ELSE ${fileRateLimitTableName}.BLOCK_UNTIL
+            END
+          RETURNING ACCESS_COUNT, LAST_WINDOW_TIME, BLOCK_UNTIL
+        `).bind(
+          ipHash, filepathHash, ipSubnet, now,
+          now, fileWindowSeconds, now, fileLimit,
+          now, fileWindowSeconds, now, now, now,
+          now, fileWindowSeconds, now, fileLimit, fileBlockSeconds, now, fileBlockSeconds
+        )
+      : db.prepare('SELECT NULL AS ACCESS_COUNT, NULL AS LAST_WINDOW_TIME, NULL AS BLOCK_UNTIL'),
     db.prepare(`SELECT CLIENT_IP, FILEPATH_HASH, ACCESS_COUNT, EXPIRES_AT FROM ${tokenTableName} WHERE TOKEN_HASH = ?`).bind(tokenHash),
   ];
 
@@ -181,9 +216,9 @@ export const unifiedCheckD1 = async (path, clientIP, altchaTableName, config) =>
       : db.prepare(`SELECT NULL AS CLIENT_IP, NULL AS FILEPATH_HASH, NULL AS ACCESS_COUNT, NULL AS EXPIRES_AT`)
   );
 
-  console.log('[Unified Check D1] Executing batch (cache + rate limit + token binding)');
+  console.log('[Unified Check D1] Executing batch (cache + rate limits + token binding)');
   const results = await db.batch(statements);
-  if (!results || results.length < 4) {
+  if (!results || results.length < 5) {
     throw new Error('[Unified Check D1] Batch returned incomplete results');
   }
 
@@ -212,34 +247,62 @@ export const unifiedCheckD1 = async (path, clientIP, altchaTableName, config) =>
     console.log('[Unified Check D1] Cache MISS');
   }
 
-  const rateRow = results[1].results?.[0];
-  if (!rateRow) {
+  const rateRow = results[1].results?.[0] || null;
+  const fileRow = results[2].results?.[0] || null;
+  if (ipCheckEnabled && !rateRow) {
     throw new Error('[Unified Check D1] Rate limit UPSERT returned no rows');
   }
-
-  const accessCount = Number.parseInt(rateRow.ACCESS_COUNT, 10);
-  const lastWindowTime = Number.parseInt(rateRow.LAST_WINDOW_TIME, 10);
-  const blockUntil = rateRow.BLOCK_UNTIL !== null ? Number.parseInt(rateRow.BLOCK_UNTIL, 10) : null;
-
-  let allowed = true;
-  let retryAfter = 0;
-  const safeAccess = Number.isFinite(accessCount) ? accessCount : 0;
-  const safeLastWindow = Number.isFinite(lastWindowTime) ? lastWindowTime : now;
-
-  if (Number.isFinite(blockUntil) && blockUntil > now) {
-    allowed = false;
-    retryAfter = Math.max(1, blockUntil - now);
-    console.log('[Unified Check D1] Rate limit BLOCKED until:', new Date(blockUntil * 1000).toISOString());
-  } else if (safeAccess >= limit) {
-    const elapsed = now - safeLastWindow;
-    retryAfter = Math.max(1, windowSeconds - elapsed);
-    allowed = false;
-    console.log('[Unified Check D1] Rate limit EXCEEDED:', safeAccess, '>=', limit);
-  } else {
-    console.log('[Unified Check D1] Rate limit OK:', safeAccess, '/', limit);
+  if (fileCheckEnabled && !fileRow) {
+    throw new Error('[Unified Check D1] File rate limit UPSERT returned no rows');
   }
 
-  const tokenRow = results[2].results?.[0];
+  const accessCount = rateRow ? Number.parseInt(rateRow.ACCESS_COUNT, 10) : NaN;
+  const lastWindowTime = rateRow ? Number.parseInt(rateRow.LAST_WINDOW_TIME, 10) : NaN;
+  const blockUntil = rateRow && rateRow.BLOCK_UNTIL !== null ? Number.parseInt(rateRow.BLOCK_UNTIL, 10) : null;
+  const fileAccessCount = fileRow ? Number.parseInt(fileRow.ACCESS_COUNT, 10) : NaN;
+  const fileLastWindowTime = fileRow ? Number.parseInt(fileRow.LAST_WINDOW_TIME, 10) : NaN;
+  const fileBlockUntil = fileRow && fileRow.BLOCK_UNTIL !== null ? Number.parseInt(fileRow.BLOCK_UNTIL, 10) : null;
+
+  const safeAccess = Number.isFinite(accessCount) ? accessCount : 0;
+  const safeLastWindow = Number.isFinite(lastWindowTime) ? lastWindowTime : now;
+  const safeFileAccess = Number.isFinite(fileAccessCount) ? fileAccessCount : 0;
+  const safeFileLastWindow = Number.isFinite(fileLastWindowTime) ? fileLastWindowTime : now;
+
+  let ipAllowed = true;
+  let ipRetryAfter = null;
+  if (ipCheckEnabled && limit > 0) {
+    if (Number.isFinite(blockUntil) && blockUntil > now) {
+      ipAllowed = false;
+      ipRetryAfter = Math.max(1, blockUntil - now);
+      console.log('[Unified Check D1] IP rate limit BLOCKED until:', new Date(blockUntil * 1000).toISOString());
+    } else if (safeAccess >= limit) {
+      const elapsed = now - safeLastWindow;
+      ipAllowed = false;
+      ipRetryAfter = Math.max(1, windowSeconds - elapsed);
+      console.log('[Unified Check D1] IP rate limit EXCEEDED:', safeAccess, '>=', limit);
+    } else {
+      console.log('[Unified Check D1] IP rate limit OK:', safeAccess, '/', limit);
+    }
+  }
+
+  let fileAllowed = true;
+  let fileRetryAfter = null;
+  if (fileCheckEnabled && fileLimit > 0) {
+    if (Number.isFinite(fileBlockUntil) && fileBlockUntil > now) {
+      fileAllowed = false;
+      fileRetryAfter = Math.max(1, fileBlockUntil - now);
+      console.log('[Unified Check D1] File rate limit BLOCKED until:', new Date(fileBlockUntil * 1000).toISOString());
+    } else if (safeFileAccess >= fileLimit) {
+      const elapsed = now - safeFileLastWindow;
+      fileAllowed = false;
+      fileRetryAfter = Math.max(1, fileWindowSeconds - elapsed);
+      console.log('[Unified Check D1] File rate limit EXCEEDED:', safeFileAccess, '>=', fileLimit);
+    } else {
+      console.log('[Unified Check D1] File rate limit OK:', safeFileAccess, '/', fileLimit);
+    }
+  }
+
+  const tokenRow = results[3].results?.[0];
   let tokenAllowed = true;
   let tokenErrorCode = 0;
   let tokenAccessCount = 0;
@@ -290,7 +353,7 @@ export const unifiedCheckD1 = async (path, clientIP, altchaTableName, config) =>
   const safeTokenAccess = Number.isFinite(tokenAccessCount) ? tokenAccessCount : 0;
   const safeTokenExpires = Number.isFinite(tokenExpiresAt) ? tokenExpiresAt : null;
 
-  const altchaRow = results[3].results?.[0] || {};
+  const altchaRow = results[4].results?.[0] || {};
   let altchaAllowed = true;
   let altchaErrorCode = 0;
   let altchaAccessCount = 0;
@@ -323,12 +386,18 @@ export const unifiedCheckD1 = async (path, clientIP, altchaTableName, config) =>
   return {
     cache: cacheResult,
     rateLimit: {
-      allowed,
-      accessCount: safeAccess,
+      allowed: ipAllowed && fileAllowed,
+      ipAllowed,
+      ipRetryAfter,
       ipSubnet,
-      retryAfter,
-      lastWindowTime: safeLastWindow,
-      blockUntil,
+      ipAccessCount: safeAccess,
+      ipLastWindowTime: safeLastWindow,
+      ipBlockUntil: blockUntil,
+      fileAllowed,
+      fileRetryAfter,
+      fileAccessCount: safeFileAccess,
+      fileLastWindowTime: safeFileLastWindow,
+      fileBlockUntil,
     },
     token: {
       allowed: tokenAllowed,

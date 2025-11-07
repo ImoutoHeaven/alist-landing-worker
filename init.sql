@@ -26,6 +26,27 @@ CREATE INDEX IF NOT EXISTS idx_ip_limit_block_until
 
 
 -- ========================================
+-- File-Level Rate Limit Table Schema
+-- ========================================
+
+CREATE TABLE IF NOT EXISTS "IP_FILE_LIMIT_TABLE" (
+  "IP_HASH" TEXT NOT NULL,
+  "PATH_HASH" TEXT NOT NULL,
+  "IP_RANGE" TEXT NOT NULL,
+  "ACCESS_COUNT" INTEGER NOT NULL,
+  "LAST_WINDOW_TIME" INTEGER NOT NULL,
+  "BLOCK_UNTIL" INTEGER,
+  PRIMARY KEY ("IP_HASH", "PATH_HASH")
+);
+
+CREATE INDEX IF NOT EXISTS idx_ip_file_limit_last_window
+  ON "IP_FILE_LIMIT_TABLE" ("LAST_WINDOW_TIME");
+CREATE INDEX IF NOT EXISTS idx_ip_file_limit_block_until
+  ON "IP_FILE_LIMIT_TABLE" ("BLOCK_UNTIL")
+  WHERE "BLOCK_UNTIL" IS NOT NULL;
+
+
+-- ========================================
 -- Stored Procedure: Atomic Rate Limit UPSERT (Parametrised)
 -- ========================================
 
@@ -73,6 +94,54 @@ BEGIN
 
   RETURN QUERY EXECUTE sql
     USING p_ip_hash, p_ip_range, p_now, p_window_seconds, p_limit, p_block_seconds;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION landing_upsert_file_rate_limit(
+  p_ip_hash TEXT,
+  p_path_hash TEXT,
+  p_ip_range TEXT,
+  p_now INTEGER,
+  p_window_seconds INTEGER,
+  p_limit INTEGER,
+  p_block_seconds INTEGER,
+  p_table_name TEXT DEFAULT 'IP_FILE_LIMIT_TABLE'
+)
+RETURNS TABLE(
+  "ACCESS_COUNT" INTEGER,
+  "LAST_WINDOW_TIME" INTEGER,
+  "BLOCK_UNTIL" INTEGER
+) AS $$
+DECLARE
+  sql TEXT;
+BEGIN
+  sql := format(
+    'INSERT INTO %1$I ("IP_HASH", "PATH_HASH", "IP_RANGE", "ACCESS_COUNT", "LAST_WINDOW_TIME", "BLOCK_UNTIL")
+     VALUES ($1, $2, $3, 1, $4, NULL)
+     ON CONFLICT ("IP_HASH", "PATH_HASH") DO UPDATE SET
+       "ACCESS_COUNT" = CASE
+         WHEN $4 - %1$I."LAST_WINDOW_TIME" >= $5 THEN 1
+         WHEN %1$I."BLOCK_UNTIL" IS NOT NULL AND %1$I."BLOCK_UNTIL" <= $4 THEN 1
+         WHEN %1$I."ACCESS_COUNT" >= $6 THEN %1$I."ACCESS_COUNT"
+         ELSE %1$I."ACCESS_COUNT" + 1
+       END,
+       "LAST_WINDOW_TIME" = CASE
+         WHEN $4 - %1$I."LAST_WINDOW_TIME" >= $5 THEN $4
+         WHEN %1$I."BLOCK_UNTIL" IS NOT NULL AND %1$I."BLOCK_UNTIL" <= $4 THEN $4
+         ELSE %1$I."LAST_WINDOW_TIME"
+       END,
+       "BLOCK_UNTIL" = CASE
+         WHEN $4 - %1$I."LAST_WINDOW_TIME" >= $5 THEN NULL
+         WHEN %1$I."BLOCK_UNTIL" IS NOT NULL AND %1$I."BLOCK_UNTIL" <= $4 THEN NULL
+         WHEN %1$I."ACCESS_COUNT" >= $6 AND $7 > 0 THEN $4 + $7
+         ELSE %1$I."BLOCK_UNTIL"
+       END
+     RETURNING "ACCESS_COUNT", "LAST_WINDOW_TIME", "BLOCK_UNTIL"',
+    p_table_name
+  );
+
+  RETURN QUERY EXECUTE sql
+    USING p_ip_hash, p_path_hash, p_ip_range, p_now, p_window_seconds, p_limit, p_block_seconds;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -186,6 +255,80 @@ BEGIN
   );
 
   EXECUTE sql USING cutoff;
+  GET DIAGNOSTICS deleted_count = ROW_COUNT;
+
+  RETURN deleted_count;
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- ========================================
+-- Stored Procedure: Cleanup Expired IP Rate Limits
+-- ========================================
+
+CREATE OR REPLACE FUNCTION landing_cleanup_expired_rate_limits(
+  p_window_seconds INTEGER,
+  p_table_name TEXT DEFAULT 'IP_LIMIT_TABLE'
+)
+RETURNS INTEGER AS $$
+DECLARE
+  deleted_count INTEGER := 0;
+  now_ts INTEGER;
+  cutoff INTEGER;
+  sql TEXT;
+BEGIN
+  IF p_window_seconds IS NULL OR p_window_seconds <= 0 THEN
+    RETURN 0;
+  END IF;
+
+  now_ts := EXTRACT(EPOCH FROM NOW())::INTEGER;
+  cutoff := now_ts - (p_window_seconds * 2);
+
+  sql := format(
+    'DELETE FROM %1$I
+     WHERE "LAST_WINDOW_TIME" < $1
+       AND ("BLOCK_UNTIL" IS NULL OR "BLOCK_UNTIL" < $2)',
+    p_table_name
+  );
+
+  EXECUTE sql USING cutoff, now_ts;
+  GET DIAGNOSTICS deleted_count = ROW_COUNT;
+
+  RETURN deleted_count;
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- ========================================
+-- Stored Procedure: Cleanup Expired File Rate Limits
+-- ========================================
+
+CREATE OR REPLACE FUNCTION landing_cleanup_expired_file_rate_limits(
+  p_window_seconds INTEGER,
+  p_table_name TEXT DEFAULT 'IP_FILE_LIMIT_TABLE'
+)
+RETURNS INTEGER AS $$
+DECLARE
+  deleted_count INTEGER := 0;
+  now_ts INTEGER;
+  cutoff INTEGER;
+  sql TEXT;
+BEGIN
+  IF p_window_seconds IS NULL OR p_window_seconds <= 0 THEN
+    RETURN 0;
+  END IF;
+
+  now_ts := EXTRACT(EPOCH FROM NOW())::INTEGER;
+  cutoff := now_ts - (p_window_seconds * 2);
+
+  sql := format(
+    'DELETE FROM %1$I
+     WHERE "LAST_WINDOW_TIME" < $1
+       AND ("BLOCK_UNTIL" IS NULL OR "BLOCK_UNTIL" < $2)',
+    p_table_name
+  );
+
+  EXECUTE sql USING cutoff, now_ts;
   GET DIAGNOSTICS deleted_count = ROW_COUNT;
 
   RETURN deleted_count;
@@ -447,6 +590,10 @@ CREATE OR REPLACE FUNCTION landing_unified_check(
   p_limit INTEGER,
   p_block_seconds INTEGER,
   p_ratelimit_table_name TEXT,
+  p_file_limit INTEGER DEFAULT 0,
+  p_file_window_seconds INTEGER DEFAULT 0,
+  p_file_block_seconds INTEGER DEFAULT 0,
+  p_file_limit_table_name TEXT DEFAULT 'IP_FILE_LIMIT_TABLE',
   p_token_hash TEXT,
   p_token_ip TEXT,
   p_token_ttl INTEGER,
@@ -463,6 +610,9 @@ RETURNS TABLE(
   rate_access_count INTEGER,
   rate_last_window_time INTEGER,
   rate_block_until INTEGER,
+  file_access_count INTEGER,
+  file_last_window_time INTEGER,
+  file_block_until INTEGER,
   token_allowed BOOLEAN,
   token_error_code INTEGER,
   token_access_count INTEGER,
@@ -478,6 +628,7 @@ DECLARE
   cache_sql TEXT;
   cache_rec RECORD;
   rate_rec RECORD;
+  file_rec RECORD;
   token_sql TEXT;
   token_rec RECORD;
   token_allowed_local BOOLEAN := TRUE;
@@ -492,38 +643,73 @@ DECLARE
   altcha_access_local INTEGER := 0;
   altcha_expires_local INTEGER := NULL;
 BEGIN
-  cache_sql := format(
-    'SELECT "SIZE", "TIMESTAMP"
-     FROM %1$I
-     WHERE "PATH_HASH" = $1',
-    p_cache_table_name
-  );
+  IF p_cache_ttl IS NOT NULL AND p_cache_ttl > 0 THEN
+    cache_sql := format(
+      'SELECT "SIZE", "TIMESTAMP"
+       FROM %1$I
+       WHERE "PATH_HASH" = $1',
+      p_cache_table_name
+    );
 
-  EXECUTE cache_sql INTO cache_rec USING p_path_hash;
+    EXECUTE cache_sql INTO cache_rec USING p_path_hash;
 
-  IF cache_rec."TIMESTAMP" IS NOT NULL AND (p_now - cache_rec."TIMESTAMP") <= p_cache_ttl THEN
-    cache_size := cache_rec."SIZE";
-    cache_timestamp := cache_rec."TIMESTAMP";
+    IF cache_rec."TIMESTAMP" IS NOT NULL AND (p_now - cache_rec."TIMESTAMP") <= p_cache_ttl THEN
+      cache_size := cache_rec."SIZE";
+      cache_timestamp := cache_rec."TIMESTAMP";
+    ELSE
+      cache_size := NULL;
+      cache_timestamp := NULL;
+    END IF;
   ELSE
     cache_size := NULL;
     cache_timestamp := NULL;
   END IF;
 
-  SELECT *
-  INTO rate_rec
-  FROM landing_upsert_rate_limit(
-    p_ip_hash,
-    p_ip_range,
-    p_now,
-    p_window_seconds,
-    p_limit,
-    p_block_seconds,
-    p_ratelimit_table_name
-  );
+  IF p_limit IS NOT NULL AND p_limit > 0 AND p_window_seconds IS NOT NULL AND p_window_seconds > 0 THEN
+    SELECT *
+    INTO rate_rec
+    FROM landing_upsert_rate_limit(
+      p_ip_hash,
+      p_ip_range,
+      p_now,
+      p_window_seconds,
+      p_limit,
+      p_block_seconds,
+      p_ratelimit_table_name
+    );
 
-  rate_access_count := rate_rec."ACCESS_COUNT";
-  rate_last_window_time := rate_rec."LAST_WINDOW_TIME";
-  rate_block_until := rate_rec."BLOCK_UNTIL";
+    rate_access_count := rate_rec."ACCESS_COUNT";
+    rate_last_window_time := rate_rec."LAST_WINDOW_TIME";
+    rate_block_until := rate_rec."BLOCK_UNTIL";
+  ELSE
+    rate_access_count := NULL;
+    rate_last_window_time := NULL;
+    rate_block_until := NULL;
+  END IF;
+
+  IF p_file_limit IS NOT NULL AND p_file_limit > 0 AND
+     p_file_window_seconds IS NOT NULL AND p_file_window_seconds > 0 THEN
+    SELECT *
+    INTO file_rec
+    FROM landing_upsert_file_rate_limit(
+      p_ip_hash,
+      COALESCE(p_filepath_hash, p_path_hash),
+      p_ip_range,
+      p_now,
+      p_file_window_seconds,
+      p_file_limit,
+      p_file_block_seconds,
+      p_file_limit_table_name
+    );
+
+    file_access_count := file_rec."ACCESS_COUNT";
+    file_last_window_time := file_rec."LAST_WINDOW_TIME";
+    file_block_until := file_rec."BLOCK_UNTIL";
+  ELSE
+    file_access_count := NULL;
+    file_last_window_time := NULL;
+    file_block_until := NULL;
+  END IF;
 
   IF p_token_hash IS NOT NULL AND length(p_token_hash) > 0 THEN
     token_sql := format(

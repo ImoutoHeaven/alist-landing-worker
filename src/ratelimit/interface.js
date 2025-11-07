@@ -29,9 +29,12 @@
 /**
  * Rate limit check result
  * @typedef {Object} RateLimitResult
- * @property {boolean} allowed - Whether the request is allowed
+ * @property {boolean} allowed - Whether both rate limit dimensions are allowed
+ * @property {boolean} [ipAllowed] - Whether the IP-level rate limit passed
+ * @property {boolean} [fileAllowed] - Whether the file-level rate limit passed
  * @property {string} [ipSubnet] - IP subnet that was checked (if blocked)
- * @property {number} [retryAfter] - Seconds to wait before retrying (if blocked)
+ * @property {number} [ipRetryAfter] - Seconds to wait before retrying the IP limit (if blocked)
+ * @property {number} [fileRetryAfter] - Seconds to wait before retrying the file limit (if blocked)
  * @property {string} [error] - Error message (if error occurred with fail-closed)
  */
 
@@ -42,11 +45,12 @@
  *
  * @function checkRateLimit
  * @param {string} ip - Client IP address
+ * @param {string} path - Requested file path
  * @param {RateLimitConfig} config - Rate limit configuration
  * @returns {Promise<RateLimitResult>} - Rate limit check result
  *
  * @example
- * const result = await checkRateLimit('192.168.1.100', {
+ * const result = await checkRateLimit('192.168.1.100', '/file.txt', {
  *   windowTimeSeconds: 3600,
  *   limit: 100,
  *   ipv4Suffix: '/24',
@@ -56,14 +60,11 @@
  *   blockTimeSeconds: 600
  * });
  *
- * if (result.allowed) {
- *   // Allow request
- * } else if (result.error) {
- *   // Database error with fail-closed
+ * if (result.error) {
  *   return respondError(500, result.error);
- * } else {
- *   // Rate limit exceeded
- *   return respondRateLimitExceeded(429, result.ipSubnet, result.retryAfter);
+ * }
+ * if (!result.ipAllowed || !result.fileAllowed) {
+ *   // Handle retry based on exposed retryAfter hints
  * }
  */
 

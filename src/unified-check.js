@@ -10,8 +10,12 @@ export const unifiedCheck = async (path, clientIP, altchaTableName, config) => {
   const windowSeconds = Number(config.windowTimeSeconds) || 0;
   const limit = Number(config.limit) || 0;
   const blockSeconds = Number(config.blockTimeSeconds) || 0;
+  const fileLimit = Number(config.fileLimit) || 0;
+  const fileWindowSeconds = Number(config.fileWindowTimeSeconds) || 0;
+  const fileBlockSeconds = Number(config.fileBlockTimeSeconds) || 0;
   const cacheTableName = config.cacheTableName || 'FILESIZE_CACHE_TABLE';
   const rateLimitTableName = config.rateLimitTableName || 'IP_LIMIT_TABLE';
+  const fileRateLimitTableName = config.fileRateLimitTableName || 'IP_FILE_LIMIT_TABLE';
   const ipv4Suffix = config.ipv4Suffix || '/32';
   const ipv6Suffix = config.ipv6Suffix || '/60';
   const tokenBindingEnabled = config.turnstileTokenBinding !== false;
@@ -26,9 +30,8 @@ export const unifiedCheck = async (path, clientIP, altchaTableName, config) => {
   if (cacheTTL <= 0) {
     throw new Error('[Unified Check] sizeTTL must be greater than zero');
   }
-  if (!windowSeconds || !limit) {
-    throw new Error('[Unified Check] windowTimeSeconds and limit are required');
-  }
+  const ipCheckEnabled = windowSeconds > 0 && limit > 0;
+  const fileCheckEnabled = fileWindowSeconds > 0 && fileLimit > 0;
 
   console.log('[Unified Check] Starting unified check for path:', path);
 
@@ -60,10 +63,14 @@ export const unifiedCheck = async (path, clientIP, altchaTableName, config) => {
     p_ip_hash: ipHash,
     p_ip_range: ipSubnet,
     p_now: now,
-    p_window_seconds: windowSeconds,
-    p_limit: limit,
-    p_block_seconds: blockSeconds,
+    p_window_seconds: ipCheckEnabled ? windowSeconds : 0,
+    p_limit: ipCheckEnabled ? limit : 0,
+    p_block_seconds: ipCheckEnabled ? blockSeconds : 0,
     p_ratelimit_table_name: rateLimitTableName,
+    p_file_limit: fileCheckEnabled ? fileLimit : 0,
+    p_file_window_seconds: fileCheckEnabled ? fileWindowSeconds : 0,
+    p_file_block_seconds: fileBlockSeconds,
+    p_file_limit_table_name: fileRateLimitTableName,
     p_token_hash: tokenHash,
     p_token_ip: tokenIP,
     p_token_ttl: tokenTTLSeconds,
@@ -115,6 +122,9 @@ export const unifiedCheck = async (path, clientIP, altchaTableName, config) => {
   const accessCount = Number.parseInt(row.rate_access_count, 10);
   const lastWindowTime = Number.parseInt(row.rate_last_window_time, 10);
   const blockUntil = row.rate_block_until !== null ? Number.parseInt(row.rate_block_until, 10) : null;
+  const fileAccessCount = row.file_access_count !== null ? Number.parseInt(row.file_access_count, 10) : null;
+  const fileLastWindowTime = row.file_last_window_time !== null ? Number.parseInt(row.file_last_window_time, 10) : null;
+  const fileBlockUntil = row.file_block_until !== null ? Number.parseInt(row.file_block_until, 10) : null;
   const tokenErrorRaw = row.token_error_code === null || typeof row.token_error_code === 'undefined'
     ? 0
     : Number.parseInt(row.token_error_code, 10);
@@ -131,33 +141,62 @@ export const unifiedCheck = async (path, clientIP, altchaTableName, config) => {
     : Number.parseInt(row.altcha_access_count, 10);
   const altchaAllowedRaw = row.altcha_allowed;
 
-  let allowed = true;
-  let retryAfter = 0;
   const safeAccess = Number.isFinite(accessCount) ? accessCount : 0;
   const safeLastWindow = Number.isFinite(lastWindowTime) ? lastWindowTime : now;
+  const safeFileAccess = Number.isFinite(fileAccessCount) ? fileAccessCount : 0;
+  const safeFileLastWindow = Number.isFinite(fileLastWindowTime) ? fileLastWindowTime : now;
 
-  if (Number.isFinite(blockUntil) && blockUntil > now) {
-    allowed = false;
-    retryAfter = Math.max(1, blockUntil - now);
-    console.log('[Unified Check] Rate limit BLOCKED until:', new Date(blockUntil * 1000).toISOString());
-  } else if (safeAccess >= limit) {
-    const elapsed = now - safeLastWindow;
-    retryAfter = Math.max(1, windowSeconds - elapsed);
-    allowed = false;
-    console.log('[Unified Check] Rate limit EXCEEDED:', safeAccess, '>=', limit);
-  } else {
-    console.log('[Unified Check] Rate limit OK:', safeAccess, '/', limit);
+  let ipAllowed = true;
+  let ipRetryAfter = null;
+  if (ipCheckEnabled && limit > 0) {
+    if (Number.isFinite(blockUntil) && blockUntil > now) {
+      ipAllowed = false;
+      ipRetryAfter = Math.max(1, blockUntil - now);
+      console.log('[Unified Check] IP rate limit BLOCKED until:', new Date(blockUntil * 1000).toISOString());
+    } else if (safeAccess >= limit) {
+      const elapsed = now - safeLastWindow;
+      ipAllowed = false;
+      ipRetryAfter = Math.max(1, windowSeconds - elapsed);
+      console.log('[Unified Check] IP rate limit EXCEEDED:', safeAccess, '>=', limit);
+    } else {
+      console.log('[Unified Check] IP rate limit OK:', safeAccess, '/', limit);
+    }
   }
+
+  let fileAllowed = true;
+  let fileRetryAfter = null;
+  if (fileCheckEnabled && fileLimit > 0) {
+    if (Number.isFinite(fileBlockUntil) && fileBlockUntil > now) {
+      fileAllowed = false;
+      fileRetryAfter = Math.max(1, fileBlockUntil - now);
+      console.log('[Unified Check] File rate limit BLOCKED until:', new Date(fileBlockUntil * 1000).toISOString());
+    } else if (safeFileAccess >= fileLimit) {
+      const elapsed = now - safeFileLastWindow;
+      fileAllowed = false;
+      fileRetryAfter = Math.max(1, fileWindowSeconds - elapsed);
+      console.log('[Unified Check] File rate limit EXCEEDED:', safeFileAccess, '>=', fileLimit);
+    } else {
+      console.log('[Unified Check] File rate limit OK:', safeFileAccess, '/', fileLimit);
+    }
+  }
+
+  const overallAllowed = ipAllowed && fileAllowed;
 
   return {
     cache: cacheResult,
     rateLimit: {
-      allowed,
-      accessCount: safeAccess,
+      allowed: overallAllowed,
+      ipAllowed,
+      ipRetryAfter,
       ipSubnet,
-      retryAfter,
-      lastWindowTime: safeLastWindow,
-      blockUntil,
+      ipAccessCount: safeAccess,
+      ipLastWindowTime: safeLastWindow,
+      ipBlockUntil: blockUntil,
+      fileAllowed,
+      fileRetryAfter,
+      fileAccessCount: safeFileAccess,
+      fileLastWindowTime: safeFileLastWindow,
+      fileBlockUntil,
     },
     token: {
       allowed: tokenBindingEnabled ? tokenAllowedRaw !== false : true,
