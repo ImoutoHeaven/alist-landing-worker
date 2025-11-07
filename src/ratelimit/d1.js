@@ -137,7 +137,7 @@ export const checkRateLimit = async (ip, path, config) => {
             WHEN ? - ${tableName}.LAST_WINDOW_TIME >= ? THEN NULL
             WHEN ${tableName}.BLOCK_UNTIL IS NOT NULL AND ${tableName}.BLOCK_UNTIL <= ? THEN NULL
             WHEN ${tableName}.BLOCK_UNTIL IS NOT NULL AND ${tableName}.BLOCK_UNTIL > ? THEN ${tableName}.BLOCK_UNTIL
-            WHEN ${tableName}.ACCESS_COUNT >= ? AND ? > 0
+            WHEN (${tableName}.BLOCK_UNTIL IS NULL OR ${tableName}.BLOCK_UNTIL <= ?) AND ${tableName}.ACCESS_COUNT >= ? AND ? > 0
               THEN ? + ?
             ELSE ${tableName}.BLOCK_UNTIL
           END
@@ -150,7 +150,7 @@ export const checkRateLimit = async (ip, path, config) => {
         ipHash, ipSubnet, now,
         now, ipWindowSeconds, now, ipLimitValue,
         now, ipWindowSeconds, now, now, now,
-        now, ipWindowSeconds, now, now, ipLimitValue, blockTimeSeconds, now, blockTimeSeconds
+        now, ipWindowSeconds, now, now, now, ipLimitValue, blockTimeSeconds, now, blockTimeSeconds
       ).first();
 
       if (!result) {
@@ -195,7 +195,7 @@ export const checkRateLimit = async (ip, path, config) => {
             WHEN ? - ${fileTableName}.LAST_WINDOW_TIME >= ? THEN NULL
             WHEN ${fileTableName}.BLOCK_UNTIL IS NOT NULL AND ${fileTableName}.BLOCK_UNTIL <= ? THEN NULL
             WHEN ${fileTableName}.BLOCK_UNTIL IS NOT NULL AND ${fileTableName}.BLOCK_UNTIL > ? THEN ${fileTableName}.BLOCK_UNTIL
-            WHEN ${fileTableName}.ACCESS_COUNT >= ? AND ? > 0
+            WHEN (${fileTableName}.BLOCK_UNTIL IS NULL OR ${fileTableName}.BLOCK_UNTIL <= ?) AND ${fileTableName}.ACCESS_COUNT >= ? AND ? > 0
               THEN ? + ?
             ELSE ${fileTableName}.BLOCK_UNTIL
           END
@@ -207,7 +207,7 @@ export const checkRateLimit = async (ip, path, config) => {
         ipHash, pathHash, ipSubnet, now,
         now, fileWindowSeconds, now, fileLimitValue,
         now, fileWindowSeconds, now, now, now,
-        now, fileWindowSeconds, now, now, fileLimitValue, fileBlockSeconds, now, fileBlockSeconds
+        now, fileWindowSeconds, now, now, now, fileLimitValue, fileBlockSeconds, now, fileBlockSeconds
       ).first();
 
       if (!fileResult) {

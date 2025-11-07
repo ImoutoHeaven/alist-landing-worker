@@ -185,7 +185,8 @@ export const unifiedCheckD1 = async (path, clientIP, altchaTableName, config) =>
             BLOCK_UNTIL = CASE
               WHEN ? - ${rateLimitTableName}.LAST_WINDOW_TIME >= ? THEN NULL
               WHEN ${rateLimitTableName}.BLOCK_UNTIL IS NOT NULL AND ${rateLimitTableName}.BLOCK_UNTIL <= ? THEN NULL
-              WHEN ${rateLimitTableName}.ACCESS_COUNT >= ? AND ? > 0 THEN ? + ?
+              WHEN ${rateLimitTableName}.BLOCK_UNTIL IS NOT NULL AND ${rateLimitTableName}.BLOCK_UNTIL > ? THEN ${rateLimitTableName}.BLOCK_UNTIL
+              WHEN (${rateLimitTableName}.BLOCK_UNTIL IS NULL OR ${rateLimitTableName}.BLOCK_UNTIL <= ?) AND ${rateLimitTableName}.ACCESS_COUNT >= ? AND ? > 0 THEN ? + ?
               ELSE ${rateLimitTableName}.BLOCK_UNTIL
             END
           RETURNING ACCESS_COUNT, LAST_WINDOW_TIME, BLOCK_UNTIL
@@ -193,7 +194,7 @@ export const unifiedCheckD1 = async (path, clientIP, altchaTableName, config) =>
           ipHash, ipSubnet, now,
           now, windowSeconds, now, limit,
           now, windowSeconds, now, now, now,
-          now, windowSeconds, now, limit, blockSeconds, now, blockSeconds
+          now, windowSeconds, now, now, now, limit, blockSeconds, now, blockSeconds
         )
       : db.prepare('SELECT NULL AS ACCESS_COUNT, NULL AS LAST_WINDOW_TIME, NULL AS BLOCK_UNTIL'),
     fileCheckEnabled
@@ -215,7 +216,8 @@ export const unifiedCheckD1 = async (path, clientIP, altchaTableName, config) =>
             BLOCK_UNTIL = CASE
               WHEN ? - ${fileRateLimitTableName}.LAST_WINDOW_TIME >= ? THEN NULL
               WHEN ${fileRateLimitTableName}.BLOCK_UNTIL IS NOT NULL AND ${fileRateLimitTableName}.BLOCK_UNTIL <= ? THEN NULL
-              WHEN ${fileRateLimitTableName}.ACCESS_COUNT >= ? AND ? > 0 THEN ? + ?
+              WHEN ${fileRateLimitTableName}.BLOCK_UNTIL IS NOT NULL AND ${fileRateLimitTableName}.BLOCK_UNTIL > ? THEN ${fileRateLimitTableName}.BLOCK_UNTIL
+              WHEN (${fileRateLimitTableName}.BLOCK_UNTIL IS NULL OR ${fileRateLimitTableName}.BLOCK_UNTIL <= ?) AND ${fileRateLimitTableName}.ACCESS_COUNT >= ? AND ? > 0 THEN ? + ?
               ELSE ${fileRateLimitTableName}.BLOCK_UNTIL
             END
           RETURNING ACCESS_COUNT, LAST_WINDOW_TIME, BLOCK_UNTIL
@@ -223,7 +225,7 @@ export const unifiedCheckD1 = async (path, clientIP, altchaTableName, config) =>
           ipHash, filepathHash, ipSubnet, now,
           now, fileWindowSeconds, now, fileLimit,
           now, fileWindowSeconds, now, now, now,
-          now, fileWindowSeconds, now, fileLimit, fileBlockSeconds, now, fileBlockSeconds
+          now, fileWindowSeconds, now, now, now, fileLimit, fileBlockSeconds, now, fileBlockSeconds
         )
       : db.prepare('SELECT NULL AS ACCESS_COUNT, NULL AS LAST_WINDOW_TIME, NULL AS BLOCK_UNTIL'),
     db.prepare(`SELECT CLIENT_IP, FILEPATH_HASH, ACCESS_COUNT, EXPIRES_AT FROM ${tokenTableName} WHERE TOKEN_HASH = ?`).bind(tokenHash),
