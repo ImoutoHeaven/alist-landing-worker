@@ -1,6 +1,6 @@
 import { sha256Hash, calculateIPSubnet } from './utils.js';
 
-const ensureTables = async (db, { cacheTableName, rateLimitTableName, tokenTableName, altchaTableName, sessionTableName }) => {
+const ensureTables = async (db, { cacheTableName, rateLimitTableName, fileRateLimitTableName, tokenTableName, altchaTableName, sessionTableName }) => {
   const statements = [
     db.prepare(`
       CREATE TABLE IF NOT EXISTS ${cacheTableName} (
@@ -20,6 +20,28 @@ const ensureTables = async (db, { cacheTableName, rateLimitTableName, tokenTable
         BLOCK_UNTIL INTEGER
       )
     `),
+  ];
+
+  // Only create file rate limit table if fileRateLimitTableName is provided
+  if (fileRateLimitTableName) {
+    statements.push(
+      db.prepare(`
+        CREATE TABLE IF NOT EXISTS ${fileRateLimitTableName} (
+          IP_HASH TEXT NOT NULL,
+          PATH_HASH TEXT NOT NULL,
+          IP_RANGE TEXT NOT NULL,
+          ACCESS_COUNT INTEGER NOT NULL,
+          LAST_WINDOW_TIME INTEGER NOT NULL,
+          BLOCK_UNTIL INTEGER,
+          PRIMARY KEY (IP_HASH, PATH_HASH)
+        )
+      `),
+      db.prepare(`CREATE INDEX IF NOT EXISTS idx_ip_file_limit_last_window ON ${fileRateLimitTableName}(LAST_WINDOW_TIME)`),
+      db.prepare(`CREATE INDEX IF NOT EXISTS idx_ip_file_limit_block_until ON ${fileRateLimitTableName}(BLOCK_UNTIL)`)
+    );
+  }
+
+  statements.push(
     db.prepare(`
       CREATE TABLE IF NOT EXISTS ${tokenTableName} (
         TOKEN_HASH TEXT PRIMARY KEY,
@@ -43,7 +65,7 @@ const ensureTables = async (db, { cacheTableName, rateLimitTableName, tokenTable
       )
     `),
     db.prepare(`CREATE INDEX IF NOT EXISTS idx_altcha_token_expires ON ${altchaTableName}(EXPIRES_AT)`),
-  ];
+  );
 
   if (sessionTableName) {
     statements.push(
@@ -114,6 +136,7 @@ export const unifiedCheckD1 = async (path, clientIP, altchaTableName, config) =>
     await ensureTables(db, {
       cacheTableName,
       rateLimitTableName,
+      fileRateLimitTableName,
       tokenTableName,
       altchaTableName: resolvedAltchaTableName,
       sessionTableName,
