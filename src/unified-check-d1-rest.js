@@ -236,6 +236,7 @@ export const unifiedCheckD1Rest = async (path, clientIP, altchaTableName, config
               BLOCK_UNTIL = CASE
                 WHEN ? - ${rateLimitTableName}.LAST_WINDOW_TIME >= ? THEN NULL
                 WHEN ${rateLimitTableName}.BLOCK_UNTIL IS NOT NULL AND ${rateLimitTableName}.BLOCK_UNTIL <= ? THEN NULL
+                WHEN ${rateLimitTableName}.BLOCK_UNTIL IS NOT NULL AND ${rateLimitTableName}.BLOCK_UNTIL > ? THEN ${rateLimitTableName}.BLOCK_UNTIL
                 WHEN ${rateLimitTableName}.ACCESS_COUNT >= ? AND ? > 0 THEN ? + ?
                 ELSE ${rateLimitTableName}.BLOCK_UNTIL
               END
@@ -245,7 +246,7 @@ export const unifiedCheckD1Rest = async (path, clientIP, altchaTableName, config
             ipHash, ipSubnet, now,
             now, windowSeconds, now, limit,
             now, windowSeconds, now, now, now,
-            now, windowSeconds, now, limit, blockSeconds, now, blockSeconds,
+            now, windowSeconds, now, now, limit, blockSeconds, now, blockSeconds,
           ],
         }
       : {
@@ -272,6 +273,7 @@ export const unifiedCheckD1Rest = async (path, clientIP, altchaTableName, config
               BLOCK_UNTIL = CASE
                 WHEN ? - ${fileRateLimitTableName}.LAST_WINDOW_TIME >= ? THEN NULL
                 WHEN ${fileRateLimitTableName}.BLOCK_UNTIL IS NOT NULL AND ${fileRateLimitTableName}.BLOCK_UNTIL <= ? THEN NULL
+                WHEN ${fileRateLimitTableName}.BLOCK_UNTIL IS NOT NULL AND ${fileRateLimitTableName}.BLOCK_UNTIL > ? THEN ${fileRateLimitTableName}.BLOCK_UNTIL
                 WHEN ${fileRateLimitTableName}.ACCESS_COUNT >= ? AND ? > 0 THEN ? + ?
                 ELSE ${fileRateLimitTableName}.BLOCK_UNTIL
               END
@@ -281,7 +283,7 @@ export const unifiedCheckD1Rest = async (path, clientIP, altchaTableName, config
             ipHash, filepathHash, ipSubnet, now,
             now, fileWindowSeconds, now, fileLimit,
             now, fileWindowSeconds, now, now, now,
-            now, fileWindowSeconds, now, fileLimit, fileBlockSeconds, now, fileBlockSeconds,
+            now, fileWindowSeconds, now, now, fileLimit, fileBlockSeconds, now, fileBlockSeconds,
           ],
         }
       : {
