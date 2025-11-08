@@ -9,6 +9,11 @@ import {
   calculateIPSubnet,
   applyVerifyHeaders,
 } from './utils.js';
+import {
+  buildOriginSnapshot,
+  encryptOriginSnapshot,
+  getClientIp,
+} from './origin-binding.js';
 import { createChallenge, verifySolution } from 'altcha-lib';
 import { renderLandingPage } from './frontend.js';
 import { createRateLimiter } from './ratelimit/factory.js';
@@ -974,12 +979,7 @@ async function checkCfRatelimit(env, clientIP, ipv4Suffix, ipv6Suffix, bindingNa
   return { allowed: success, ipSubnet };
 }
 
-const extractClientIP = (request) => {
-  const raw = request.headers.get('CF-Connecting-IP');
-  if (!raw) return '';
-  const [first] = raw.split(',');
-  return first ? first.trim() : '';
-};
+const extractClientIP = (request) => getClientIp(request) || '';
 
 const ensureIPv4 = (request, ipv4Only) => {
   if (!ipv4Only) return null;
@@ -1177,8 +1177,11 @@ const fetchFilesizeFromCache = async (config, pathHash) => {
   return 0;
 };
 
-const createAdditionalParams = async (config, decodedPath, clientIP, signExpire, idleTimeoutSeconds, options = {}) => {
+const createAdditionalParams = async (config, request, decodedPath, clientIP, signExpire, idleTimeoutSeconds, options = {}) => {
   if (!config.appendAdditional) return null;
+  if (!request) {
+    throw new Error('request missing for additional info');
+  }
   let { sizeBytes, expireTime, fileInfo } = options;
   const safeIdleTimeoutSeconds =
     Number.isFinite(idleTimeoutSeconds) && idleTimeoutSeconds >= 0
@@ -1225,11 +1228,22 @@ const createAdditionalParams = async (config, decodedPath, clientIP, signExpire,
     expireTime = Math.min(expireTime, maxAllowedExpire);
   }
 
+  const clientIpForOrigin = getClientIp(request);
+  if (!clientIpForOrigin) {
+    throw new Error('client ip missing for origin binding');
+  }
+  const snapshot = buildOriginSnapshot(request.cf, clientIpForOrigin);
+  if (!snapshot) {
+    throw new Error('origin snapshot unavailable');
+  }
+  const encrypt = await encryptOriginSnapshot(snapshot, config.token);
+
   const payload = JSON.stringify({
     pathHash,
     filesize: sizeBytes,
     expireTime,
     idle_timeout: safeIdleTimeoutSeconds,
+    encrypt,
   });
   const rawAdditionalInfo = encodeTextToBase64(payload);
   const additionalInfo = rawAdditionalInfo.replace(/=+$/, '');
@@ -1239,6 +1253,7 @@ const createAdditionalParams = async (config, decodedPath, clientIP, signExpire,
 
 const createDownloadURL = async (
   config,
+  request,
   { encodedPath, decodedPath, sign, clientIP, sizeBytes, expireTime, fileInfo },
   ctx = null
 ) => {
@@ -1275,18 +1290,13 @@ const createDownloadURL = async (
   const workerSignData = JSON.stringify({ path: decodedPath, worker_addr: workerBaseURL });
   const workerSign = await hmacSha256Sign(config.signSecret, workerSignData, expire);
 
-  const ipRange = calculateIPSubnet(clientIP, config.ipv4Suffix, config.ipv6Suffix) || clientIP || '';
-  const ipSignData = JSON.stringify({ path: decodedPath, ip: ipRange });
-  const ipSign = await hmacSha256Sign(config.signSecret, ipSignData, expire);
-
   const downloadURLObj = new URL(encodedPath, workerBaseURL);
   downloadURLObj.searchParams.set('sign', sign);
   downloadURLObj.searchParams.set('hashSign', hashSign);
   downloadURLObj.searchParams.set('workerSign', workerSign);
-  downloadURLObj.searchParams.set('ipSign', ipSign);
 
   if (config.appendAdditional) {
-    const additionalParams = await createAdditionalParams(config, decodedPath, clientIP, expire, idleTimeoutSeconds, {
+    const additionalParams = await createAdditionalParams(config, request, decodedPath, clientIP, expire, idleTimeoutSeconds, {
       sizeBytes,
       expireTime,
       fileInfo,
@@ -2467,7 +2477,7 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
     config.minBandwidthBytesPerSecond,
     config.maxDurationSeconds
   );
-  let downloadURL = await createDownloadURL(config, {
+  let downloadURL = await createDownloadURL(config, request, {
     encodedPath,
     decodedPath,
     sign,
@@ -3202,7 +3212,7 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
       config.maxDurationSeconds
     );
 
-    const downloadURL = await createDownloadURL(config, {
+    const downloadURL = await createDownloadURL(config, request, {
       encodedPath,
       decodedPath,
       sign,

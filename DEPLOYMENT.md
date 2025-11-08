@@ -159,7 +159,7 @@ Should return JSON:
   "code": 200,
   "data": {
     "download": {
-      "url": "https://download-worker.com/test-file.txt?sign=...&hashSign=...&ipSign=..."
+      "url": "https://download-worker.com/test-file.txt?sign=...&hashSign=...&workerSign=...&additionalInfo=...&additionalInfoSign=..."
     },
     "meta": {
       "path": "/test-file.txt"
@@ -173,17 +173,19 @@ Should return JSON:
 
 ## Integration with Download Workers
 
-This landing worker generates three signatures for the download worker:
+This landing worker生成三段 HMAC 签名，以及一个带有 AES-GCM origin snapshot 的 `additionalInfo`：
 
 1. **sign**: Original signature from URL (already verified)
    - Format: `HMAC-SHA256(path, expire)`
 2. **hashSign**: Base64-encoded path signature
    - Format: `HMAC-SHA256(base64(path), expire)`
-3. **ipSign**: Path and IP binding signature
-   - Format: `HMAC-SHA256(JSON.stringify({path: "/file", ip: "1.2.3.4"}), expire)`
-   - This prevents signature reuse across different files by the same IP
+3. **workerSign**: Path + worker binding signature
+   - Format: `HMAC-SHA256(JSON.stringify({path: "/file", worker_addr: "https://download-worker.com"}), expire)`
+4. **additionalInfo.encrypt**: AES-256-GCM 加密的 origin snapshot（`ip_addr/country/continent/region/city/asn`），与 `pathHash/filesize/expireTime/idle_timeout` 一起由 `additionalInfoSign` 保护
 
-Your download worker (e.g., `simple-alist-cf-proxy`) should verify all three signatures.
+Download Worker 会根据 `CHECK_ORIGIN` 设置解密 `encrypt` 并校验当前请求是否与 Landing Worker 签发时一致。
+
+Your download worker (e.g., `simple-alist-cf-proxy`) should verify所有签名，并在需要时执行 origin 绑定。
 
 ### Fast Redirect Mode
 

@@ -15,7 +15,7 @@ A simplified Cloudflare Workers project for AList plain file downloads with Turn
 This worker acts as a landing page that:
 1. Receives user requests with signed URLs
 2. Optionally verifies Turnstile tokens
-3. Generates `hashSign` and `ipSign` signatures
+3. Generates `hashSign`, `workerSign`, and an AES-GCM encrypted origin snapshot (`additionalInfo.encrypt`)
 4. Redirects users to download workers with proper authentication
 
 ## Environment Variables
@@ -79,15 +79,16 @@ https://landing-worker.example.com/path/to/file.txt?sign=SIGNATURE
 ```
 GET /info?path=/path/to/file.txt&sign=SIGNATURE
 ```
-Returns JSON with download URL including `hashSign` and `ipSign`.
+Returns JSON with download URL including `hashSign`, `workerSign`, `additionalInfo`, and `additionalInfoSign`.
 
 ## Signature Algorithm
 
 1. **sign**: `HMAC-SHA256(path, expire)`
 2. **hashSign**: `HMAC-SHA256(base64(path), expire)`
-3. **ipSign**: `HMAC-SHA256(clientIP, expire)`
+3. **workerSign**: `HMAC-SHA256(JSON.stringify({path, worker_addr}), expire)`
+4. **additionalInfo.encrypt**: AES-256-GCM encrypted JSON snapshot of the client (`ip_addr`, country/continent/region/city, ASN). The payload plus metadata (`pathHash`, `filesize`, `expireTime`, `idle_timeout`) is signed via `additionalInfoSign = HMAC-SHA256(additionalInfo, expire)`.
 
-All signatures use the format: `base64(hmac):expire`
+All signatures use the format `base64(hmac):expire` and share the same `TOKEN`. The download worker derives its own AES key from `TOKEN` to decrypt the snapshot and enforce `CHECK_ORIGIN`.
 
 ## Changes from Original
 
@@ -102,7 +103,7 @@ This is a simplified version of `alist-crypt-worker-client` with the following c
 - ❌ Advanced settings (retry limits, parallelism, connections)
 
 ### Added
-- ✅ Direct signature generation (hashSign, ipSign)
+- ✅ Direct signature generation (sign/hashSign/workerSign) and AES origin snapshot encryption
 - ✅ Download worker load balancing
 - ✅ Strict sign verification with recalculation check
 
