@@ -164,22 +164,31 @@ export const checkRateLimit = async (ip, path, config) => {
         VALUES (?, ?, 1, ?, NULL)
         ON CONFLICT (IP_HASH) DO UPDATE SET
           ACCESS_COUNT = CASE
+            WHEN ${tableName}.BLOCK_UNTIL IS NOT NULL AND ${tableName}.BLOCK_UNTIL > ? THEN ${tableName}.ACCESS_COUNT
             WHEN ? - ${tableName}.LAST_WINDOW_TIME >= ? THEN 1
             WHEN ${tableName}.BLOCK_UNTIL IS NOT NULL AND ${tableName}.BLOCK_UNTIL <= ? THEN 1
             WHEN ${tableName}.ACCESS_COUNT >= ? THEN ${tableName}.ACCESS_COUNT
             ELSE ${tableName}.ACCESS_COUNT + 1
           END,
           LAST_WINDOW_TIME = CASE
+            WHEN ${tableName}.BLOCK_UNTIL IS NOT NULL AND ${tableName}.BLOCK_UNTIL > ? THEN ${tableName}.LAST_WINDOW_TIME
             WHEN ? - ${tableName}.LAST_WINDOW_TIME >= ? THEN ?
             WHEN ${tableName}.BLOCK_UNTIL IS NOT NULL AND ${tableName}.BLOCK_UNTIL <= ? THEN ?
             ELSE ${tableName}.LAST_WINDOW_TIME
           END,
           BLOCK_UNTIL = CASE
-            WHEN ? - ${tableName}.LAST_WINDOW_TIME >= ? THEN NULL
-            WHEN ${tableName}.BLOCK_UNTIL IS NOT NULL AND ${tableName}.BLOCK_UNTIL <= ? THEN NULL
             WHEN ${tableName}.BLOCK_UNTIL IS NOT NULL AND ${tableName}.BLOCK_UNTIL > ? THEN ${tableName}.BLOCK_UNTIL
-            WHEN (${tableName}.BLOCK_UNTIL IS NULL OR ${tableName}.BLOCK_UNTIL <= ?) AND ${tableName}.ACCESS_COUNT >= ? AND ? > 0
-              THEN ? + ?
+            WHEN ${tableName}.BLOCK_UNTIL IS NOT NULL AND ${tableName}.BLOCK_UNTIL <= ? THEN NULL
+            WHEN (${tableName}.BLOCK_UNTIL IS NULL OR ${tableName}.BLOCK_UNTIL <= ?)
+              AND (
+                CASE
+                  WHEN ? - ${tableName}.LAST_WINDOW_TIME >= ? THEN 1
+                  WHEN ${tableName}.BLOCK_UNTIL IS NOT NULL AND ${tableName}.BLOCK_UNTIL <= ? THEN 1
+                  WHEN ${tableName}.ACCESS_COUNT >= ? THEN ${tableName}.ACCESS_COUNT
+                  ELSE ${tableName}.ACCESS_COUNT + 1
+                END
+              ) >= ?
+              AND ? > 0 THEN ? + ?
             ELSE ${tableName}.BLOCK_UNTIL
           END
         RETURNING ACCESS_COUNT, LAST_WINDOW_TIME, BLOCK_UNTIL
@@ -187,9 +196,10 @@ export const checkRateLimit = async (ip, path, config) => {
 
       const upsertParams = [
         ipHash, ipSubnet, now,
-        now, ipWindowSeconds, now, ipLimitValue,
-        now, ipWindowSeconds, now, now, now,
-        now, ipWindowSeconds, now, now, now, ipLimitValue, blockTimeSeconds, now, blockTimeSeconds,
+        now, now, ipWindowSeconds, now, ipLimitValue,
+        now, now, ipWindowSeconds, now, now, now,
+        now, now, now,
+        now, ipWindowSeconds, now, ipLimitValue, ipLimitValue, blockTimeSeconds, now, blockTimeSeconds,
       ];
 
       const queryResult = await executeQuery(accountId, databaseId, apiToken, upsertSql, upsertParams);
@@ -224,22 +234,31 @@ export const checkRateLimit = async (ip, path, config) => {
         VALUES (?, ?, ?, 1, ?, NULL)
         ON CONFLICT (IP_HASH, PATH_HASH) DO UPDATE SET
           ACCESS_COUNT = CASE
+            WHEN ${fileTableName}.BLOCK_UNTIL IS NOT NULL AND ${fileTableName}.BLOCK_UNTIL > ? THEN ${fileTableName}.ACCESS_COUNT
             WHEN ? - ${fileTableName}.LAST_WINDOW_TIME >= ? THEN 1
             WHEN ${fileTableName}.BLOCK_UNTIL IS NOT NULL AND ${fileTableName}.BLOCK_UNTIL <= ? THEN 1
             WHEN ${fileTableName}.ACCESS_COUNT >= ? THEN ${fileTableName}.ACCESS_COUNT
             ELSE ${fileTableName}.ACCESS_COUNT + 1
           END,
           LAST_WINDOW_TIME = CASE
+            WHEN ${fileTableName}.BLOCK_UNTIL IS NOT NULL AND ${fileTableName}.BLOCK_UNTIL > ? THEN ${fileTableName}.LAST_WINDOW_TIME
             WHEN ? - ${fileTableName}.LAST_WINDOW_TIME >= ? THEN ?
             WHEN ${fileTableName}.BLOCK_UNTIL IS NOT NULL AND ${fileTableName}.BLOCK_UNTIL <= ? THEN ?
             ELSE ${fileTableName}.LAST_WINDOW_TIME
           END,
           BLOCK_UNTIL = CASE
-            WHEN ? - ${fileTableName}.LAST_WINDOW_TIME >= ? THEN NULL
-            WHEN ${fileTableName}.BLOCK_UNTIL IS NOT NULL AND ${fileTableName}.BLOCK_UNTIL <= ? THEN NULL
             WHEN ${fileTableName}.BLOCK_UNTIL IS NOT NULL AND ${fileTableName}.BLOCK_UNTIL > ? THEN ${fileTableName}.BLOCK_UNTIL
-            WHEN (${fileTableName}.BLOCK_UNTIL IS NULL OR ${fileTableName}.BLOCK_UNTIL <= ?) AND ${fileTableName}.ACCESS_COUNT >= ? AND ? > 0
-              THEN ? + ?
+            WHEN ${fileTableName}.BLOCK_UNTIL IS NOT NULL AND ${fileTableName}.BLOCK_UNTIL <= ? THEN NULL
+            WHEN (${fileTableName}.BLOCK_UNTIL IS NULL OR ${fileTableName}.BLOCK_UNTIL <= ?)
+              AND (
+                CASE
+                  WHEN ? - ${fileTableName}.LAST_WINDOW_TIME >= ? THEN 1
+                  WHEN ${fileTableName}.BLOCK_UNTIL IS NOT NULL AND ${fileTableName}.BLOCK_UNTIL <= ? THEN 1
+                  WHEN ${fileTableName}.ACCESS_COUNT >= ? THEN ${fileTableName}.ACCESS_COUNT
+                  ELSE ${fileTableName}.ACCESS_COUNT + 1
+                END
+              ) >= ?
+              AND ? > 0 THEN ? + ?
             ELSE ${fileTableName}.BLOCK_UNTIL
           END
         RETURNING ACCESS_COUNT, LAST_WINDOW_TIME, BLOCK_UNTIL
@@ -247,9 +266,10 @@ export const checkRateLimit = async (ip, path, config) => {
 
       const params = [
         ipHash, pathHash, ipSubnet, now,
-        now, fileWindowSeconds, now, fileLimitValue,
-        now, fileWindowSeconds, now, now, now,
-        now, fileWindowSeconds, now, now, now, fileLimitValue, fileBlockSeconds, now, fileBlockSeconds,
+        now, now, fileWindowSeconds, now, fileLimitValue,
+        now, now, fileWindowSeconds, now, now, now,
+        now, now, now,
+        now, fileWindowSeconds, now, fileLimitValue, fileLimitValue, fileBlockSeconds, now, fileBlockSeconds,
       ];
 
       const fileResult = await executeQuery(accountId, databaseId, apiToken, fileSql, params);

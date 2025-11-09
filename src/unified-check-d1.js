@@ -145,29 +145,40 @@ export const unifiedCheckD1 = async (path, clientIP, altchaTableName, config) =>
           VALUES (?, ?, 1, ?, NULL)
           ON CONFLICT (IP_HASH) DO UPDATE SET
             ACCESS_COUNT = CASE
+              WHEN ${rateLimitTableName}.BLOCK_UNTIL IS NOT NULL AND ${rateLimitTableName}.BLOCK_UNTIL > ? THEN ${rateLimitTableName}.ACCESS_COUNT
               WHEN ? - ${rateLimitTableName}.LAST_WINDOW_TIME >= ? THEN 1
               WHEN ${rateLimitTableName}.BLOCK_UNTIL IS NOT NULL AND ${rateLimitTableName}.BLOCK_UNTIL <= ? THEN 1
               WHEN ${rateLimitTableName}.ACCESS_COUNT >= ? THEN ${rateLimitTableName}.ACCESS_COUNT
               ELSE ${rateLimitTableName}.ACCESS_COUNT + 1
             END,
             LAST_WINDOW_TIME = CASE
+              WHEN ${rateLimitTableName}.BLOCK_UNTIL IS NOT NULL AND ${rateLimitTableName}.BLOCK_UNTIL > ? THEN ${rateLimitTableName}.LAST_WINDOW_TIME
               WHEN ? - ${rateLimitTableName}.LAST_WINDOW_TIME >= ? THEN ?
               WHEN ${rateLimitTableName}.BLOCK_UNTIL IS NOT NULL AND ${rateLimitTableName}.BLOCK_UNTIL <= ? THEN ?
               ELSE ${rateLimitTableName}.LAST_WINDOW_TIME
             END,
             BLOCK_UNTIL = CASE
-              WHEN ? - ${rateLimitTableName}.LAST_WINDOW_TIME >= ? THEN NULL
-              WHEN ${rateLimitTableName}.BLOCK_UNTIL IS NOT NULL AND ${rateLimitTableName}.BLOCK_UNTIL <= ? THEN NULL
               WHEN ${rateLimitTableName}.BLOCK_UNTIL IS NOT NULL AND ${rateLimitTableName}.BLOCK_UNTIL > ? THEN ${rateLimitTableName}.BLOCK_UNTIL
-              WHEN (${rateLimitTableName}.BLOCK_UNTIL IS NULL OR ${rateLimitTableName}.BLOCK_UNTIL <= ?) AND ${rateLimitTableName}.ACCESS_COUNT >= ? AND ? > 0 THEN ? + ?
+              WHEN ${rateLimitTableName}.BLOCK_UNTIL IS NOT NULL AND ${rateLimitTableName}.BLOCK_UNTIL <= ? THEN NULL
+              WHEN (${rateLimitTableName}.BLOCK_UNTIL IS NULL OR ${rateLimitTableName}.BLOCK_UNTIL <= ?)
+                   AND (
+                     CASE
+                       WHEN ? - ${rateLimitTableName}.LAST_WINDOW_TIME >= ? THEN 1
+                       WHEN ${rateLimitTableName}.BLOCK_UNTIL IS NOT NULL AND ${rateLimitTableName}.BLOCK_UNTIL <= ? THEN 1
+                       WHEN ${rateLimitTableName}.ACCESS_COUNT >= ? THEN ${rateLimitTableName}.ACCESS_COUNT
+                       ELSE ${rateLimitTableName}.ACCESS_COUNT + 1
+                     END
+                   ) >= ?
+                   AND ? > 0 THEN ? + ?
               ELSE ${rateLimitTableName}.BLOCK_UNTIL
             END
           RETURNING ACCESS_COUNT, LAST_WINDOW_TIME, BLOCK_UNTIL
         `).bind(
           ipHash, ipSubnet, now,
-          now, windowSeconds, now, limit,
-          now, windowSeconds, now, now, now,
-          now, windowSeconds, now, now, now, limit, blockSeconds, now, blockSeconds
+          now, now, windowSeconds, now, limit,
+          now, now, windowSeconds, now, now, now,
+          now, now, now,
+          now, windowSeconds, now, limit, limit, blockSeconds, now, blockSeconds
         )
       : db.prepare('SELECT NULL AS ACCESS_COUNT, NULL AS LAST_WINDOW_TIME, NULL AS BLOCK_UNTIL'),
     fileCheckEnabled
@@ -176,29 +187,40 @@ export const unifiedCheckD1 = async (path, clientIP, altchaTableName, config) =>
           VALUES (?, ?, ?, 1, ?, NULL)
           ON CONFLICT (IP_HASH, PATH_HASH) DO UPDATE SET
             ACCESS_COUNT = CASE
+              WHEN ${fileRateLimitTableName}.BLOCK_UNTIL IS NOT NULL AND ${fileRateLimitTableName}.BLOCK_UNTIL > ? THEN ${fileRateLimitTableName}.ACCESS_COUNT
               WHEN ? - ${fileRateLimitTableName}.LAST_WINDOW_TIME >= ? THEN 1
               WHEN ${fileRateLimitTableName}.BLOCK_UNTIL IS NOT NULL AND ${fileRateLimitTableName}.BLOCK_UNTIL <= ? THEN 1
               WHEN ${fileRateLimitTableName}.ACCESS_COUNT >= ? THEN ${fileRateLimitTableName}.ACCESS_COUNT
               ELSE ${fileRateLimitTableName}.ACCESS_COUNT + 1
             END,
             LAST_WINDOW_TIME = CASE
+              WHEN ${fileRateLimitTableName}.BLOCK_UNTIL IS NOT NULL AND ${fileRateLimitTableName}.BLOCK_UNTIL > ? THEN ${fileRateLimitTableName}.LAST_WINDOW_TIME
               WHEN ? - ${fileRateLimitTableName}.LAST_WINDOW_TIME >= ? THEN ?
               WHEN ${fileRateLimitTableName}.BLOCK_UNTIL IS NOT NULL AND ${fileRateLimitTableName}.BLOCK_UNTIL <= ? THEN ?
               ELSE ${fileRateLimitTableName}.LAST_WINDOW_TIME
             END,
             BLOCK_UNTIL = CASE
-              WHEN ? - ${fileRateLimitTableName}.LAST_WINDOW_TIME >= ? THEN NULL
-              WHEN ${fileRateLimitTableName}.BLOCK_UNTIL IS NOT NULL AND ${fileRateLimitTableName}.BLOCK_UNTIL <= ? THEN NULL
               WHEN ${fileRateLimitTableName}.BLOCK_UNTIL IS NOT NULL AND ${fileRateLimitTableName}.BLOCK_UNTIL > ? THEN ${fileRateLimitTableName}.BLOCK_UNTIL
-              WHEN (${fileRateLimitTableName}.BLOCK_UNTIL IS NULL OR ${fileRateLimitTableName}.BLOCK_UNTIL <= ?) AND ${fileRateLimitTableName}.ACCESS_COUNT >= ? AND ? > 0 THEN ? + ?
+              WHEN ${fileRateLimitTableName}.BLOCK_UNTIL IS NOT NULL AND ${fileRateLimitTableName}.BLOCK_UNTIL <= ? THEN NULL
+              WHEN (${fileRateLimitTableName}.BLOCK_UNTIL IS NULL OR ${fileRateLimitTableName}.BLOCK_UNTIL <= ?)
+                   AND (
+                     CASE
+                       WHEN ? - ${fileRateLimitTableName}.LAST_WINDOW_TIME >= ? THEN 1
+                       WHEN ${fileRateLimitTableName}.BLOCK_UNTIL IS NOT NULL AND ${fileRateLimitTableName}.BLOCK_UNTIL <= ? THEN 1
+                       WHEN ${fileRateLimitTableName}.ACCESS_COUNT >= ? THEN ${fileRateLimitTableName}.ACCESS_COUNT
+                       ELSE ${fileRateLimitTableName}.ACCESS_COUNT + 1
+                     END
+                   ) >= ?
+                   AND ? > 0 THEN ? + ?
               ELSE ${fileRateLimitTableName}.BLOCK_UNTIL
             END
           RETURNING ACCESS_COUNT, LAST_WINDOW_TIME, BLOCK_UNTIL
         `).bind(
           ipHash, filepathHash, ipSubnet, now,
-          now, fileWindowSeconds, now, fileLimit,
-          now, fileWindowSeconds, now, now, now,
-          now, fileWindowSeconds, now, now, now, fileLimit, fileBlockSeconds, now, fileBlockSeconds
+          now, now, fileWindowSeconds, now, fileLimit,
+          now, now, fileWindowSeconds, now, now, now,
+          now, now, now,
+          now, fileWindowSeconds, now, fileLimit, fileLimit, fileBlockSeconds, now, fileBlockSeconds
         )
       : db.prepare('SELECT NULL AS ACCESS_COUNT, NULL AS LAST_WINDOW_TIME, NULL AS BLOCK_UNTIL'),
     db.prepare(`SELECT CLIENT_IP, FILEPATH_HASH, ACCESS_COUNT, EXPIRES_AT FROM ${tokenTableName} WHERE TOKEN_HASH = ?`).bind(tokenHash),
