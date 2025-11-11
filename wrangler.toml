@@ -105,14 +105,10 @@ persist = true
 #                                          # When enabled: /info requires valid PoW solution
 #                                          # Direct curl to /info → 403 ALTCHA solution required
 #
-# ALTCHA_DIFFICULTY = "250000"             # PoW computational difficulty (maxnumber parameter)
-#                                          # Default: "250000" (~10 seconds on modern browsers)
-#                                          # Calculation time: ~difficulty / 25000 seconds
-#                                          # Examples:
-#                                          #   50000  → ~2 seconds (light protection)
-#                                          #   250000 → ~10 seconds (recommended)
-#                                          #   500000 → ~20 seconds (heavy protection)
-#                                          # Note: Higher = more secure but worse UX
+# ALTCHA_DIFFICULTY = "250000"             # Base ALTCHA difficulty (maxnumber parameter)
+#                                          # Supports "min-max" format (e.g. "100000-400000")
+#                                          # Each challenge randomly picks a base inside the range
+#                                          # Dynamic difficulty multiplies this base by 2^level (0x=base, 1x=base*2, ..., 9x=base*512)
 #
 # ALTCHA_TOKEN_EXPIRE = "3m"               # PoW solution validity duration
 #                                          # Default: "3m" (3 minutes)
@@ -130,7 +126,12 @@ persist = true
 #
 # ALTCHA_TOKEN_BINDING_TABLE = "ALTCHA_TOKEN_LIST"  # ALTCHA Token 表名（Stateful 模式可自定义，默认 ALTCHA_TOKEN_LIST）
 #
-# # Replay Attack Prevention (Stateful Mode - Requires Database):
+# ALTCHA_MAX_MULTIPLIER = "10x"            # Max exponent ("nx") before entering block mode (e.g. "10x" ⇒ block when level reaches 10)
+# ALTCHA_MAX_BLOCK_TIME = "2m"             # Duration of the block window once max multiplier is exceeded
+# ALTCHA_DIFFICULTY_WINDOW = "30s"         # WINDOW for consecutive successes → level +1 (difficulty doubles)
+# ALTCHA_DIFFICULTY_RESET = "2m"           # Inactivity threshold; ≥RESET resets to 0x, WINDOW<Δ<RESET lowers level by 1
+#
+# # Replay Attack Prevention + Dynamic Difficulty (Stateful Mode - Requires Database):
 # # When DB_MODE is set (d1, d1-rest, or custom-pg-rest):
 # # - Worker records ALTCHA token hash in ALTCHA_TOKEN_LIST table after verification
 # # - Token bound to: Client IP + File Path + Expiry Time

@@ -1,6 +1,15 @@
 import { sha256Hash, calculateIPSubnet } from './utils.js';
 
-const ensureTables = async (db, { cacheTableName, rateLimitTableName, fileRateLimitTableName, tokenTableName, altchaTableName }) => {
+const ALTCHA_DIFFICULTY_TABLE = 'ALTCHA_DIFFICULTY_STATE';
+
+const ensureTables = async (db, {
+  cacheTableName,
+  rateLimitTableName,
+  fileRateLimitTableName,
+  tokenTableName,
+  altchaTableName,
+  altchaDifficultyTableName = ALTCHA_DIFFICULTY_TABLE,
+}) => {
   const statements = [
     db.prepare(`
       CREATE TABLE IF NOT EXISTS ${cacheTableName} (
@@ -65,6 +74,16 @@ const ensureTables = async (db, { cacheTableName, rateLimitTableName, fileRateLi
       )
     `),
     db.prepare(`CREATE INDEX IF NOT EXISTS idx_altcha_token_expires ON ${altchaTableName}(EXPIRES_AT)`),
+    db.prepare(`
+      CREATE TABLE IF NOT EXISTS ${altchaDifficultyTableName} (
+        IP_HASH TEXT PRIMARY KEY,
+        IP_RANGE TEXT NOT NULL,
+        LEVEL INTEGER NOT NULL DEFAULT 0,
+        LAST_SUCCESS_AT INTEGER NOT NULL,
+        BLOCK_UNTIL INTEGER
+      )
+    `),
+    db.prepare(`CREATE INDEX IF NOT EXISTS idx_altcha_diff_block_until ON ${altchaDifficultyTableName}(BLOCK_UNTIL)`),
   );
   await db.batch(statements);
 };
@@ -113,6 +132,7 @@ export const unifiedCheckD1 = async (path, clientIP, altchaTableName, config) =>
       fileRateLimitTableName,
       tokenTableName,
       altchaTableName: resolvedAltchaTableName,
+      altchaDifficultyTableName: ALTCHA_DIFFICULTY_TABLE,
     });
   }
 

@@ -434,6 +434,19 @@ CREATE TABLE IF NOT EXISTS "ALTCHA_TOKEN_LIST" (
 CREATE INDEX IF NOT EXISTS idx_altcha_token_expires
   ON "ALTCHA_TOKEN_LIST" ("EXPIRES_AT");
 
+-- ALTCHA Dynamic Difficulty State (per IP range)
+CREATE TABLE IF NOT EXISTS "ALTCHA_DIFFICULTY_STATE" (
+  "IP_HASH" TEXT PRIMARY KEY,
+  "IP_RANGE" TEXT NOT NULL,
+  "LEVEL" INTEGER NOT NULL DEFAULT 0,
+  "LAST_SUCCESS_AT" INTEGER NOT NULL,
+  "BLOCK_UNTIL" INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_altcha_diff_block_until
+  ON "ALTCHA_DIFFICULTY_STATE" ("BLOCK_UNTIL")
+  WHERE "BLOCK_UNTIL" IS NOT NULL;
+
 
 -- ========================================
 -- Stored Procedure: Verify and Consume ALTCHA Token
@@ -564,6 +577,108 @@ BEGIN
   GET DIAGNOSTICS deleted_count = ROW_COUNT;
 
   RETURN deleted_count;
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- ========================================
+-- Stored Procedures: ALTCHA Dynamic Difficulty Helpers
+-- ========================================
+
+CREATE OR REPLACE FUNCTION landing_get_altcha_difficulty(
+  p_ip_hash TEXT,
+  p_table_name TEXT DEFAULT 'ALTCHA_DIFFICULTY_STATE'
+)
+RETURNS TABLE(
+  "LEVEL" INTEGER,
+  "LAST_SUCCESS_AT" INTEGER,
+  "BLOCK_UNTIL" INTEGER
+) AS $$
+DECLARE
+  sql TEXT;
+BEGIN
+  sql := format(
+    'SELECT "LEVEL", "LAST_SUCCESS_AT", "BLOCK_UNTIL"
+     FROM %1$I
+     WHERE "IP_HASH" = $1',
+    p_table_name
+  );
+
+  RETURN QUERY EXECUTE sql USING p_ip_hash;
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+CREATE OR REPLACE FUNCTION landing_update_altcha_difficulty(
+  p_ip_hash TEXT,
+  p_ip_range TEXT,
+  p_now INTEGER,
+  p_window_seconds INTEGER,
+  p_reset_seconds INTEGER,
+  p_max_exponent INTEGER,
+  p_block_seconds INTEGER,
+  p_table_name TEXT DEFAULT 'ALTCHA_DIFFICULTY_STATE'
+)
+RETURNS TABLE(
+  "LEVEL" INTEGER,
+  "LAST_SUCCESS_AT" INTEGER,
+  "BLOCK_UNTIL" INTEGER
+) AS $$
+DECLARE
+  sql TEXT;
+BEGIN
+  sql := format(
+    'INSERT INTO %1$I ("IP_HASH", "IP_RANGE", "LEVEL", "LAST_SUCCESS_AT", "BLOCK_UNTIL")
+     VALUES ($1, $2, 0, $3, NULL)
+     ON CONFLICT ("IP_HASH") DO UPDATE SET
+       "LEVEL" = CASE
+         WHEN $3 - %1$I."LAST_SUCCESS_AT" >= $5 THEN 0
+         WHEN $3 - %1$I."LAST_SUCCESS_AT" <= $4 THEN %1$I."LEVEL" + 1
+         ELSE GREATEST(%1$I."LEVEL" - 1, 0)
+       END,
+       "LAST_SUCCESS_AT" = $3,
+       "BLOCK_UNTIL" = CASE
+         WHEN (
+           CASE
+             WHEN $3 - %1$I."LAST_SUCCESS_AT" >= $5 THEN 0
+             WHEN $3 - %1$I."LAST_SUCCESS_AT" <= $4 THEN %1$I."LEVEL" + 1
+             ELSE GREATEST(%1$I."LEVEL" - 1, 0)
+           END
+         ) >= $6 AND $7 > 0 THEN $3 + $7
+         WHEN %1$I."BLOCK_UNTIL" IS NOT NULL AND %1$I."BLOCK_UNTIL" <= $3 THEN NULL
+         ELSE %1$I."BLOCK_UNTIL"
+       END
+     RETURNING "LEVEL", "LAST_SUCCESS_AT", "BLOCK_UNTIL"',
+    p_table_name
+  );
+
+  RETURN QUERY EXECUTE sql
+    USING p_ip_hash, p_ip_range, p_now, p_window_seconds, p_reset_seconds, p_max_exponent, p_block_seconds;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION landing_cleanup_altcha_difficulty_state(
+  p_before INTEGER,
+  p_table_name TEXT DEFAULT 'ALTCHA_DIFFICULTY_STATE'
+)
+RETURNS INTEGER AS $$
+DECLARE
+  sql TEXT;
+  deleted_count INTEGER := 0;
+BEGIN
+  IF p_before IS NULL THEN
+    RETURN 0;
+  END IF;
+
+  sql := format(
+    'DELETE FROM %1$I
+     WHERE "LAST_SUCCESS_AT" < $1',
+    p_table_name
+  );
+
+  EXECUTE sql USING p_before;
+  GET DIAGNOSTICS deleted_count = ROW_COUNT;
+
+  RETURN COALESCE(deleted_count, 0);
 END;
 $$ LANGUAGE plpgsql;
 

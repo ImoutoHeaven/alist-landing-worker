@@ -46,6 +46,17 @@ const VALID_ACTIONS = [
 ];
 const VALID_ACTIONS_SET = new Set(VALID_ACTIONS);
 
+const ALTCHA_DEFAULT_BASE_DIFFICULTY = 250000;
+const ALTCHA_DIFFICULTY_TABLE = 'ALTCHA_DIFFICULTY_STATE';
+const ALTCHA_DIFFICULTY_CLEANUP_MAX_AGE = 86400; // 1d default cleanup horizon
+const ALTCHA_MAX_EXPONENT_FALLBACK = 10;
+const getNormalizedDbMode = (config) => {
+  if (!config || typeof config.dbMode !== 'string') {
+    return '';
+  }
+  return config.dbMode.trim().toLowerCase();
+};
+
 let ipRateLimitDisabledLogged = false;
 
 /**
@@ -91,6 +102,175 @@ function ensureValidActionValue(action) {
   return action;
 }
 
+const normalizeDifficultyRangeValue = (value, fallback) => {
+  if (!Number.isFinite(value) || value <= 0) {
+    return fallback;
+  }
+  return Math.floor(value);
+};
+
+const parseAltchaDifficultyRange = (rawValue) => {
+  const fallback = {
+    baseMin: ALTCHA_DEFAULT_BASE_DIFFICULTY,
+    baseMax: ALTCHA_DEFAULT_BASE_DIFFICULTY,
+  };
+  if (typeof rawValue !== 'string') {
+    return fallback;
+  }
+  const trimmed = rawValue.trim();
+  if (!trimmed) {
+    return fallback;
+  }
+  if (trimmed.includes('-')) {
+    const [minRaw, maxRaw] = trimmed.split('-', 2);
+    const minValue = normalizeDifficultyRangeValue(Number(minRaw?.trim()), fallback.baseMin);
+    const maxValue = normalizeDifficultyRangeValue(Number(maxRaw?.trim()), minValue);
+    if (minValue > 0 && maxValue >= minValue) {
+      return { baseMin: minValue, baseMax: maxValue };
+    }
+    return fallback;
+  }
+  const singleValue = normalizeDifficultyRangeValue(Number(trimmed), fallback.baseMin);
+  if (singleValue > 0) {
+    return { baseMin: singleValue, baseMax: singleValue };
+  }
+  return fallback;
+};
+
+const parseMaxExponent = (rawValue, fallback = ALTCHA_MAX_EXPONENT_FALLBACK) => {
+  if (!rawValue) {
+    return fallback;
+  }
+  const normalized = String(rawValue).trim();
+  if (!normalized) {
+    return fallback;
+  }
+  const matched = normalized.match(/^(\d+)\s*x$/i);
+  if (matched) {
+    const parsed = Number.parseInt(matched[1], 10);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+  const numeric = Number(normalized.replace(/x$/i, ''));
+  if (Number.isFinite(numeric) && numeric > 0) {
+    return Math.floor(numeric);
+  }
+  return fallback;
+};
+
+const parseDurationToSeconds = (rawValue, fallbackSeconds) => {
+  if (typeof rawValue === 'number' && Number.isFinite(rawValue) && rawValue > 0) {
+    return Math.floor(rawValue);
+  }
+  if (typeof rawValue === 'string') {
+    const trimmed = rawValue.trim();
+    if (!trimmed) {
+      return fallbackSeconds;
+    }
+    const parsedWindow = parseWindowTime(trimmed);
+    if (Number.isFinite(parsedWindow) && parsedWindow > 0) {
+      return parsedWindow;
+    }
+    const numeric = Number(trimmed);
+    if (Number.isFinite(numeric) && numeric > 0) {
+      return Math.floor(numeric);
+    }
+  }
+  return fallbackSeconds;
+};
+
+const pickAltchaBaseDifficulty = (range) => {
+  const min = normalizeDifficultyRangeValue(range?.baseMin, ALTCHA_DEFAULT_BASE_DIFFICULTY);
+  const maxCandidate = normalizeDifficultyRangeValue(range?.baseMax, min);
+  if (min === maxCandidate) {
+    return min;
+  }
+  const span = maxCandidate - min + 1;
+  const offset = Math.floor(Math.random() * span);
+  return min + offset;
+};
+
+const computeNextAltchaDifficultyState = (prev, nowSeconds, cfg) => {
+  if (!cfg) {
+    return {
+      level: 0,
+      lastSuccessAt: nowSeconds,
+      blockUntil: null,
+    };
+  }
+  if (!prev) {
+    return {
+      level: 0,
+      lastSuccessAt: nowSeconds,
+      blockUntil: null,
+    };
+  }
+
+  const prevLevel = Number.isFinite(prev.level) ? prev.level : 0;
+  const prevLastSuccess = Number.isFinite(prev.lastSuccessAt) ? prev.lastSuccessAt : nowSeconds;
+  const prevBlockUntil = Number.isFinite(prev.blockUntil) ? prev.blockUntil : null;
+  const delta = nowSeconds - prevLastSuccess;
+  let level = prevLevel;
+
+  if (delta >= cfg.resetSeconds) {
+    level = 0;
+  } else if (delta <= cfg.windowSeconds) {
+    level = prevLevel + 1;
+  } else {
+    level = Math.max(prevLevel - 1, 0);
+  }
+
+  let blockUntil = prevBlockUntil;
+  if (level >= cfg.maxExponent && cfg.blockSeconds > 0) {
+    blockUntil = nowSeconds + cfg.blockSeconds;
+  } else if (blockUntil !== null && blockUntil <= nowSeconds) {
+    blockUntil = null;
+  }
+
+  return {
+    level,
+    lastSuccessAt: nowSeconds,
+    blockUntil,
+  };
+};
+
+const getAltchaDifficultyForClient = (state, nowSeconds, cfg) => {
+  if (!cfg) {
+    const fallback = pickAltchaBaseDifficulty(null);
+    return {
+      difficulty: fallback,
+      effectiveExponent: 0,
+      blocked: false,
+      retryAfterSeconds: 0,
+    };
+  }
+  if (state?.blockUntil && state.blockUntil > nowSeconds) {
+    return {
+      difficulty: 0,
+      effectiveExponent: Number.isFinite(state.level) ? state.level : 0,
+      blocked: true,
+      retryAfterSeconds: Math.max(1, state.blockUntil - nowSeconds),
+    };
+  }
+
+  let exponent = Number.isFinite(state?.level) ? state.level : 0;
+  if (state?.lastSuccessAt && nowSeconds - state.lastSuccessAt >= cfg.resetSeconds) {
+    exponent = 0;
+  }
+  const maxForChallenge = Math.max(cfg.maxExponent - 1, 0);
+  const effectiveExponent = Math.min(Math.max(exponent, 0), maxForChallenge);
+  const base = pickAltchaBaseDifficulty(cfg);
+  const multiplier = 2 ** effectiveExponent;
+
+  return {
+    difficulty: base * multiplier,
+    effectiveExponent,
+    blocked: false,
+    retryAfterSeconds: 0,
+  };
+};
+
 /**
  * Base64url 解码工具（URL 安全字符集）
  * @param {string} base64url
@@ -103,6 +283,35 @@ function base64urlDecode(base64url) {
   }
   return atob(base64);
 }
+
+const computeAltchaIpScope = async (clientIP, ipv4Suffix, ipv6Suffix) => {
+  if (!clientIP || typeof clientIP !== 'string') {
+    return { ipRange: '', ipHash: '' };
+  }
+  try {
+    const ipRange = calculateIPSubnet(clientIP, ipv4Suffix, ipv6Suffix);
+    if (!ipRange) {
+      return { ipRange: '', ipHash: '' };
+    }
+    const ipHash = await sha256Hash(ipRange);
+    return {
+      ipRange,
+      ipHash,
+    };
+  } catch (error) {
+    console.error('[ALTCHA Dynamic] Failed to compute IP scope:', error instanceof Error ? error.message : String(error));
+    return { ipRange: '', ipHash: '' };
+  }
+};
+
+const resolveD1DatabaseBinding = (config, env) => {
+  const envSource = config.cacheConfig?.env || config.rateLimitConfig?.env || env;
+  const bindingName = config.cacheConfig?.databaseBinding || config.rateLimitConfig?.databaseBinding || 'DB';
+  if (!envSource || !bindingName) {
+    return null;
+  }
+  return envSource[bindingName] || null;
+};
 
 /**
  * 执行 D1 REST 查询
@@ -169,10 +378,11 @@ const resolveConfig = (env = {}) => {
     ? env.PAGE_SECRET.trim()
     : normalizedToken;
   const altchaEnabled = env.ALTCHA_ENABLED === 'true';
-  const parsedAltchaDifficulty = Number.parseInt(env.ALTCHA_DIFFICULTY || '250000', 10);
-  const altchaDifficulty = Number.isFinite(parsedAltchaDifficulty) && parsedAltchaDifficulty > 0
-    ? parsedAltchaDifficulty
-    : 250000;
+  const rawAltchaDifficulty = typeof env.ALTCHA_DIFFICULTY === 'string' ? env.ALTCHA_DIFFICULTY : '';
+  const altchaDifficultyRange = parseAltchaDifficultyRange(
+    rawAltchaDifficulty || String(ALTCHA_DEFAULT_BASE_DIFFICULTY)
+  );
+  const altchaDifficultyStatic = altchaDifficultyRange.baseMin;
   const rawAltchaTokenExpire = typeof env.ALTCHA_TOKEN_EXPIRE === 'string' ? env.ALTCHA_TOKEN_EXPIRE.trim() : '';
   let altchaTokenExpire = parseWindowTime(rawAltchaTokenExpire || '3m');
   if (!Number.isFinite(altchaTokenExpire) || altchaTokenExpire <= 0) {
@@ -182,6 +392,15 @@ const resolveConfig = (env = {}) => {
     ? env.ALTCHA_TOKEN_BINDING_TABLE.trim()
     : '';
   const altchaTableName = altchaTokenTable || 'ALTCHA_TOKEN_LIST';
+  const altchaDifficultyWindowSeconds = parseDurationToSeconds(env.ALTCHA_DIFFICULTY_WINDOW, 30);
+  const altchaDifficultyResetSeconds = parseDurationToSeconds(env.ALTCHA_DIFFICULTY_RESET, 120);
+  const altchaDifficultyBlockSeconds = parseDurationToSeconds(env.ALTCHA_MAX_BLOCK_TIME, 120);
+  const altchaMaxMultiplierRaw =
+    typeof env.ALTCHA_MAX_MULTIPLIER === 'string' ? env.ALTCHA_MAX_MULTIPLIER : '';
+  const altchaMaxExponent = parseMaxExponent(
+    altchaMaxMultiplierRaw || String(ALTCHA_MAX_EXPONENT_FALLBACK),
+    ALTCHA_MAX_EXPONENT_FALLBACK
+  );
   const underAttack = parseBoolean(env.UNDER_ATTACK, false);
   const autoRedirect = parseBoolean(env.AUTO_REDIRECT, false);
   const turnstileSiteKey = env.TURNSTILE_SITE_KEY ? String(env.TURNSTILE_SITE_KEY).trim() : '';
@@ -285,6 +504,7 @@ const resolveConfig = (env = {}) => {
 
   // Parse database mode for rate limiting
   const dbMode = env.DB_MODE && typeof env.DB_MODE === 'string' ? env.DB_MODE.trim() : '';
+  const hasDbMode = typeof dbMode === 'string' && dbMode.length > 0;
   const enableCfRatelimiter = normalizeString(env.ENABLE_CF_RATELIMITER, 'false').toLowerCase() === 'true';
   const cfRatelimiterBinding = normalizeString(env.CF_RATELIMITER_BINDING, 'CF_RATE_LIMITER');
   let d1DatabaseBinding = '';
@@ -603,6 +823,22 @@ const resolveConfig = (env = {}) => {
     }
   }
 
+  const safeAltchaWindowSeconds = Math.max(1, altchaDifficultyWindowSeconds);
+  const safeAltchaResetSeconds = Math.max(safeAltchaWindowSeconds, altchaDifficultyResetSeconds);
+  const safeAltchaBlockSeconds = Math.max(0, altchaDifficultyBlockSeconds);
+  const altchaStatefulAvailable = Boolean(altchaTableName);
+  const altchaDynamicEnabled = Boolean(altchaEnabled && hasDbMode && altchaStatefulAvailable);
+  const altchaDynamic = altchaDynamicEnabled
+    ? {
+        baseMin: altchaDifficultyRange.baseMin,
+        baseMax: altchaDifficultyRange.baseMax,
+        maxExponent: Math.max(1, altchaMaxExponent),
+        blockSeconds: safeAltchaBlockSeconds,
+        windowSeconds: safeAltchaWindowSeconds,
+        resetSeconds: safeAltchaResetSeconds,
+      }
+    : null;
+
   const initTables = parseBoolean(env.INIT_TABLES, false);
 
   return {
@@ -616,7 +852,11 @@ const resolveConfig = (env = {}) => {
     autoRedirect,
     fastRedirect: parseBoolean(env.FAST_REDIRECT, false),
     altchaEnabled,
-    altchaDifficulty,
+    altchaDifficulty: altchaDifficultyStatic,
+    altchaDifficultyStatic,
+    altchaDifficultyRange,
+    altchaDynamicEnabled,
+    altchaDynamic,
     altchaTokenExpire,
     altchaTableName,
     pageSecret,
@@ -843,6 +1083,57 @@ const buildAltchaBinding = async (secret, pathHash, ipHash, expiresAtSeconds, sa
   return buildBindingPayload(secret, pathHash, ipHash, expiresAtSeconds, 'ALTCHA', additionalData);
 };
 
+const normalizeAltchaStateRow = (row) => {
+  if (!row || typeof row !== 'object') {
+    return null;
+  }
+  const levelRaw = row.level ?? row.LEVEL;
+  const lastRaw = row.last_success_at ?? row.LAST_SUCCESS_AT;
+  const blockRaw = row.block_until ?? row.BLOCK_UNTIL;
+  const level = Number(levelRaw);
+  const lastSuccessAt = Number(lastRaw);
+  const blockUntil = Number(blockRaw);
+  return {
+    level: Number.isFinite(level) ? level : 0,
+    lastSuccessAt: Number.isFinite(lastSuccessAt) ? lastSuccessAt : 0,
+    blockUntil: Number.isFinite(blockUntil) ? blockUntil : null,
+  };
+};
+
+const readAltchaStateFromD1 = async (db, ipHash) => {
+  if (!db || !ipHash) {
+    return null;
+  }
+  try {
+    const row = await db.prepare(
+      `SELECT LEVEL, LAST_SUCCESS_AT, BLOCK_UNTIL FROM ${ALTCHA_DIFFICULTY_TABLE} WHERE IP_HASH = ? LIMIT 1`
+    ).bind(ipHash).first();
+    return normalizeAltchaStateRow(row);
+  } catch (error) {
+    console.error('[ALTCHA Dynamic] D1 read failed:', error instanceof Error ? error.message : String(error));
+    return null;
+  }
+};
+
+const readAltchaStateFromD1Rest = async (restConfig, ipHash) => {
+  if (!restConfig || !ipHash) {
+    return null;
+  }
+  try {
+    const sql = `SELECT LEVEL, LAST_SUCCESS_AT, BLOCK_UNTIL FROM ${ALTCHA_DIFFICULTY_TABLE} WHERE IP_HASH = ? LIMIT 1`;
+    const result = await executeD1RestQuery(restConfig, { sql, params: [ipHash] });
+    if (Array.isArray(result) && result.length > 0) {
+      const rows = Array.isArray(result[0]?.results) ? result[0].results : [];
+      if (rows.length > 0) {
+        return normalizeAltchaStateRow(rows[0]);
+      }
+    }
+  } catch (error) {
+    console.error('[ALTCHA Dynamic] D1 REST read failed:', error instanceof Error ? error.message : String(error));
+  }
+  return null;
+};
+
 const buildTurnstileCData = async (secret, bindingMac, nonce) => {
   if (!secret || typeof secret !== 'string' || secret.length === 0) {
     return '';
@@ -859,6 +1150,156 @@ const buildTurnstileCData = async (secret, bindingMac, nonce) => {
   } catch (error) {
     console.error('[Turnstile Binding] Failed to compute cData:', error instanceof Error ? error.message : String(error));
     return '';
+  }
+};
+
+const fetchAltchaDifficultyState = async (config, env, ipHash) => {
+  if (!config?.altchaDynamic || !ipHash) {
+    return null;
+  }
+  const dbMode = getNormalizedDbMode(config);
+  if (!dbMode) {
+    return null;
+  }
+  try {
+    if (dbMode === 'custom-pg-rest') {
+      const postgrestUrl = config.rateLimitConfig?.postgrestUrl;
+      if (!postgrestUrl) {
+        return null;
+      }
+      const rpcUrl = `${postgrestUrl}/rpc/landing_get_altcha_difficulty`;
+      const headers = { 'Content-Type': 'application/json' };
+      applyVerifyHeaders(headers, config.verifyHeader, config.verifySecret);
+      const response = await fetch(rpcUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          p_ip_hash: ipHash,
+          p_table_name: ALTCHA_DIFFICULTY_TABLE,
+        }),
+      });
+      if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        console.error('[ALTCHA Dynamic] PostgREST fetch failed:', response.status, text);
+        return null;
+      }
+      const payload = await response.json().catch(() => null);
+      if (Array.isArray(payload) && payload.length > 0) {
+        return normalizeAltchaStateRow(payload[0]);
+      }
+      return null;
+    }
+    if (dbMode === 'd1') {
+      const db = resolveD1DatabaseBinding(config, env);
+      return await readAltchaStateFromD1(db, ipHash);
+    }
+    if (dbMode === 'd1-rest') {
+      const restConfig = config.d1RestConfig;
+      return await readAltchaStateFromD1Rest(restConfig, ipHash);
+    }
+  } catch (error) {
+    console.error('[ALTCHA Dynamic] Failed to fetch state:', error instanceof Error ? error.message : String(error));
+  }
+  return null;
+};
+
+const upsertAltchaDifficultyStateD1 = async (db, scope, cfg, nowSeconds) => {
+  if (!db || !scope?.ipHash || !scope?.ipRange || !cfg) {
+    return;
+  }
+  const prev = await readAltchaStateFromD1(db, scope.ipHash);
+  const next = computeNextAltchaDifficultyState(prev, nowSeconds, cfg);
+  await db.prepare(
+    `
+      INSERT INTO ${ALTCHA_DIFFICULTY_TABLE} (IP_HASH, IP_RANGE, LEVEL, LAST_SUCCESS_AT, BLOCK_UNTIL)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(IP_HASH) DO UPDATE SET
+        IP_RANGE = excluded.IP_RANGE,
+        LEVEL = excluded.LEVEL,
+        LAST_SUCCESS_AT = excluded.LAST_SUCCESS_AT,
+        BLOCK_UNTIL = excluded.BLOCK_UNTIL
+    `
+  ).bind(scope.ipHash, scope.ipRange, next.level, next.lastSuccessAt, next.blockUntil ?? null).run();
+};
+
+const upsertAltchaDifficultyStateD1Rest = async (restConfig, scope, cfg, nowSeconds) => {
+  if (!restConfig || !scope?.ipHash || !scope?.ipRange || !cfg) {
+    return;
+  }
+  const prev = await readAltchaStateFromD1Rest(restConfig, scope.ipHash);
+  const next = computeNextAltchaDifficultyState(prev, nowSeconds, cfg);
+  const sql = `
+    INSERT INTO ${ALTCHA_DIFFICULTY_TABLE} (IP_HASH, IP_RANGE, LEVEL, LAST_SUCCESS_AT, BLOCK_UNTIL)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(IP_HASH) DO UPDATE SET
+      IP_RANGE = excluded.IP_RANGE,
+      LEVEL = excluded.LEVEL,
+      LAST_SUCCESS_AT = excluded.LAST_SUCCESS_AT,
+      BLOCK_UNTIL = excluded.BLOCK_UNTIL
+  `;
+  await executeD1RestQuery(restConfig, {
+    sql,
+    params: [scope.ipHash, scope.ipRange, next.level, next.lastSuccessAt, next.blockUntil ?? null],
+  });
+};
+
+const updateAltchaDifficultyState = async (config, env, scope, nowSeconds) => {
+  if (!config?.altchaDynamic || !scope?.ipHash || !scope?.ipRange) {
+    return;
+  }
+  const dbMode = getNormalizedDbMode(config);
+  if (!dbMode) {
+    return;
+  }
+  try {
+    if (dbMode === 'custom-pg-rest') {
+      const postgrestUrl = config.rateLimitConfig?.postgrestUrl;
+      if (!postgrestUrl) {
+        return;
+      }
+      const rpcUrl = `${postgrestUrl}/rpc/landing_update_altcha_difficulty`;
+      const headers = { 'Content-Type': 'application/json' };
+      applyVerifyHeaders(headers, config.verifyHeader, config.verifySecret);
+      const body = {
+        p_ip_hash: scope.ipHash,
+        p_ip_range: scope.ipRange,
+        p_now: nowSeconds,
+        p_window_seconds: config.altchaDynamic.windowSeconds,
+        p_reset_seconds: config.altchaDynamic.resetSeconds,
+        p_max_exponent: config.altchaDynamic.maxExponent,
+        p_block_seconds: config.altchaDynamic.blockSeconds,
+        p_table_name: ALTCHA_DIFFICULTY_TABLE,
+      };
+      const response = await fetch(rpcUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        console.error('[ALTCHA Dynamic] PostgREST update failed:', response.status, text);
+      }
+      return;
+    }
+    if (dbMode === 'd1') {
+      const db = resolveD1DatabaseBinding(config, env);
+      if (!db) {
+        console.warn('[ALTCHA Dynamic] D1 binding unavailable for update');
+        return;
+      }
+      await upsertAltchaDifficultyStateD1(db, scope, config.altchaDynamic, nowSeconds);
+      return;
+    }
+    if (dbMode === 'd1-rest') {
+      const restConfig = config.d1RestConfig;
+      if (!restConfig) {
+        console.warn('[ALTCHA Dynamic] D1 REST config unavailable for update');
+        return;
+      }
+      await upsertAltchaDifficultyStateD1Rest(restConfig, scope, config.altchaDynamic, nowSeconds);
+    }
+  } catch (error) {
+    console.error('[ALTCHA Dynamic] Failed to update state:', error instanceof Error ? error.message : String(error));
   }
 };
 
@@ -907,6 +1348,19 @@ const respondJson = (origin, payload, status = 200) => {
   headers.set('content-type', 'application/json;charset=UTF-8');
   headers.set('cache-control', 'no-store');
   return new Response(JSON.stringify(payload), { status, headers });
+};
+
+const respondAltchaBlocked = (origin, retryAfterSeconds = 0) => {
+  const headers = safeHeaders(origin);
+  headers.set('content-type', 'text/plain;charset=UTF-8');
+  headers.set('cache-control', 'no-store');
+  if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+    headers.set('Retry-After', String(Math.max(1, Math.floor(retryAfterSeconds))));
+  }
+  return new Response('429 ALTCHA dynamic difficulty blocked', {
+    status: 429,
+    headers,
+  });
 };
 
 const respondRateLimitExceeded = (origin, subject, limit, windowTime, retryAfter) => {
@@ -1721,6 +2175,20 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
     const parsedNeeds = parseVerificationNeeds(action, config);
     needAltcha = parsedNeeds.needAltcha;
     needTurnstile = parsedNeeds.needTurnstile;
+  }
+
+  let altchaScope = null;
+  if (needAltcha && config.altchaDynamicEnabled && clientIP) {
+    const scopeCandidate = await computeAltchaIpScope(clientIP, config.ipv4Suffix, config.ipv6Suffix);
+    if (scopeCandidate.ipHash) {
+      const nowSeconds = Math.floor(Date.now() / 1000);
+      const state = await fetchAltchaDifficultyState(config, env, scopeCandidate.ipHash);
+      const difficultyResult = getAltchaDifficultyForClient(state, nowSeconds, config.altchaDynamic);
+      if (difficultyResult.blocked) {
+        return respondAltchaBlocked(origin, difficultyResult.retryAfterSeconds);
+      }
+      altchaScope = scopeCandidate;
+    }
   }
 
   const hasDbMode = typeof config.dbMode === 'string'
@@ -2601,6 +3069,17 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
       })()
     );
   }
+
+  if (config.altchaDynamicEnabled && needAltcha && altchaScope?.ipHash && altchaScope?.ipRange) {
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const updatePromise = updateAltchaDifficultyState(config, env, altchaScope, nowSeconds);
+    if (ctx && typeof ctx.waitUntil === 'function') {
+      ctx.waitUntil(updatePromise);
+    } else {
+      await updatePromise;
+    }
+  }
+
   scheduleTokenBindingWrite(filepathHash);
   return respondJson(origin, responsePayload, 200);
 };
@@ -2663,6 +3142,64 @@ async function cleanupExpiredAltchaTokens(config, env) {
     }
   } catch (error) {
     console.error('[ALTCHA Cleanup] Failed:', error instanceof Error ? error.message : String(error));
+  }
+}
+
+async function cleanupAltchaDifficultyState(config, env) {
+  if (!config?.altchaDynamicEnabled) {
+    return;
+  }
+  const dbMode = getNormalizedDbMode(config);
+  if (!dbMode) {
+    return;
+  }
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const cutoffTime = nowSeconds - ALTCHA_DIFFICULTY_CLEANUP_MAX_AGE;
+  try {
+    if (dbMode === 'custom-pg-rest') {
+      const postgrestUrl = config.rateLimitConfig?.postgrestUrl;
+      if (!postgrestUrl) {
+        return;
+      }
+      const rpcUrl = `${postgrestUrl}/rpc/landing_cleanup_altcha_difficulty_state`;
+      const headers = { 'Content-Type': 'application/json' };
+      applyVerifyHeaders(headers, config.verifyHeader, config.verifySecret);
+      const response = await fetch(rpcUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          p_before: cutoffTime,
+          p_table_name: ALTCHA_DIFFICULTY_TABLE,
+        }),
+      });
+      if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        console.error('[ALTCHA Dynamic] Cleanup RPC failed:', response.status, text);
+      }
+      return;
+    }
+    if (dbMode === 'd1') {
+      const db = resolveD1DatabaseBinding(config, env);
+      if (!db) {
+        return;
+      }
+      await db.prepare(
+        `DELETE FROM ${ALTCHA_DIFFICULTY_TABLE} WHERE LAST_SUCCESS_AT < ?`
+      ).bind(cutoffTime).run();
+      return;
+    }
+    if (dbMode === 'd1-rest') {
+      const restConfig = config.d1RestConfig;
+      if (!restConfig) {
+        return;
+      }
+      await executeD1RestQuery(restConfig, [{
+        sql: `DELETE FROM ${ALTCHA_DIFFICULTY_TABLE} WHERE LAST_SUCCESS_AT < ?`,
+        params: [cutoffTime],
+      }]);
+    }
+  } catch (error) {
+    console.error('[ALTCHA Dynamic] Cleanup failed:', error instanceof Error ? error.message : String(error));
   }
 }
 
@@ -2932,6 +3469,7 @@ async function scheduleAllCleanups(config, env, ctx) {
     { name: 'Rate Limit', fn: () => cleanupExpiredRateLimits(config, env) },
     { name: 'Filesize Cache', fn: () => cleanupExpiredCache(config, env) },
     { name: 'ALTCHA Token', fn: () => cleanupExpiredAltchaTokens(config, env) },
+    { name: 'ALTCHA Difficulty', fn: () => cleanupAltchaDifficultyState(config, env) },
     { name: 'Turnstile Token', fn: () => cleanupExpiredTurnstileTokens(config, env) },
   );
 
@@ -3247,6 +3785,24 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
     }
   }
 
+  let altchaChallengeDifficulty = pickAltchaBaseDifficulty(config.altchaDifficultyRange);
+  if (!shouldRedirect && needsAltchaChallenge) {
+    if (config.altchaDynamicEnabled && clientIP) {
+      const scope = await computeAltchaIpScope(clientIP, config.ipv4Suffix, config.ipv6Suffix);
+      if (scope.ipHash) {
+        const nowSeconds = Math.floor(Date.now() / 1000);
+        const state = await fetchAltchaDifficultyState(config, env, scope.ipHash);
+        const difficultyResult = getAltchaDifficultyForClient(state, nowSeconds, config.altchaDynamic);
+        if (difficultyResult.blocked) {
+          return respondAltchaBlocked(origin, difficultyResult.retryAfterSeconds);
+        }
+        altchaChallengeDifficulty = difficultyResult.difficulty;
+      }
+    } else {
+      altchaChallengeDifficulty = pickAltchaBaseDifficulty(config.altchaDifficultyRange);
+    }
+  }
+
   if (!shouldRedirect && needsTurnstileBinding) {
     try {
       const bindingPathHash = decodedChallengePath ? await sha256Hash(decodedChallengePath) : '';
@@ -3299,7 +3855,7 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
       const challengeExpiresAt = baseNowSeconds + configuredTtlSeconds;
       const challenge = await createChallenge({
         hmacKey: config.pageSecret,
-        maxnumber: config.altchaDifficulty,
+        maxnumber: altchaChallengeDifficulty,
         expires: new Date(challengeExpiresAt * 1000),
       });
       const challengeBinding = await buildAltchaBinding(

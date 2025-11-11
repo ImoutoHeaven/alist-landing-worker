@@ -1,5 +1,7 @@
 import { sha256Hash, calculateIPSubnet } from './utils.js';
 
+const ALTCHA_DIFFICULTY_TABLE = 'ALTCHA_DIFFICULTY_STATE';
+
 const executeQuery = async (accountId, databaseId, apiToken, sqlOrBatch, params = []) => {
   const endpoint = `https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database/${databaseId}/query`;
 
@@ -43,7 +45,14 @@ const ensureTables = async (
   accountId,
   databaseId,
   apiToken,
-  { cacheTableName, rateLimitTableName, fileRateLimitTableName, tokenTableName, altchaTableName }
+  {
+    cacheTableName,
+    rateLimitTableName,
+    fileRateLimitTableName,
+    tokenTableName,
+    altchaTableName,
+    altchaDifficultyTableName = ALTCHA_DIFFICULTY_TABLE,
+  }
 ) => {
   await executeQuery(accountId, databaseId, apiToken, `
     CREATE TABLE IF NOT EXISTS ${cacheTableName} (
@@ -112,6 +121,16 @@ const ensureTables = async (
     )
   `);
   await executeQuery(accountId, databaseId, apiToken, `CREATE INDEX IF NOT EXISTS idx_altcha_token_expires ON ${altchaTableName}(EXPIRES_AT)`);
+  await executeQuery(accountId, databaseId, apiToken, `
+    CREATE TABLE IF NOT EXISTS ${altchaDifficultyTableName} (
+      IP_HASH TEXT PRIMARY KEY,
+      IP_RANGE TEXT NOT NULL,
+      LEVEL INTEGER NOT NULL DEFAULT 0,
+      LAST_SUCCESS_AT INTEGER NOT NULL,
+      BLOCK_UNTIL INTEGER
+    )
+  `);
+  await executeQuery(accountId, databaseId, apiToken, `CREATE INDEX IF NOT EXISTS idx_altcha_diff_block_until ON ${altchaDifficultyTableName}(BLOCK_UNTIL)`);
 };
 
 export const unifiedCheckD1Rest = async (path, clientIP, altchaTableName, config) => {
@@ -154,6 +173,7 @@ export const unifiedCheckD1Rest = async (path, clientIP, altchaTableName, config
       fileRateLimitTableName,
       tokenTableName,
       altchaTableName: resolvedAltchaTableName,
+      altchaDifficultyTableName: ALTCHA_DIFFICULTY_TABLE,
     });
   }
 
