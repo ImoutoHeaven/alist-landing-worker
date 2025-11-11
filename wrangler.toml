@@ -126,6 +126,9 @@ persist = true
 #
 # ALTCHA_TOKEN_BINDING_TABLE = "ALTCHA_TOKEN_LIST"  # ALTCHA Token 表名（Stateful 模式可自定义，默认 ALTCHA_TOKEN_LIST）
 #
+# ALTCHA_MIN_UPGRADE_MULTIPLIER = "3x"     # When effective exponent ≥ this value, randomly pick SHA-256 / SHA-384 / SHA-512
+#                                          # Below this threshold, every challenge stays on SHA-256
+#
 # ALTCHA_MAX_MULTIPLIER = "10x"            # Max exponent ("nx") before entering block mode (e.g. "10x" ⇒ block when level reaches 10)
 # ALTCHA_MAX_BLOCK_TIME = "2m"             # Duration of the block window once max multiplier is exceeded
 # ALTCHA_DIFFICULTY_WINDOW = "30s"         # WINDOW for consecutive successes → level +1 (difficulty doubles)

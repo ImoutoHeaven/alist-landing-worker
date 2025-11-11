@@ -50,6 +50,9 @@ const ALTCHA_DEFAULT_BASE_DIFFICULTY = 250000;
 const ALTCHA_DIFFICULTY_TABLE = 'ALTCHA_DIFFICULTY_STATE';
 const ALTCHA_DIFFICULTY_CLEANUP_MAX_AGE = 86400; // 1d default cleanup horizon
 const ALTCHA_MAX_EXPONENT_FALLBACK = 10;
+const ALTCHA_MIN_UPGRADE_DEFAULT = 3;
+const ALTCHA_DEFAULT_ALGORITHM = 'SHA-256';
+const ALTCHA_ALGORITHM_POOL = ['SHA-256', 'SHA-384', 'SHA-512'];
 const getNormalizedDbMode = (config) => {
   if (!config || typeof config.dbMode !== 'string') {
     return '';
@@ -137,26 +140,49 @@ const parseAltchaDifficultyRange = (rawValue) => {
   return fallback;
 };
 
-const parseMaxExponent = (rawValue, fallback = ALTCHA_MAX_EXPONENT_FALLBACK) => {
-  if (!rawValue) {
+const parseExponentMultiplier = (rawValue, fallback, { allowZero = false } = {}) => {
+  if (rawValue === undefined || rawValue === null) {
     return fallback;
   }
   const normalized = String(rawValue).trim();
   if (!normalized) {
     return fallback;
   }
-  const matched = normalized.match(/^(\d+)\s*x$/i);
-  if (matched) {
-    const parsed = Number.parseInt(matched[1], 10);
-    if (Number.isFinite(parsed) && parsed > 0) {
-      return parsed;
-    }
+  let parsedValue = null;
+  const suffixedMatch = normalized.match(/^(\d+)\s*x$/i);
+  if (suffixedMatch) {
+    parsedValue = Number.parseInt(suffixedMatch[1], 10);
+  } else if (/^\d+$/u.test(normalized)) {
+    parsedValue = Number.parseInt(normalized, 10);
   }
-  const numeric = Number(normalized.replace(/x$/i, ''));
-  if (Number.isFinite(numeric) && numeric > 0) {
-    return Math.floor(numeric);
+  if (!Number.isFinite(parsedValue)) {
+    return fallback;
   }
-  return fallback;
+  if (!allowZero && parsedValue <= 0) {
+    return fallback;
+  }
+  if (allowZero && parsedValue < 0) {
+    return fallback;
+  }
+  return parsedValue;
+};
+
+const parseMaxExponent = (rawValue, fallback = ALTCHA_MAX_EXPONENT_FALLBACK) =>
+  parseExponentMultiplier(rawValue, fallback, { allowZero: false });
+
+const parseMinUpgradeExponent = (rawValue, fallback, maxExponent) => {
+  const parsed = parseExponentMultiplier(rawValue, fallback, { allowZero: true });
+  const maxChallengeExponent = Math.max(0, Math.floor(maxExponent) - 1);
+  if (maxChallengeExponent <= 0) {
+    return 0;
+  }
+  if (!Number.isFinite(parsed)) {
+    return Math.min(fallback, maxChallengeExponent);
+  }
+  if (parsed < 0) {
+    return 0;
+  }
+  return Math.min(parsed, maxChallengeExponent);
 };
 
 const parseDurationToSeconds = (rawValue, fallbackSeconds) => {
@@ -189,6 +215,20 @@ const pickAltchaBaseDifficulty = (range) => {
   const span = maxCandidate - min + 1;
   const offset = Math.floor(Math.random() * span);
   return min + offset;
+};
+
+const pickAltchaAlgorithm = (effectiveExponent, dynamicConfig) => {
+  if (!dynamicConfig) {
+    return ALTCHA_DEFAULT_ALGORITHM;
+  }
+  const minUpgradeExponent = Number.isFinite(dynamicConfig.minUpgradeExponent)
+    ? dynamicConfig.minUpgradeExponent
+    : ALTCHA_MIN_UPGRADE_DEFAULT;
+  if (!Number.isFinite(effectiveExponent) || effectiveExponent < minUpgradeExponent) {
+    return ALTCHA_DEFAULT_ALGORITHM;
+  }
+  const randomIndex = Math.floor(Math.random() * ALTCHA_ALGORITHM_POOL.length);
+  return ALTCHA_ALGORITHM_POOL[randomIndex] || ALTCHA_DEFAULT_ALGORITHM;
 };
 
 const computeNextAltchaDifficultyState = (prev, nowSeconds, cfg) => {
@@ -400,6 +440,14 @@ const resolveConfig = (env = {}) => {
   const altchaMaxExponent = parseMaxExponent(
     altchaMaxMultiplierRaw || String(ALTCHA_MAX_EXPONENT_FALLBACK),
     ALTCHA_MAX_EXPONENT_FALLBACK
+  );
+  const rawAltchaMinUpgradeMultiplier = typeof env.ALTCHA_MIN_UPGRADE_MULTIPLIER === 'string'
+    ? env.ALTCHA_MIN_UPGRADE_MULTIPLIER
+    : '3x';
+  const altchaMinUpgradeExponent = parseMinUpgradeExponent(
+    rawAltchaMinUpgradeMultiplier || `${ALTCHA_MIN_UPGRADE_DEFAULT}x`,
+    ALTCHA_MIN_UPGRADE_DEFAULT,
+    altchaMaxExponent
   );
   const underAttack = parseBoolean(env.UNDER_ATTACK, false);
   const autoRedirect = parseBoolean(env.AUTO_REDIRECT, false);
@@ -836,6 +884,7 @@ const resolveConfig = (env = {}) => {
         blockSeconds: safeAltchaBlockSeconds,
         windowSeconds: safeAltchaWindowSeconds,
         resetSeconds: safeAltchaResetSeconds,
+        minUpgradeExponent: altchaMinUpgradeExponent,
       }
     : null;
 
@@ -855,6 +904,7 @@ const resolveConfig = (env = {}) => {
     altchaDifficulty: altchaDifficultyStatic,
     altchaDifficultyStatic,
     altchaDifficultyRange,
+    altchaMinUpgradeExponent,
     altchaDynamicEnabled,
     altchaDynamic,
     altchaTokenExpire,
@@ -3786,6 +3836,7 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
   }
 
   let altchaChallengeDifficulty = pickAltchaBaseDifficulty(config.altchaDifficultyRange);
+  let altchaEffectiveExponent = 0;
   if (!shouldRedirect && needsAltchaChallenge) {
     if (config.altchaDynamicEnabled && clientIP) {
       const scope = await computeAltchaIpScope(clientIP, config.ipv4Suffix, config.ipv6Suffix);
@@ -3797,10 +3848,16 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
           return respondAltchaBlocked(origin, difficultyResult.retryAfterSeconds);
         }
         altchaChallengeDifficulty = difficultyResult.difficulty;
+        altchaEffectiveExponent = difficultyResult.effectiveExponent ?? 0;
       }
     } else {
       altchaChallengeDifficulty = pickAltchaBaseDifficulty(config.altchaDifficultyRange);
+      altchaEffectiveExponent = 0;
     }
+  }
+  let altchaChallengeAlgorithm = ALTCHA_DEFAULT_ALGORITHM;
+  if (!shouldRedirect && needsAltchaChallenge) {
+    altchaChallengeAlgorithm = pickAltchaAlgorithm(altchaEffectiveExponent, config.altchaDynamic);
   }
 
   if (!shouldRedirect && needsTurnstileBinding) {
@@ -3857,6 +3914,7 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
         hmacKey: config.pageSecret,
         maxnumber: altchaChallengeDifficulty,
         expires: new Date(challengeExpiresAt * 1000),
+        algorithm: altchaChallengeAlgorithm,
       });
       const challengeBinding = await buildAltchaBinding(
         config.pageSecret,
