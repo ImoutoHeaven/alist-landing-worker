@@ -1,3 +1,6 @@
+import { htmlTemplate } from './templates/landing.html.js';
+import { cssStyles } from './templates/landing.css.js';
+
 const escapeHtml = (value = '') =>
   value
     .replace(/&/g, '&amp;')
@@ -48,40 +51,28 @@ const pageScript = String.raw`
     log(text);
   };
 
-  const createLinkSnippet = (url) => {
-    const snippet = document.createElement('div');
-    snippet.className = 'log-link-snippet';
-    snippet.title = '点击复制链接';
+  /**
+   * Set button text with optional spinner
+   * @param {HTMLElement} button - The button element
+   * @param {string} text - Button text
+   * @param {boolean} loading - Whether to show spinner
+   */
+  const setButtonText = (button, text, loading = false) => {
+    if (!button) return;
 
-    const label = document.createElement('div');
-    label.className = 'log-link-snippet-label';
-    label.textContent = '下载链接（点击复制）';
+    // Clear existing content
+    button.innerHTML = '';
 
-    const urlText = document.createElement('div');
-    urlText.className = 'log-link-snippet-url';
-    urlText.textContent = url;
+    if (loading) {
+      // Create spinner element
+      const spinner = document.createElement('span');
+      spinner.className = 'spinner';
+      button.appendChild(spinner);
+    }
 
-    snippet.appendChild(label);
-    snippet.appendChild(urlText);
-
-    snippet.addEventListener('click', async () => {
-      try {
-        await navigator.clipboard.writeText(url);
-        const originalText = label.textContent;
-        label.textContent = '✓ 已复制到剪贴板';
-        setTimeout(() => {
-          label.textContent = originalText;
-        }, 1500);
-      } catch (error) {
-        console.error('复制失败', error);
-        label.textContent = '复制失败，请手动复制';
-        setTimeout(() => {
-          label.textContent = '下载链接（点击复制）';
-        }, 2000);
-      }
-    });
-
-    return snippet;
+    // Add text
+    const textNode = document.createTextNode(text);
+    button.appendChild(textNode);
   };
 
   const copyToClipboard = async (text, button) => {
@@ -153,10 +144,10 @@ const pageScript = String.raw`
     const canCallInfo = (!needAltcha || altchaReady) && (!needTurnstile || turnstileReady);
     if (canCallInfo) {
       downloadBtn.disabled = false;
-      downloadBtn.textContent = '开始下载';
+      setButtonText(downloadBtn, '开始下载', false);
     } else {
       downloadBtn.disabled = true;
-      downloadBtn.textContent = '身份验证中';
+      setButtonText(downloadBtn, '身份验证中', true);
     }
   };
 
@@ -852,11 +843,6 @@ const pageScript = String.raw`
       return;
     }
 
-    // Add clickable link snippet to log
-    const snippet = createLinkSnippet(state.downloadURL);
-    logEl.appendChild(snippet);
-    logEl.scrollTop = logEl.scrollHeight;
-
     setStatus('正在跳转下载...');
     retryBtn.disabled = true;
     clearCacheBtn.disabled = true;
@@ -890,7 +876,7 @@ const pageScript = String.raw`
 
   retryBtn.addEventListener('click', async () => {
     downloadBtn.disabled = true;
-    downloadBtn.textContent = '身份验证中';
+    setButtonText(downloadBtn, '身份验证中', true);
     retryBtn.disabled = true;
     clearCacheBtn.disabled = true;
     try {
@@ -1063,269 +1049,13 @@ const renderLandingPageHtml = (path, options = {}) => {
   const autoRedirectEnabled = normalizedOptions.autoRedirect === true;
   const autoRedirectLiteral = autoRedirectEnabled ? 'true' : 'false';
 
-  return `
-<!DOCTYPE html>
-<html lang="zh-CN">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width,initial-scale=1,shrink-to-fit=no">
-    <title>${title}</title>
-    <style>
-      :root {
-        color-scheme: dark;
-        font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", sans-serif;
-      }
-      body {
-        margin: 0;
-        background: #0b0b0f;
-        color: #f4f4f8;
-      }
-      header {
-        padding: 1.5rem 1.25rem 0.5rem;
-        border-bottom: 1px solid rgba(255,255,255,0.08);
-      }
-      main {
-        padding: 1.25rem;
-        max-width: 720px;
-        margin: 0 auto;
-      }
-      h1 {
-        margin: 0 0 0.5rem;
-        font-size: 1.5rem;
-        word-break: break-all;
-      }
-      .status {
-        margin-bottom: 1rem;
-        font-size: 0.95rem;
-        color: #9ca3af;
-      }
-      .controls {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 0.5rem;
-        margin: 1.5rem 0;
-      }
-      .turnstile-section {
-        margin: 1.5rem 0 0;
-      }
-      .turnstile-container {
-        display: none;
-        padding: 1rem;
-        background: rgba(56,189,248,0.08);
-        border-radius: 0.75rem;
-      }
-      .turnstile-container.is-visible {
-        display: block;
-      }
-      .turnstile-message {
-        margin-top: 0.75rem;
-        font-size: 0.85rem;
-        color: #fbbf24;
-      }
-      .turnstile-message[hidden] {
-        display: none;
-      }
-      button {
-        cursor: pointer;
-        border: none;
-        border-radius: 0.5rem;
-        padding: 0.65rem 1.25rem;
-        font-size: 0.95rem;
-        font-weight: 600;
-        background: rgba(56,189,248,0.18);
-        color: #e0f2fe;
-        transition: background 0.2s ease, transform 0.2s ease;
-        white-space: nowrap;
-      }
-      button:hover:not(:disabled) {
-        background: rgba(56,189,248,0.28);
-        transform: translateY(-1px);
-      }
-      button:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-      }
-      .controls button.secondary {
-        background: rgba(148,163,184,0.16);
-        color: #e2e8f0;
-      }
-      .controls button.secondary:hover:not(:disabled) {
-        background: rgba(148,163,184,0.28);
-      }
-      .advanced-panel {
-        position: fixed;
-        top: 0;
-        right: 0;
-        transform: translateX(100%);
-        width: 320px;
-        max-width: 90vw;
-        height: 100%;
-        z-index: 30;
-        background: rgba(15,23,42,0.95);
-        border-left: 1px solid rgba(148,163,184,0.16);
-        box-shadow: -16px 0 32px rgba(15,23,42,0.5);
-        backdrop-filter: blur(6px);
-        transition: transform 0.3s ease;
-        display: flex;
-        flex-direction: column;
-        padding: 1.5rem 1.25rem;
-      }
-      .advanced-panel.is-open {
-        transform: translateX(0);
-      }
-      .advanced-panel[aria-hidden="true"] {
-        pointer-events: none;
-      }
-      .advanced-backdrop {
-        position: fixed;
-        inset: 0;
-        background: rgba(15,23,42,0.55);
-        backdrop-filter: blur(2px);
-        z-index: 20;
-      }
-      .advanced-backdrop[hidden] {
-        display: none;
-      }
-      .advanced-header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        margin-bottom: 1rem;
-      }
-      .advanced-header h2 {
-        margin: 0;
-        font-size: 1.1rem;
-        color: #f8fafc;
-      }
-      .advanced-close {
-        background: transparent;
-        border: none;
-        color: #94a3b8;
-        font-size: 0.9rem;
-        padding: 0.35rem 0.75rem;
-        border-radius: 999px;
-        cursor: pointer;
-        transition: color 0.2s ease, background 0.2s ease;
-      }
-      .advanced-close:hover {
-        color: #f8fafc;
-        background: rgba(148,163,184,0.14);
-      }
-      .advanced-body {
-        flex: 1;
-        display: flex;
-        flex-direction: column;
-        gap: 1.25rem;
-        overflow-y: auto;
-      }
-      .advanced-actions {
-        display: flex;
-        flex-direction: column;
-        gap: 0.75rem;
-      }
-      .advanced-actions button {
-        width: 100%;
-      }
-      .log {
-        background: rgba(15,23,42,0.6);
-        border-radius: 0.75rem;
-        padding: 1rem;
-        max-height: 260px;
-        overflow-y: auto;
-        font-size: 0.85rem;
-        line-height: 1.5;
-      }
-      .log-link-snippet {
-        background: rgba(56,189,248,0.12);
-        border: 1px solid rgba(56,189,248,0.3);
-        border-radius: 0.5rem;
-        padding: 0.75rem;
-        margin: 0.5rem 0;
-        cursor: pointer;
-        transition: all 0.2s ease;
-        word-break: break-all;
-        display: inline-block;
-        width: calc(100% - 6rem);
-      }
-      .log-link-snippet:hover {
-        background: rgba(56,189,248,0.18);
-        border-color: rgba(56,189,248,0.5);
-        transform: translateY(-1px);
-      }
-      .log-link-snippet-label {
-        font-size: 0.75rem;
-        color: #9ca3af;
-        margin-bottom: 0.35rem;
-        font-weight: 600;
-      }
-      .log-link-snippet-url {
-        color: #38bdf8;
-        font-family: monospace;
-        font-size: 0.8rem;
-        line-height: 1.4;
-      }
-      @media (max-width: 600px) {
-        main {
-          padding: 0.75rem;
-        }
-        header {
-          padding: 1rem 0.75rem 0.5rem;
-        }
-        .controls {
-          flex-direction: column;
-        }
-        button {
-          width: 100%;
-        }
-        .advanced-panel {
-          width: 100%;
-          padding: 1.25rem;
-        }
-      }
-    </style>
-    <script src="https://cdn.jsdelivr.net/npm/dexie@3.2.4/dist/dexie.min.js" crossorigin="anonymous"></script>
-  </head>
-  <body>
-    <header>
-      <h1 id="fileName">${title}</h1>
-      <div class="status" id="status">准备就绪</div>
-    </header>
-    <main>
-      <section class="turnstile-section" id="turnstileSection">
-        <div id="turnstileContainer" class="turnstile-container" hidden></div>
-        <div id="turnstileMessage" class="turnstile-message" hidden></div>
-      </section>
-      <div class="controls">
-        <button id="downloadBtn" disabled>加载中</button>
-        <button id="retryBtn" disabled>重试</button>
-        <button id="advancedToggle" class="secondary" type="button">高级选项</button>
-      </div>
-      <aside id="advancedPanel" class="advanced-panel" aria-hidden="true">
-        <div class="advanced-header">
-          <h2>高级选项</h2>
-          <button id="advancedCloseBtn" type="button" class="advanced-close">关闭</button>
-        </div>
-        <div class="advanced-body">
-          <div class="advanced-actions">
-            <button id="clearCacheBtn" disabled>清理缓存</button>
-          </div>
-        </div>
-      </aside>
-      <div id="advancedBackdrop" class="advanced-backdrop" hidden></div>
-      <section>
-        <div class="status">事件日志</div>
-        <div class="log" id="log"></div>
-      </section>
-    </main>
-    <script>
-      window.__ALIST_SECURITY__ = ${securityJson};
-      window.__AUTO_REDIRECT__ = ${autoRedirectLiteral};
-    </script>
-    <script type="module">
-      ${script}
-    </script>
-  </body>
-</html>`;
+  // Use template and replace placeholders
+  return htmlTemplate
+    .replace(/\{\{TITLE\}\}/g, title)
+    .replace(/\{\{STYLES\}\}/g, cssStyles)
+    .replace(/\{\{SECURITY_JSON\}\}/g, securityJson)
+    .replace(/\{\{AUTO_REDIRECT\}\}/g, autoRedirectLiteral)
+    .replace(/\{\{SCRIPT\}\}/g, script);
 };
 
 export const renderLandingPage = (path, options = {}) => {
