@@ -2163,18 +2163,14 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
 
       if (!cfResult.allowed) {
         console.error(`[CF Rate Limiter] Blocked IP subnet: ${cfResult.ipSubnet}`);
-        const headers = safeHeaders(origin);
-        headers.set('content-type', 'text/plain');
-        headers.set('Retry-After', '60');
-        return new Response('429 Too Many Requests - Rate limit exceeded', {
-          status: 429,
-          headers,
-        });
+        const response = respondJson(origin, { code: 429, message: 'rate limited' }, 429);
+        response.headers.set('Retry-After', '60');
+        return response;
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error('[CF Rate Limiter] Error during check:', message);
-      // fail-open: continue processing if rate limiter check fails
+      console.error('[CF Rate Limiter] Error during check (info):', message);
+      // fail-open
     }
   }
 
@@ -3120,16 +3116,6 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
     );
   }
 
-  if (config.altchaDynamicEnabled && needAltcha && altchaScope?.ipHash && altchaScope?.ipRange) {
-    const nowSeconds = Math.floor(Date.now() / 1000);
-    const updatePromise = updateAltchaDifficultyState(config, env, altchaScope, nowSeconds);
-    if (ctx && typeof ctx.waitUntil === 'function') {
-      ctx.waitUntil(updatePromise);
-    } else {
-      await updatePromise;
-    }
-  }
-
   scheduleTokenBindingWrite(filepathHash);
   return respondJson(origin, responsePayload, 200);
 };
@@ -3550,7 +3536,10 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
   const origin = request.headers.get('origin') || '*';
   const clientIP = extractClientIP(request);
 
-  if (config.enableCfRatelimiter) {
+  const maybeEnforceCfRateLimiter = async () => {
+    if (!config.enableCfRatelimiter) {
+      return null;
+    }
     try {
       const cfResult = await checkCfRatelimit(
         env,
@@ -3559,7 +3548,6 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
         config.ipv6Suffix,
         config.cfRatelimiterBinding
       );
-
       if (!cfResult.allowed) {
         console.error(`[CF Rate Limiter] Blocked IP subnet: ${cfResult.ipSubnet}`);
         const headers = safeHeaders(origin);
@@ -3573,14 +3561,19 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error('[CF Rate Limiter] Error during check:', message);
-      // fail-open: continue processing if rate limiter check fails
+      // fail-open
     }
-  }
+    return null;
+  };
 
   // Unified cleanup scheduler (handles all tables)
   await scheduleAllCleanups(config, env, ctx);
 
   if (request.method === 'HEAD') {
+    const cfResponse = await maybeEnforceCfRateLimiter();
+    if (cfResponse) {
+      return cfResponse;
+    }
     return new Response(null, {
       status: 200,
       headers: {
@@ -3591,6 +3584,8 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
   }
 
   const url = new URL(request.url);
+  const encodedPath = url.pathname;
+  const sign = url.searchParams.get('sign') || '';
 
   // Check blacklist/whitelist
   const action = checkPathListAction(url.pathname, config);
@@ -3618,23 +3613,25 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
   const fastRedirectCandidate = forceRedirect || (config.fastRedirect && !forceWeb && !needsVerification);
   const shouldRedirect = fastRedirectCandidate;
 
+  let decodedPath = '';
+  try {
+    decodedPath = decodeURIComponent(encodedPath);
+  } catch (error) {
+    return respondJson(origin, { code: 400, message: 'invalid path encoding' }, 400);
+  }
+
+  const verifyResult = await verifySignature(config.signSecret, decodedPath, sign);
+  if (verifyResult) {
+    return respondJson(origin, { code: 401, message: verifyResult }, 401);
+  }
+
+  const cfRateLimitResponse = await maybeEnforceCfRateLimiter();
+  if (cfRateLimitResponse) {
+    return cfRateLimitResponse;
+  }
+
   // Fast redirect logic
   if (shouldRedirect) {
-    const sign = url.searchParams.get('sign') || '';
-    const encodedPath = url.pathname;
-    let decodedPath;
-    try {
-      decodedPath = decodeURIComponent(url.pathname);
-    } catch (error) {
-      return respondJson(origin, { code: 400, message: 'invalid path encoding' }, 400);
-    }
-
-    // Verify signature
-    const verifyResult = await verifySignature(config.signSecret, decodedPath, sign);
-    if (verifyResult) {
-      return respondJson(origin, { code: 401, message: verifyResult }, 401);
-    }
-
     const cacheManager = config.cacheEnabled ? createCacheManager(config.dbMode) : null;
     const cacheConfigWithCtx = cacheManager && config.cacheEnabled
       ? { ...config.cacheConfig, ctx }
@@ -3828,17 +3825,13 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
   const shouldGenerateBindings = !shouldRedirect && (needsAltchaChallenge || needsTurnstileBinding);
   let decodedChallengePath = '';
   if (shouldGenerateBindings) {
-    try {
-      decodedChallengePath = decodeURIComponent(url.pathname);
-    } catch (error) {
-      decodedChallengePath = url.pathname;
-    }
+    decodedChallengePath = decodedPath;
   }
 
   let altchaChallengeDifficulty = pickAltchaBaseDifficulty(config.altchaDifficultyRange);
   let altchaEffectiveExponent = 0;
   if (!shouldRedirect && needsAltchaChallenge) {
-    if (config.altchaDynamicEnabled && clientIP) {
+    if (config.altchaDynamicEnabled && config.dbMode && clientIP) {
       const scope = await computeAltchaIpScope(clientIP, config.ipv4Suffix, config.ipv6Suffix);
       if (scope.ipHash) {
         const nowSeconds = Math.floor(Date.now() / 1000);
@@ -3849,6 +3842,21 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
         }
         altchaChallengeDifficulty = difficultyResult.difficulty;
         altchaEffectiveExponent = difficultyResult.effectiveExponent ?? 0;
+
+        if (scope.ipRange) {
+          const updatePromise = updateAltchaDifficultyState(config, env, scope, nowSeconds)
+            .catch((error) => {
+              console.error(
+                '[ALTCHA Dynamic] Difficulty update failed in handleFileRequest:',
+                error instanceof Error ? error.message : String(error)
+              );
+            });
+          if (ctx && typeof ctx.waitUntil === 'function') {
+            ctx.waitUntil(updatePromise);
+          } else {
+            await updatePromise;
+          }
+        }
       }
     } else {
       altchaChallengeDifficulty = pickAltchaBaseDifficulty(config.altchaDifficultyRange);
