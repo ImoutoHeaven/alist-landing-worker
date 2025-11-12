@@ -2636,8 +2636,8 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
 
   if (needAltcha && altchaPayload) {
     try {
-      const canonicalToken = `${altchaPayload.algorithm}:${altchaPayload.challenge}:${altchaPayload.number}:${altchaPayload.salt}:${altchaPayload.signature}`;
-      altchaTokenHash = await sha256Hash(canonicalToken);
+      const challengeFingerprint = `${altchaPayload.algorithm}:${altchaPayload.challenge}:${altchaPayload.salt}`;
+      altchaTokenHash = await sha256Hash(challengeFingerprint);
     } catch (error) {
       console.error('[ALTCHA] Failed to compute token hash:', error instanceof Error ? error.message : String(error));
       if (hasDbMode) {
@@ -2840,7 +2840,7 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
             const altchaErrorMessages = {
               1: 'ALTCHA token IP mismatch',
               2: 'ALTCHA token expired',
-              3: 'ALTCHA token already used (replay attack detected)',
+              3: 'ALTCHA challenge already solved',
               4: 'ALTCHA token filepath mismatch',
             };
             const message = altchaErrorMessages[altchaResult.errorCode] || 'ALTCHA token validation failed';
