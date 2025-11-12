@@ -2281,7 +2281,6 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
   let altchaScope = clientIP
     ? await computeAltchaIpScope(clientIP, config.ipv4Suffix, config.ipv6Suffix)
     : null;
-  let altchaRequiredExponent = 0;
   if (needAltcha && config.altchaDynamicEnabled && altchaScope?.ipHash) {
     const nowSeconds = Math.floor(Date.now() / 1000);
     const state = await fetchAltchaDifficultyState(config, env, altchaScope.ipHash);
@@ -2289,7 +2288,6 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
     if (difficultyResult.blocked) {
       return respondAltchaBlocked(origin, difficultyResult.retryAfterSeconds);
     }
-    altchaRequiredExponent = difficultyResult.effectiveExponent ?? 0;
   }
 
   const hasDbMode = typeof config.dbMode === 'string'
@@ -2681,10 +2679,6 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
       const expectedScopeHash = altchaScope?.ipHash || '';
       if (pathHashDetails.scopeHash !== expectedScopeHash) {
         return respondJson(origin, { code: 463, message: 'ALTCHA binding scope mismatch' }, 403);
-      }
-      const requiredExponent = normalizeAltchaExponentValue(altchaRequiredExponent);
-      if (pathHashDetails.level < requiredExponent) {
-        return respondJson(origin, { code: 463, message: 'ALTCHA challenge difficulty mismatch' }, 403);
       }
       const canonicalPathHash = pathHashDetails.canonicalValue;
       const expectedBinding = await buildAltchaBinding(
