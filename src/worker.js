@@ -344,6 +344,61 @@ const computeAltchaIpScope = async (clientIP, ipv4Suffix, ipv6Suffix) => {
   }
 };
 
+const ALTCHA_PATH_HASH_VERSION = 1;
+
+const normalizeAltchaExponentValue = (value) => {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return Math.max(0, Math.floor(value));
+  }
+  const parsed = Number.parseInt(value, 10);
+  if (Number.isFinite(parsed)) {
+    return Math.max(0, Math.floor(parsed));
+  }
+  return 0;
+};
+
+const buildAltchaPathBindingValue = (pathHash, scopeHash, difficultyLevel) => {
+  const normalizedPathHash = typeof pathHash === 'string' ? pathHash : '';
+  const normalizedScopeHash = typeof scopeHash === 'string' ? scopeHash : '';
+  const normalizedLevel = normalizeAltchaExponentValue(difficultyLevel);
+  return JSON.stringify({
+    v: ALTCHA_PATH_HASH_VERSION,
+    p: normalizedPathHash,
+    s: normalizedScopeHash,
+    l: normalizedLevel,
+  });
+};
+
+const parseAltchaPathBindingValue = (value) => {
+  if (typeof value !== 'string' || value.length === 0) {
+    return null;
+  }
+  let payload = null;
+  try {
+    payload = JSON.parse(value);
+  } catch (error) {
+    return null;
+  }
+  if (!payload || typeof payload !== 'object') {
+    return null;
+  }
+  const pathHash = typeof payload.p === 'string' ? payload.p : '';
+  if (!pathHash) {
+    return null;
+  }
+  const scopeHash = typeof payload.s === 'string' ? payload.s : '';
+  const level = normalizeAltchaExponentValue(payload.l);
+  const canonicalValue = buildAltchaPathBindingValue(pathHash, scopeHash, level);
+  const version = Number.isFinite(payload.v) ? Number(payload.v) : ALTCHA_PATH_HASH_VERSION;
+  return {
+    version,
+    pathHash,
+    scopeHash,
+    level,
+    canonicalValue,
+  };
+};
+
 const resolveD1DatabaseBinding = (config, env) => {
   const envSource = config.cacheConfig?.env || config.rateLimitConfig?.env || env;
   const bindingName = config.cacheConfig?.databaseBinding || config.rateLimitConfig?.databaseBinding || 'DB';
@@ -2223,18 +2278,18 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
     needTurnstile = parsedNeeds.needTurnstile;
   }
 
-  let altchaScope = null;
-  if (needAltcha && config.altchaDynamicEnabled && clientIP) {
-    const scopeCandidate = await computeAltchaIpScope(clientIP, config.ipv4Suffix, config.ipv6Suffix);
-    if (scopeCandidate.ipHash) {
-      const nowSeconds = Math.floor(Date.now() / 1000);
-      const state = await fetchAltchaDifficultyState(config, env, scopeCandidate.ipHash);
-      const difficultyResult = getAltchaDifficultyForClient(state, nowSeconds, config.altchaDynamic);
-      if (difficultyResult.blocked) {
-        return respondAltchaBlocked(origin, difficultyResult.retryAfterSeconds);
-      }
-      altchaScope = scopeCandidate;
+  let altchaScope = clientIP
+    ? await computeAltchaIpScope(clientIP, config.ipv4Suffix, config.ipv6Suffix)
+    : null;
+  let altchaRequiredExponent = 0;
+  if (needAltcha && config.altchaDynamicEnabled && altchaScope?.ipHash) {
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const state = await fetchAltchaDifficultyState(config, env, altchaScope.ipHash);
+    const difficultyResult = getAltchaDifficultyForClient(state, nowSeconds, config.altchaDynamic);
+    if (difficultyResult.blocked) {
+      return respondAltchaBlocked(origin, difficultyResult.retryAfterSeconds);
     }
+    altchaRequiredExponent = difficultyResult.effectiveExponent ?? 0;
   }
 
   const hasDbMode = typeof config.dbMode === 'string'
@@ -2607,21 +2662,40 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
         return respondJson(origin, { code: 403, message: 'ALTCHA binding missing' }, 403);
       }
 
+      const pathHashDetails = parseAltchaPathBindingValue(payloadPathHash);
+      if (!pathHashDetails) {
+        return respondJson(origin, { code: 463, message: 'ALTCHA binding path invalid' }, 403);
+      }
+      if (pathHashDetails.canonicalValue !== payloadPathHash) {
+        return respondJson(origin, { code: 463, message: 'ALTCHA binding path tampered' }, 403);
+      }
       const expectedPathHash = typeof filepathHash === 'string' ? filepathHash : '';
       const expectedIpHash = await computeClientIpHash(clientIP);
       const nowSeconds = Math.floor(Date.now() / 1000);
       if (payloadBindingExpiresAt < nowSeconds) {
         return respondJson(origin, { code: 463, message: 'ALTCHA binding expired' }, 403);
       }
+      if (!expectedPathHash || pathHashDetails.pathHash !== expectedPathHash) {
+        return respondJson(origin, { code: 463, message: 'ALTCHA binding path mismatch' }, 403);
+      }
+      const expectedScopeHash = altchaScope?.ipHash || '';
+      if (pathHashDetails.scopeHash !== expectedScopeHash) {
+        return respondJson(origin, { code: 463, message: 'ALTCHA binding scope mismatch' }, 403);
+      }
+      const requiredExponent = normalizeAltchaExponentValue(altchaRequiredExponent);
+      if (pathHashDetails.level < requiredExponent) {
+        return respondJson(origin, { code: 463, message: 'ALTCHA challenge difficulty mismatch' }, 403);
+      }
+      const canonicalPathHash = pathHashDetails.canonicalValue;
       const expectedBinding = await buildAltchaBinding(
         config.pageSecret,
-        expectedPathHash,
+        canonicalPathHash,
         expectedIpHash,
         payloadBindingExpiresAt,
         payloadSalt
       );
       const bindingMismatch =
-        payloadPathHash !== expectedBinding.pathHash ||
+        canonicalPathHash !== expectedBinding.pathHash ||
         payloadIpHash !== expectedBinding.ipHash ||
         payloadBindingMac !== expectedBinding.bindingMac ||
         payloadBindingExpiresAt !== expectedBinding.expiresAt;
@@ -3828,34 +3902,36 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
     decodedChallengePath = decodedPath;
   }
 
+  let altchaScopeForChallenge = null;
+  if (!shouldRedirect && needsAltchaChallenge && clientIP) {
+    altchaScopeForChallenge = await computeAltchaIpScope(clientIP, config.ipv4Suffix, config.ipv6Suffix);
+  }
+
   let altchaChallengeDifficulty = pickAltchaBaseDifficulty(config.altchaDifficultyRange);
   let altchaEffectiveExponent = 0;
   if (!shouldRedirect && needsAltchaChallenge) {
-    if (config.altchaDynamicEnabled && config.dbMode && clientIP) {
-      const scope = await computeAltchaIpScope(clientIP, config.ipv4Suffix, config.ipv6Suffix);
-      if (scope.ipHash) {
-        const nowSeconds = Math.floor(Date.now() / 1000);
-        const state = await fetchAltchaDifficultyState(config, env, scope.ipHash);
-        const difficultyResult = getAltchaDifficultyForClient(state, nowSeconds, config.altchaDynamic);
-        if (difficultyResult.blocked) {
-          return respondAltchaBlocked(origin, difficultyResult.retryAfterSeconds);
-        }
-        altchaChallengeDifficulty = difficultyResult.difficulty;
-        altchaEffectiveExponent = difficultyResult.effectiveExponent ?? 0;
+    if (config.altchaDynamicEnabled && config.dbMode && altchaScopeForChallenge?.ipHash) {
+      const nowSeconds = Math.floor(Date.now() / 1000);
+      const state = await fetchAltchaDifficultyState(config, env, altchaScopeForChallenge.ipHash);
+      const difficultyResult = getAltchaDifficultyForClient(state, nowSeconds, config.altchaDynamic);
+      if (difficultyResult.blocked) {
+        return respondAltchaBlocked(origin, difficultyResult.retryAfterSeconds);
+      }
+      altchaChallengeDifficulty = difficultyResult.difficulty;
+      altchaEffectiveExponent = difficultyResult.effectiveExponent ?? 0;
 
-        if (scope.ipRange) {
-          const updatePromise = updateAltchaDifficultyState(config, env, scope, nowSeconds)
-            .catch((error) => {
-              console.error(
-                '[ALTCHA Dynamic] Difficulty update failed in handleFileRequest:',
-                error instanceof Error ? error.message : String(error)
-              );
-            });
-          if (ctx && typeof ctx.waitUntil === 'function') {
-            ctx.waitUntil(updatePromise);
-          } else {
-            await updatePromise;
-          }
+      if (altchaScopeForChallenge.ipRange) {
+        const updatePromise = updateAltchaDifficultyState(config, env, altchaScopeForChallenge, nowSeconds)
+          .catch((error) => {
+            console.error(
+              '[ALTCHA Dynamic] Difficulty update failed in handleFileRequest:',
+              error instanceof Error ? error.message : String(error)
+            );
+          });
+        if (ctx && typeof ctx.waitUntil === 'function') {
+          ctx.waitUntil(updatePromise);
+        } else {
+          await updatePromise;
         }
       }
     } else {
@@ -3911,7 +3987,13 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
 
   if (!shouldRedirect && needsAltchaChallenge) {
     try {
-      const challengePathHash = decodedChallengePath ? await sha256Hash(decodedChallengePath) : '';
+      const baseChallengePathHash = decodedChallengePath ? await sha256Hash(decodedChallengePath) : '';
+      const scopeHashForBinding = altchaScopeForChallenge?.ipHash || '';
+      const challengePathHash = buildAltchaPathBindingValue(
+        baseChallengePathHash,
+        scopeHashForBinding,
+        altchaEffectiveExponent
+      );
       const challengeIpHash = await computeClientIpHash(clientIP);
       const baseNowSeconds = Math.floor(Date.now() / 1000);
       const configuredTtlSeconds = Number.isFinite(config.altchaTokenExpire) && config.altchaTokenExpire > 0
