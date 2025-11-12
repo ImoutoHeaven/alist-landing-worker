@@ -3915,17 +3915,13 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
       altchaEffectiveExponent = difficultyResult.effectiveExponent ?? 0;
 
       if (altchaScopeForChallenge.ipRange) {
-        const updatePromise = updateAltchaDifficultyState(config, env, altchaScopeForChallenge, nowSeconds)
-          .catch((error) => {
-            console.error(
-              '[ALTCHA Dynamic] Difficulty update failed in handleFileRequest:',
-              error instanceof Error ? error.message : String(error)
-            );
-          });
-        if (ctx && typeof ctx.waitUntil === 'function') {
-          ctx.waitUntil(updatePromise);
-        } else {
-          await updatePromise;
+        try {
+          await updateAltchaDifficultyState(config, env, altchaScopeForChallenge, nowSeconds);
+        } catch (error) {
+          console.error(
+            '[ALTCHA Dynamic] Difficulty update failed in handleFileRequest:',
+            error instanceof Error ? error.message : String(error)
+          );
         }
       }
     } else {
