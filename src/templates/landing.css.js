@@ -81,6 +81,14 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+.web-only {
+  display: none;
+}
+
+body.web-downloader-active .web-only {
+  display: block;
+}
+
 /* ========== Loading Spinner ========== */
 @keyframes spin {
   from { transform: rotate(0deg); }
@@ -134,6 +142,45 @@ main {
   margin: 0 auto;
 }
 
+.metric {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  margin-top: var(--spacing-sm);
+}
+
+.metric-label {
+  flex: 0 0 90px;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.metric-bar {
+  position: relative;
+  flex: 1;
+  height: 10px;
+  border-radius: var(--radius-full);
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.metric-bar span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  height: 100%;
+  width: 0%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgba(56, 189, 248, 0.95), rgba(59, 130, 246, 0.9));
+  transition: width var(--transition-base);
+}
+
+.metric-value {
+  width: 60px;
+  text-align: right;
+  font-weight: 600;
+  font-size: var(--font-size-sm);
+}
+
 /* ========== Turnstile Section ========== */
 .turnstile-section {
   margin: var(--spacing-lg) 0 0;
@@ -181,6 +228,14 @@ main {
   flex-wrap: wrap;
   gap: var(--spacing-xs);
   margin: var(--spacing-lg) 0;
+}
+
+.controls .web-only {
+  display: none;
+}
+
+body.web-downloader-active .controls .web-only {
+  display: inline-flex;
 }
 
 button {
@@ -346,6 +401,81 @@ button:active:not(:disabled)::after {
 
 .advanced-actions button {
   width: 100%;
+}
+
+.advanced-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--spacing-sm);
+}
+
+.advanced-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.advanced-grid input {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 0.4rem 0.6rem;
+  background: rgba(255, 255, 255, 0.05);
+  color: inherit;
+}
+
+.keygen-panel {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--spacing-md);
+  background: rgba(255, 255, 255, 0.02);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+.keygen-panel h3 {
+  margin: 0;
+  font-size: var(--font-size-md);
+}
+
+.keygen-panel label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.keygen-panel input {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 0.4rem 0.6rem;
+  background: rgba(255, 255, 255, 0.05);
+  color: inherit;
+}
+
+.keygen-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+}
+
+.keygen-status {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.keygen-panel pre {
+  margin: 0;
+  border-radius: var(--radius-md);
+  background: rgba(0, 0, 0, 0.25);
+  padding: var(--spacing-xs);
+  font-size: var(--font-size-xs);
+  min-height: 60px;
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 
 /* ========== Log Section ========== */

@@ -16,6 +16,7 @@ export const htmlTemplate = `<!DOCTYPE html>
     <title>{{TITLE}}</title>
     <style>{{STYLES}}</style>
     <script src="https://cdn.jsdelivr.net/npm/dexie@3.2.4/dist/dexie.min.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/tweetnacl@1.0.3/nacl-fast.min.js" crossorigin="anonymous"></script>
   </head>
   <body>
     <header>
@@ -23,12 +24,24 @@ export const htmlTemplate = `<!DOCTYPE html>
       <div class="status" id="status">准备就绪</div>
     </header>
     <main>
+      <section class="metric web-only">
+        <div class="metric-label">下载进度</div>
+        <div class="metric-bar"><span id="downloadBar"></span></div>
+        <div class="metric-value" id="downloadText">0%</div>
+      </section>
+      <section class="metric web-only">
+        <div class="metric-label">解密进度</div>
+        <div class="metric-bar"><span id="decryptBar"></span></div>
+        <div class="metric-value" id="decryptText">0%</div>
+      </section>
+      <div class="status web-only">当前速度：<span id="speedText">--</span></div>
       <section class="turnstile-section" id="turnstileSection">
         <div id="turnstileContainer" class="turnstile-container" hidden></div>
         <div id="turnstileMessage" class="turnstile-message" hidden></div>
       </section>
       <div class="controls">
         <button id="downloadBtn" disabled><span class="spinner"></span>加载中</button>
+        <button id="cancelBtn" class="web-only" disabled>取消</button>
         <button id="retryBtn" disabled>重试</button>
         <button id="advancedToggle" class="secondary" type="button">高级选项</button>
       </div>
@@ -40,6 +53,39 @@ export const htmlTemplate = `<!DOCTYPE html>
         <div class="advanced-body">
           <div class="advanced-actions">
             <button id="clearCacheBtn" disabled>清理缓存</button>
+            <button id="retryFailedSegmentsBtn" class="web-only" disabled>重试失败片段</button>
+            <button id="clearEnvBtn" class="web-only" disabled>清理所有任务</button>
+          </div>
+          <div class="advanced-grid web-only">
+            <label>
+              最大并发连接
+              <input id="connectionLimitInput" type="number" min="1" max="16" value="4" />
+            </label>
+            <label>
+              分段重试次数
+              <input id="retryLimitInput" type="text" value="10" />
+            </label>
+            <label>
+              并行解密线程
+              <input id="parallelLimitInput" type="number" min="1" max="32" value="6" />
+            </label>
+          </div>
+          <div class="keygen-panel web-only">
+            <h3>crypt keygen</h3>
+            <label>
+              password1
+              <input id="keygenPassword" type="password" autocomplete="off" />
+            </label>
+            <label>
+              password2 (可选)
+              <input id="keygenSalt" type="text" autocomplete="off" />
+            </label>
+            <div class="keygen-actions">
+              <button id="keygenRun" type="button">生成</button>
+              <span id="keygenStatus" class="keygen-status"></span>
+            </div>
+            <pre id="keygenOutput"></pre>
+            <button id="keygenCopy" type="button">复制结果</button>
           </div>
         </div>
       </aside>
@@ -52,6 +98,7 @@ export const htmlTemplate = `<!DOCTYPE html>
     <script>
       window.__ALIST_SECURITY__ = {{SECURITY_JSON}};
       window.__AUTO_REDIRECT__ = {{AUTO_REDIRECT}};
+      window.__WEB_DOWNLOADER_PROPS__ = {{WEB_DOWNLOADER_JSON}};
     </script>
     <script type="module">
       {{SCRIPT}}

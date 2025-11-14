@@ -40,11 +40,21 @@ const VALID_ACTIONS = [
   'verify-pow',
   'verify-turn',
   'verify-both',
+  'verify-web-download',
+  'pass-web-download',
   'pass-web',
   'pass-server',
   'pass-asis',
 ];
 const VALID_ACTIONS_SET = new Set(VALID_ACTIONS);
+
+const DEFAULT_CRYPT_FILE_HEADER_SIZE = 32;
+const DEFAULT_CRYPT_BLOCK_HEADER_SIZE = 16;
+const DEFAULT_CRYPT_BLOCK_DATA_SIZE = 64 * 1024;
+const DEFAULT_WEB_DOWNLOADER_MAX_CONNECTIONS = 4;
+const MIN_WEB_DOWNLOADER_MAX_CONNECTIONS = 1;
+const MAX_WEB_DOWNLOADER_MAX_CONNECTIONS = 16;
+const CRYPT_DATA_KEY_LENGTH = 32;
 
 const ALTCHA_DEFAULT_BASE_DIFFICULTY = 250000;
 const ALTCHA_DIFFICULTY_TABLE = 'ALTCHA_DIFFICULTY_STATE';
@@ -62,6 +72,33 @@ const getNormalizedDbMode = (config) => {
 
 let ipRateLimitDisabledLogged = false;
 
+const hexToUint8Array = (hexString) => {
+  if (typeof hexString !== 'string') {
+    return null;
+  }
+  let normalized = hexString.trim();
+  if (!normalized) {
+    return null;
+  }
+  if (normalized.startsWith('0x') || normalized.startsWith('0X')) {
+    normalized = normalized.slice(2);
+  }
+  if (normalized.length % 2 !== 0) {
+    throw new Error('CRYPT_DATA_KEY must be an even-length hex string');
+  }
+  const byteLength = normalized.length / 2;
+  const result = new Uint8Array(byteLength);
+  for (let i = 0; i < byteLength; i += 1) {
+    const byteHex = normalized.slice(i * 2, i * 2 + 2);
+    const byteValue = Number.parseInt(byteHex, 16);
+    if (Number.isNaN(byteValue)) {
+      throw new Error(`CRYPT_DATA_KEY contains invalid hex characters near "${byteHex}"`);
+    }
+    result[i] = byteValue;
+  }
+  return result;
+};
+
 /**
  * 解析 ACTION 值为验证需求对象
  * @param {string} action - ACTION 值
@@ -69,6 +106,10 @@ let ipRateLimitDisabledLogged = false;
  * @returns {{needAltcha: boolean, needTurnstile: boolean}}
  */
 function parseVerificationNeeds(action, config) {
+  const defaultNeeds = {
+    needAltcha: !!(config && config.altchaEnabled),
+    needTurnstile: !!(config && config.underAttack),
+  };
   switch (action) {
     case 'verify-pow':
       return { needAltcha: true, needTurnstile: false };
@@ -76,7 +117,10 @@ function parseVerificationNeeds(action, config) {
       return { needAltcha: false, needTurnstile: true };
     case 'verify-both':
       return { needAltcha: true, needTurnstile: true };
+    case 'verify-web-download':
+      return defaultNeeds;
     case 'block':
+    case 'pass-web-download':
     case 'pass-web':
     case 'pass-server':
     case 'pass-asis':
@@ -98,6 +142,9 @@ function ensureValidActionValue(action) {
   }
   if (action === 'verify') {
     throw new Error('Invalid ACTION value: "verify". Please use verify-pow, verify-turn, or verify-both.');
+  }
+  if (action === 'web-download') {
+    throw new Error('Invalid ACTION value: "web-download". Please use verify-web-download or pass-web-download.');
   }
   if (!VALID_ACTIONS_SET.has(action)) {
     throw new Error(`Invalid ACTION value: "${action}". Valid actions: ${VALID_ACTIONS.join(', ')}`);
@@ -554,6 +601,9 @@ const resolveConfig = (env = {}) => {
     if (normalizedAction === 'verify') {
       throw new Error(`${paramName} value "verify" is no longer supported. Please use verify-pow, verify-turn, or verify-both.`);
     }
+    if (normalizedAction === 'web-download') {
+      throw new Error(`${paramName} value "web-download" has been replaced by verify-web-download or pass-web-download.`);
+    }
     if (!VALID_ACTIONS_SET.has(normalizedAction)) {
       throw new Error(`${paramName} must be one of: ${VALID_ACTIONS.join(', ')}`);
     }
@@ -603,6 +653,54 @@ const resolveConfig = (env = {}) => {
 
       exceptAction = actionPart;
     }
+  }
+
+  const cryptPrefix = normalizeString(env.CRYPT_PREFIX);
+  const cryptIncludes = parsePrefixList(env.CRYPT_INCLUDES);
+  const webDownloaderEnabled = parseBoolean(env.WEB_DOWNLOADER_ENABLED, false);
+  let webDownloaderMaxConnections = parseInteger(
+    env.WEB_DOWNLOADER_MAX_CONNECTIONS,
+    DEFAULT_WEB_DOWNLOADER_MAX_CONNECTIONS
+  );
+  if (!Number.isFinite(webDownloaderMaxConnections) || webDownloaderMaxConnections <= 0) {
+    webDownloaderMaxConnections = DEFAULT_WEB_DOWNLOADER_MAX_CONNECTIONS;
+  }
+  webDownloaderMaxConnections = Math.max(
+    MIN_WEB_DOWNLOADER_MAX_CONNECTIONS,
+    Math.min(MAX_WEB_DOWNLOADER_MAX_CONNECTIONS, Math.floor(webDownloaderMaxConnections))
+  );
+  const cryptEncryptionMode = normalizeString(env.CRYPT_ENCRYPTION_MODE, 'crypt') || 'crypt';
+  let cryptFileHeaderSize = parseInteger(
+    env.CRYPT_FILE_HEADER_SIZE,
+    DEFAULT_CRYPT_FILE_HEADER_SIZE
+  );
+  if (!Number.isFinite(cryptFileHeaderSize) || cryptFileHeaderSize <= 0) {
+    cryptFileHeaderSize = DEFAULT_CRYPT_FILE_HEADER_SIZE;
+  }
+  let cryptBlockHeaderSize = parseInteger(
+    env.CRYPT_BLOCK_HEADER_SIZE,
+    DEFAULT_CRYPT_BLOCK_HEADER_SIZE
+  );
+  if (!Number.isFinite(cryptBlockHeaderSize) || cryptBlockHeaderSize <= 0) {
+    cryptBlockHeaderSize = DEFAULT_CRYPT_BLOCK_HEADER_SIZE;
+  }
+  let cryptBlockDataSize = parseInteger(
+    env.CRYPT_BLOCK_DATA_SIZE,
+    DEFAULT_CRYPT_BLOCK_DATA_SIZE
+  );
+  if (!Number.isFinite(cryptBlockDataSize) || cryptBlockDataSize <= 0) {
+    cryptBlockDataSize = DEFAULT_CRYPT_BLOCK_DATA_SIZE;
+  }
+  const rawCryptDataKey = normalizeString(env.CRYPT_DATA_KEY);
+  let cryptDataKeyBase64 = '';
+  if (rawCryptDataKey) {
+    const dataKeyBytes = hexToUint8Array(rawCryptDataKey);
+    if (!dataKeyBytes || dataKeyBytes.length !== CRYPT_DATA_KEY_LENGTH) {
+      throw new Error(`CRYPT_DATA_KEY must be a ${CRYPT_DATA_KEY_LENGTH * 2}-character hex string`);
+    }
+    cryptDataKeyBase64 = uint8ToBase64(dataKeyBytes);
+  } else if (webDownloaderEnabled) {
+    throw new Error('CRYPT_DATA_KEY is required when WEB_DOWNLOADER_ENABLED is true');
   }
 
   // Parse database mode for rate limiting
@@ -1031,6 +1129,17 @@ const resolveConfig = (env = {}) => {
     idlePostgrestUrl,
     idleTableName,
     initTables,
+    crypt: {
+      prefix: cryptPrefix || '',
+      includes: cryptIncludes,
+      encryptionMode: cryptEncryptionMode,
+      fileHeaderSize: cryptFileHeaderSize,
+      blockHeaderSize: cryptBlockHeaderSize,
+      blockDataSize: cryptBlockDataSize,
+      dataKeyBase64: cryptDataKeyBase64,
+    },
+    webDownloaderEnabled,
+    webDownloaderMaxConnections,
     env,
   };
 };
@@ -2185,6 +2294,28 @@ const checkPathListAction = (path, config) => {
   return null;
 };
 
+const isCryptPath = (decodedPath, cryptConfig) => {
+  if (!decodedPath || typeof decodedPath !== 'string' || !cryptConfig) {
+    return false;
+  }
+  const normalizedPath = decodedPath;
+  if (cryptConfig.prefix && normalizedPath.startsWith(cryptConfig.prefix)) {
+    return true;
+  }
+  if (Array.isArray(cryptConfig.includes)) {
+    for (const entry of cryptConfig.includes) {
+      if (entry && normalizedPath.includes(entry)) {
+        return true;
+      }
+    }
+  }
+  return false;
+};
+
+const parseWebDownloadPolicy = (action) => ({
+  forceWebDownloader: action === 'verify-web-download' || action === 'pass-web-download',
+});
+
 const handleOptions = (request) => new Response(null, { headers: safeHeaders(request.headers.get('Origin')) });
 
 const handleInfo = async (request, env, config, rateLimiter, ctx) => {
@@ -2268,6 +2399,9 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
   if (action === 'block') {
     return respondJson(origin, { code: 403, message: 'access denied' }, 403);
   }
+
+  const { forceWebDownloader } = parseWebDownloadPolicy(action);
+  const isCrypt = isCryptPath(decodedPath, config.crypt);
 
   let needAltcha = config.altchaEnabled;
   let needTurnstile = config.underAttack;
@@ -3069,6 +3203,9 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
     fileInfo,
   }, ctx);
 
+  const needWebDownloader =
+    config.webDownloaderEnabled && (isCrypt || forceWebDownloader);
+
   const responsePayload = {
     code: 200,
     data: {
@@ -3083,6 +3220,41 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
       },
     },
   };
+  if (needWebDownloader) {
+    const encryptionMode = isCrypt ? (config.crypt?.encryptionMode || 'crypt') : 'plain';
+    const fileHeaderSize = isCrypt ? config.crypt?.fileHeaderSize || 0 : 0;
+    const blockHeaderSize = isCrypt ? config.crypt?.blockHeaderSize || 0 : 0;
+    const blockDataSize = isCrypt ? config.crypt?.blockDataSize || 0 : 0;
+    const dataKeyBase64 = isCrypt ? config.crypt?.dataKeyBase64 || '' : '';
+    const length = Number.isFinite(sizeBytes) ? sizeBytes : null;
+    let urlBase64 = '';
+    try {
+      urlBase64 = btoa(downloadURL);
+    } catch (error) {
+      urlBase64 = '';
+    }
+    responsePayload.data.download.remote = {
+      url: downloadURL,
+      method: 'GET',
+      headers: {},
+      length,
+      concurrency: config.webDownloaderMaxConnections,
+    };
+    responsePayload.data.download.urlBase64 = urlBase64;
+    responsePayload.data.download.meta = {
+      encryption: encryptionMode,
+      fileHeaderSize,
+      blockHeaderSize,
+      blockDataSize,
+      dataKey: dataKeyBase64,
+    };
+    responsePayload.data.download.settings = {
+      webDownloader: true,
+      maxConnections: config.webDownloaderMaxConnections,
+    };
+    responsePayload.data.settings.webDownloader = true;
+    responsePayload.data.meta.isCrypt = isCrypt;
+  }
   if (needAltcha && altchaTokenHash && canUseUnified) {
     ctx.waitUntil(
       (async () => {
@@ -3663,6 +3835,16 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
     return respondJson(request.headers.get('origin') || '*', { code: 403, message: 'access denied' }, 403);
   }
 
+  let decodedPath = '';
+  try {
+    decodedPath = decodeURIComponent(encodedPath);
+  } catch (error) {
+    return respondJson(origin, { code: 400, message: 'invalid path encoding' }, 400);
+  }
+
+  const { forceWebDownloader } = parseWebDownloadPolicy(action);
+  const isCrypt = isCryptPath(decodedPath, config.crypt);
+
   // Determine behavior based on action
   const forceWeb = action === 'pass-web';
   const forceRedirect = action === 'pass-server';
@@ -3677,16 +3859,13 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
   }
 
   const needsVerification = needAltcha || needTurnstile;
+  const needWebDownloader =
+    config.webDownloaderEnabled && (isCrypt || forceWebDownloader);
 
-  const fastRedirectCandidate = forceRedirect || (config.fastRedirect && !forceWeb && !needsVerification);
+  const fastRedirectCandidate =
+    !needWebDownloader &&
+    (forceRedirect || (config.fastRedirect && !forceWeb && !needsVerification));
   const shouldRedirect = fastRedirectCandidate;
-
-  let decodedPath = '';
-  try {
-    decodedPath = decodeURIComponent(encodedPath);
-  } catch (error) {
-    return respondJson(origin, { code: 400, message: 'invalid path encoding' }, 400);
-  }
 
   const verifyResult = await verifySignature(config.signSecret, decodedPath, sign);
   if (verifyResult) {
@@ -4026,6 +4205,11 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
     altchaChallenge: altchaChallengePayload,
     turnstileBinding: turnstileBindingPayload,
     autoRedirect: config.autoRedirect,
+    webDownloader: needWebDownloader,
+    isCryptPath: isCrypt,
+    webDownloaderConfig: {
+      maxConnections: config.webDownloaderMaxConnections,
+    },
   });
 };
 
