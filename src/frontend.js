@@ -64,6 +64,15 @@ const pageScript = String.raw`
     logEl.scrollTop = logEl.scrollHeight;
   };
 
+  let autoRedirectWebNoticeShown = false;
+  const notifyAutoRedirectForWeb = () => {
+    if (!autoRedirectEnabled || autoRedirectWebNoticeShown) {
+      return;
+    }
+    autoRedirectWebNoticeShown = true;
+    // No need to log, status already shows "准备就绪"
+  };
+
   const setStatus = (text) => {
     statusEl.textContent = text;
     log(text);
@@ -296,6 +305,9 @@ const pageScript = String.raw`
     const DEFAULT_SEGMENT_RETRY_LIMIT = 10;
     const INFINITE_RETRY_TOKEN = 'inf';
     const RETRY_DELAY_MS = 20000;
+    const HTTP429_BASE_DELAY_MS = 1000;
+    const HTTP429_SILENT_RETRY_LIMIT = 9;
+    const HTTP429_MAX_DELAY_MS = 10000;
     const MIN_PARALLEL_THREADS = 1;
     const MAX_PARALLEL_THREADS = 32;
     const DEFAULT_PARALLEL_THREADS = 6;
@@ -1209,18 +1221,33 @@ const pageScript = String.raw`
           const retryLimit = state.segmentRetryLimit;
           const shouldRetry = Number.isFinite(retryLimit) ? attempt <= retryLimit : true;
           if (shouldRetry) {
-            log(
-              '分段 #' +
-                (segment.index + 1) +
-                ' 下载失败：' +
-                message +
-                '，将在 ' +
-                (RETRY_DELAY_MS / 1000).toFixed(0) +
-                ' 秒后重试（第 ' +
-                attempt +
-                ' 次）'
-            );
-            await sleep(RETRY_DELAY_MS);
+            const isHttp429 = typeof message === 'string' && message.includes('HTTP 429');
+            let retryDelayMs = RETRY_DELAY_MS;
+            let shouldLogRetry = true;
+            if (isHttp429) {
+              if (attempt <= HTTP429_SILENT_RETRY_LIMIT) {
+                retryDelayMs = HTTP429_BASE_DELAY_MS;
+                shouldLogRetry = false;
+              } else {
+                const exponent = attempt - HTTP429_SILENT_RETRY_LIMIT;
+                const exponentialDelay = HTTP429_BASE_DELAY_MS * Math.pow(2, Math.max(0, exponent - 1));
+                retryDelayMs = Math.min(HTTP429_MAX_DELAY_MS, exponentialDelay);
+              }
+            }
+            if (shouldLogRetry) {
+              log(
+                '分段 #' +
+                  (segment.index + 1) +
+                  ' 下载失败：' +
+                  message +
+                  '，将在 ' +
+                  (retryDelayMs / 1000).toFixed(0) +
+                  ' 秒后重试（第 ' +
+                  attempt +
+                  ' 次）'
+              );
+            }
+            await sleep(retryDelayMs);
             continue;
           }
           recordSegmentFailure(segment, message);
@@ -2444,13 +2471,14 @@ const pageScript = String.raw`
         const cached = await webDownloader.prepareFromCache({
           path,
           sign,
-          autoStart: autoRedirectEnabled,
+          autoStart: false,
         });
         if (cached) {
           warmedFromCache = true;
           state.mode = 'web';
           state.infoReady = true;
           setStatus('已从缓存恢复下载任务，正在刷新最新信息...');
+          notifyAutoRedirectForWeb();
         }
       } catch (cacheError) {
         console.warn('从缓存恢复 webDownloader 失败', cacheError);
@@ -2553,7 +2581,7 @@ const pageScript = String.raw`
     }
 
     if (infoData.settings?.webDownloader) {
-      const shouldAutoStart = autoRedirectEnabled && !warmedFromCache;
+      const shouldAutoStart = false; // webDownloader requires an explicit user gesture
       await webDownloader.refreshFromInfo(infoData, {
         autoStart: shouldAutoStart,
         path,
@@ -2561,6 +2589,7 @@ const pageScript = String.raw`
       });
       state.mode = 'web';
       state.infoReady = true;
+      notifyAutoRedirectForWeb();
       return;
     }
 

@@ -34,11 +34,11 @@ export const htmlTemplate = `<!DOCTYPE html>
         <div class="metric-bar"><span id="decryptBar"></span></div>
         <div class="metric-value" id="decryptText">0%</div>
       </section>
-      <div class="status web-only">当前速度：<span id="speedText">--</span></div>
       <section class="turnstile-section" id="turnstileSection">
         <div id="turnstileContainer" class="turnstile-container" hidden></div>
         <div id="turnstileMessage" class="turnstile-message" hidden></div>
       </section>
+      <div class="status web-only">当前速度：<span id="speedText">--</span></div>
       <div class="controls">
         <button id="downloadBtn" disabled><span class="spinner"></span>加载中</button>
         <button id="cancelBtn" class="web-only" disabled>取消</button>
@@ -56,20 +56,21 @@ export const htmlTemplate = `<!DOCTYPE html>
             <button id="retryFailedSegmentsBtn" class="web-only" disabled>重试失败片段</button>
             <button id="clearEnvBtn" class="web-only" disabled>清理所有任务</button>
           </div>
-          <div class="advanced-grid web-only">
-            <label>
-              最大并发连接
-              <input id="connectionLimitInput" type="number" min="1" max="16" value="4" />
-            </label>
-            <label>
-              分段重试次数
-              <input id="retryLimitInput" type="text" value="10" />
-            </label>
-            <label>
-              并行解密线程
-              <input id="parallelLimitInput" type="number" min="1" max="32" value="6" />
-            </label>
-          </div>
+          <label class="retry-label web-only" for="retryLimitInput">
+            分段重试次数
+            <span class="retry-hint">支持正整数或 inf（无限重试）</span>
+          </label>
+          <input id="retryLimitInput" class="retry-input web-only" type="text" inputmode="numeric" autocomplete="off" value="10">
+          <label class="retry-label web-only" for="parallelLimitInput">
+            并行解密线程数
+            <span class="retry-hint">范围 1-32，默认 6</span>
+          </label>
+          <input id="parallelLimitInput" class="retry-input web-only" type="number" inputmode="numeric" autocomplete="off" min="1" max="32" value="6">
+          <label class="retry-label web-only" for="connectionLimitInput">
+            最大打开连接数
+            <span class="retry-hint">范围 1-16，默认 4</span>
+          </label>
+          <input id="connectionLimitInput" class="retry-input web-only" type="number" inputmode="numeric" autocomplete="off" min="1" max="16" value="4">
           <div class="keygen-panel web-only">
             <h3>crypt keygen</h3>
             <label>
@@ -80,18 +81,18 @@ export const htmlTemplate = `<!DOCTYPE html>
               password2 (可选)
               <input id="keygenSalt" type="text" autocomplete="off" />
             </label>
-            <div class="keygen-actions">
-              <button id="keygenRun" type="button">生成</button>
-              <span id="keygenStatus" class="keygen-status"></span>
+            <button id="keygenRun" type="button">生成密钥</button>
+            <span id="keygenStatus" class="keygen-status"></span>
+            <div class="keygen-output-group">
+              <pre id="keygenOutput"></pre>
+              <button id="keygenCopy" type="button">复制结果</button>
             </div>
-            <pre id="keygenOutput"></pre>
-            <button id="keygenCopy" type="button">复制结果</button>
           </div>
         </div>
       </aside>
       <div id="advancedBackdrop" class="advanced-backdrop" hidden></div>
       <section>
-        <div class="status">事件日志</div>
+        <div class="label">事件日志</div>
         <div class="log" id="log"></div>
       </section>
     </main>
