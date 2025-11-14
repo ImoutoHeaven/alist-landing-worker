@@ -271,12 +271,27 @@ button:disabled {
   width: 100%;
 }
 
+.config-section {
+  padding-top: 0.75rem;
+  border-top: 1px solid rgba(255,255,255,0.06);
+}
+
+.config-section-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #e0f2fe;
+  margin-bottom: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
 .retry-label {
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
-  font-size: 0.95rem;
+  font-size: 0.9rem;
   color: #e0f2fe;
+  margin-bottom: 0.5rem;
 }
 
 .retry-hint {
@@ -285,12 +300,14 @@ button:disabled {
 }
 
 .retry-input {
+  width: 100%;
   background: rgba(15,23,42,0.85);
   border: 1px solid rgba(148,163,184,0.3);
   border-radius: 0.5rem;
   padding: 0.6rem 0.75rem;
   color: #f1f5f9;
   font-size: 0.95rem;
+  margin-bottom: 0.75rem;
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 

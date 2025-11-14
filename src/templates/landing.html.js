@@ -56,21 +56,37 @@ export const htmlTemplate = `<!DOCTYPE html>
             <button id="retryFailedSegmentsBtn" class="web-only" disabled>重试失败片段</button>
             <button id="clearEnvBtn" class="web-only" disabled>清理所有任务</button>
           </div>
-          <label class="retry-label web-only" for="retryLimitInput">
-            分段重试次数
-            <span class="retry-hint">支持正整数或 inf（无限重试）</span>
-          </label>
-          <input id="retryLimitInput" class="retry-input web-only" type="text" inputmode="numeric" autocomplete="off" value="10">
-          <label class="retry-label web-only" for="parallelLimitInput">
-            并行解密线程数
-            <span class="retry-hint">范围 1-32，默认 6</span>
-          </label>
-          <input id="parallelLimitInput" class="retry-input web-only" type="number" inputmode="numeric" autocomplete="off" min="1" max="32" value="6">
-          <label class="retry-label web-only" for="connectionLimitInput">
-            最大打开连接数
-            <span class="retry-hint">范围 1-16，默认 4</span>
-          </label>
-          <input id="connectionLimitInput" class="retry-input web-only" type="number" inputmode="numeric" autocomplete="off" min="1" max="16" value="4">
+          <div class="config-section web-only">
+            <div class="config-section-title">下载配置</div>
+            <label class="retry-label" for="connectionLimitInput">
+              最大打开连接数
+              <span class="retry-hint">范围 1-16，默认 6</span>
+            </label>
+            <input id="connectionLimitInput" class="retry-input" type="number" inputmode="numeric" autocomplete="off" min="1" max="16" value="6">
+            <label class="retry-label" for="segmentSizeInput">
+              分段大小 (MB)
+              <span class="retry-hint">范围 2-32 MB，默认 12 MB</span>
+            </label>
+            <input id="segmentSizeInput" class="retry-input" type="number" inputmode="numeric" autocomplete="off" min="2" max="32" value="12">
+            <label class="retry-label" for="ttfbTimeoutInput">
+              TTFB 超时 (秒)
+              <span class="retry-hint">等待首字节超时，默认 20 秒</span>
+            </label>
+            <input id="ttfbTimeoutInput" class="retry-input" type="number" inputmode="numeric" autocomplete="off" min="5" max="120" value="20">
+            <label class="retry-label" for="retryLimitInput">
+              分段重试次数
+              <span class="retry-hint">支持正整数或 inf（无限重试）</span>
+            </label>
+            <input id="retryLimitInput" class="retry-input" type="text" inputmode="numeric" autocomplete="off" value="30">
+          </div>
+          <div class="config-section web-only">
+            <div class="config-section-title">解密配置</div>
+            <label class="retry-label" for="parallelLimitInput">
+              并行解密线程数
+              <span class="retry-hint">范围 1-32，默认 6</span>
+            </label>
+            <input id="parallelLimitInput" class="retry-input" type="number" inputmode="numeric" autocomplete="off" min="1" max="32" value="6">
+          </div>
           <div class="keygen-panel web-only">
             <h3>crypt keygen</h3>
             <label>

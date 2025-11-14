@@ -39,6 +39,8 @@ const pageScript = String.raw`
   const connectionLimitInput = $('connectionLimitInput');
   const retryLimitInput = $('retryLimitInput');
   const parallelLimitInput = $('parallelLimitInput');
+  const segmentSizeInput = $('segmentSizeInput');
+  const ttfbTimeoutInput = $('ttfbTimeoutInput');
   const downloadBar = $('downloadBar');
   const decryptBar = $('decryptBar');
   const downloadText = $('downloadText');
@@ -114,14 +116,20 @@ const pageScript = String.raw`
       .join('');
 
   if (connectionLimitInput && !connectionLimitInput.value) {
-    const defaultConnections = clamp(Number(webDownloaderProps?.config?.maxConnections) || 4, 1, 16, 4);
+    const defaultConnections = clamp(Number(webDownloaderProps?.config?.maxConnections) || 6, 1, 16, 6);
     connectionLimitInput.value = String(defaultConnections);
   }
   if (retryLimitInput && !retryLimitInput.value) {
-    retryLimitInput.value = '10';
+    retryLimitInput.value = '30';
   }
   if (parallelLimitInput && !parallelLimitInput.value) {
     parallelLimitInput.value = '6';
+  }
+  if (segmentSizeInput && !segmentSizeInput.value) {
+    segmentSizeInput.value = '12';
+  }
+  if (ttfbTimeoutInput && !ttfbTimeoutInput.value) {
+    ttfbTimeoutInput.value = '20';
   }
 
   /**
@@ -211,14 +219,17 @@ const pageScript = String.raw`
   };
 
   const webDownloader = (() => {
-    const SEGMENT_SIZE_BYTES = 32 * 1024 * 1024;
+    const BYTES_PER_MB = 1024 * 1024;
+    const MIN_SEGMENT_SIZE_MB = 2;
+    const MAX_SEGMENT_SIZE_MB = 32;
+    const DEFAULT_SEGMENT_SIZE_MB = 12;
     const MIN_CONNECTIONS = 1;
     const MAX_CONNECTIONS = 16;
     const DEFAULT_CONNECTIONS = clamp(
-      Number(webDownloaderProps?.config?.maxConnections) || 4,
+      Number(webDownloaderProps?.config?.maxConnections) || 6,
       MIN_CONNECTIONS,
       MAX_CONNECTIONS,
-      4
+      6
     );
     const DEFAULT_RETRY_LIMIT = 5;
     const NONCE_SIZE = 24;
@@ -302,15 +313,26 @@ const pageScript = String.raw`
 
     const REQUESTS_PER_SECOND = 4;
     const REQUEST_INTERVAL_MS = Math.floor(1000 / REQUESTS_PER_SECOND);
-    const DEFAULT_SEGMENT_RETRY_LIMIT = 10;
+    const DEFAULT_SEGMENT_RETRY_LIMIT = 30;
     const INFINITE_RETRY_TOKEN = 'inf';
     const RETRY_DELAY_MS = 20000;
     const HTTP429_BASE_DELAY_MS = 1000;
     const HTTP429_SILENT_RETRY_LIMIT = 9;
     const HTTP429_MAX_DELAY_MS = 10000;
+    const MIN_TTFB_TIMEOUT_SECONDS = 5;
+    const MAX_TTFB_TIMEOUT_SECONDS = 120;
+    const DEFAULT_TTFB_TIMEOUT_SECONDS = 20;
     const MIN_PARALLEL_THREADS = 1;
     const MAX_PARALLEL_THREADS = 32;
     const DEFAULT_PARALLEL_THREADS = 6;
+
+    const clampSegmentSizeMb = (value) =>
+      clamp(Number(value), MIN_SEGMENT_SIZE_MB, MAX_SEGMENT_SIZE_MB, DEFAULT_SEGMENT_SIZE_MB);
+    const clampTtfbTimeoutSeconds = (value) =>
+      clamp(Number(value), MIN_TTFB_TIMEOUT_SECONDS, MAX_TTFB_TIMEOUT_SECONDS, DEFAULT_TTFB_TIMEOUT_SECONDS);
+    const toSegmentSizeBytes = (maybeMb) => Math.round(clampSegmentSizeMb(maybeMb) * BYTES_PER_MB);
+    const toTtfbTimeoutMs = (maybeSeconds) =>
+      Math.round(clampTtfbTimeoutSeconds(maybeSeconds) * 1000);
 
     const STORAGE_DB_NAME = 'landing-webdownloader-v2';
     const STORAGE_DB_VERSION = 2;
@@ -504,7 +526,9 @@ const pageScript = String.raw`
       const blockHeader = Number(meta.blockHeaderSize) || 0;
       const fileHeader = Number(meta.fileHeaderSize) || 0;
       const encryption = meta.encryption === 'plain' ? 'plain' : 'crypt';
-      return [size, blockData, blockHeader, fileHeader, encryption].join(':');
+      const segmentSizeBytes =
+        Number(meta.segmentSizeBytes) || DEFAULT_SEGMENT_SIZE_MB * BYTES_PER_MB;
+      return [size, blockData, blockHeader, fileHeader, encryption, segmentSizeBytes].join(':');
     };
 
     const buildCurrentMetaForSignature = () => ({
@@ -513,6 +537,7 @@ const pageScript = String.raw`
       blockHeaderSize: Number(state.blockHeaderSize) || 0,
       fileHeaderSize: Number(state.fileHeaderSize) || 0,
       encryption: state.encryptionMode === 'crypt' ? 'crypt' : 'plain',
+      segmentSizeBytes: toSegmentSizeBytes(state.segmentSizeMb),
     });
 
     const areUint8ArraysEqual = (a, b) => {
@@ -642,6 +667,8 @@ const pageScript = String.raw`
 
     const CONNECTION_SETTING_KEY = 'webdownloader-connections';
     const PARALLEL_SETTING_KEY = 'webdownloader-parallel';
+    const SEGMENT_SIZE_SETTING_KEY = 'webdownloader-segment-size-mb';
+    const TTFB_TIMEOUT_SETTING_KEY = 'webdownloader-ttfb-timeout';
 
     const loadConnectionSetting = async () => {
       const stored = await loadSettingValue(CONNECTION_SETTING_KEY);
@@ -661,12 +688,38 @@ const pageScript = String.raw`
       return parsed;
     };
 
+    const loadSegmentSizeSetting = async () => {
+      const stored = await loadSettingValue(SEGMENT_SIZE_SETTING_KEY);
+      if (!stored) return null;
+      const parsed = Number.parseInt(stored, 10);
+      if (!Number.isFinite(parsed)) return null;
+      if (parsed < MIN_SEGMENT_SIZE_MB || parsed > MAX_SEGMENT_SIZE_MB) return null;
+      return parsed;
+    };
+
+    const loadTtfbTimeoutSetting = async () => {
+      const stored = await loadSettingValue(TTFB_TIMEOUT_SETTING_KEY);
+      if (!stored) return null;
+      const parsed = Number.parseInt(stored, 10);
+      if (!Number.isFinite(parsed)) return null;
+      if (parsed < MIN_TTFB_TIMEOUT_SECONDS || parsed > MAX_TTFB_TIMEOUT_SECONDS) return null;
+      return parsed;
+    };
+
     const persistConnectionSetting = (value) => {
       persistSettingValue(CONNECTION_SETTING_KEY, value);
     };
 
     const persistParallelSetting = (value) => {
       persistSettingValue(PARALLEL_SETTING_KEY, value);
+    };
+
+    const persistSegmentSizeSetting = (valueMb) => {
+      persistSettingValue(SEGMENT_SIZE_SETTING_KEY, valueMb);
+    };
+
+    const persistTtfbTimeoutSetting = (valueSeconds) => {
+      persistSettingValue(TTFB_TIMEOUT_SETTING_KEY, valueSeconds);
     };
 
     const ensureHandlePermission = async (handle) => {
@@ -752,6 +805,10 @@ const pageScript = String.raw`
       connectionLimit: DEFAULT_CONNECTIONS,
       segmentRetryLimit: DEFAULT_SEGMENT_RETRY_LIMIT,
       segmentRetryRaw: String(DEFAULT_SEGMENT_RETRY_LIMIT),
+      segmentSizeMb: DEFAULT_SEGMENT_SIZE_MB,
+      segmentSizeRaw: String(DEFAULT_SEGMENT_SIZE_MB),
+      ttfbTimeoutSeconds: DEFAULT_TTFB_TIMEOUT_SECONDS,
+      ttfbTimeoutRaw: String(DEFAULT_TTFB_TIMEOUT_SECONDS),
       decryptParallelism: DEFAULT_PARALLEL_THREADS,
       decryptParallelRaw: String(DEFAULT_PARALLEL_THREADS),
       workflowPromise: null,
@@ -760,9 +817,11 @@ const pageScript = String.raw`
 
     const hydrateStoredSettings = async () => {
       try {
-        const [storedConnections, storedParallel] = await Promise.all([
+        const [storedConnections, storedParallel, storedSegmentSize, storedTtfbTimeout] = await Promise.all([
           loadConnectionSetting(),
           loadParallelSetting(),
+          loadSegmentSizeSetting(),
+          loadTtfbTimeoutSetting(),
         ]);
         if (Number.isFinite(storedConnections)) {
           state.connectionLimit = storedConnections;
@@ -775,6 +834,20 @@ const pageScript = String.raw`
           state.decryptParallelRaw = String(storedParallel);
           if (parallelLimitInput) {
             parallelLimitInput.value = String(storedParallel);
+          }
+        }
+        if (Number.isFinite(storedSegmentSize)) {
+          state.segmentSizeMb = clampSegmentSizeMb(storedSegmentSize);
+          state.segmentSizeRaw = String(state.segmentSizeMb);
+          if (segmentSizeInput) {
+            segmentSizeInput.value = state.segmentSizeRaw;
+          }
+        }
+        if (Number.isFinite(storedTtfbTimeout)) {
+          state.ttfbTimeoutSeconds = clampTtfbTimeoutSeconds(storedTtfbTimeout);
+          state.ttfbTimeoutRaw = String(state.ttfbTimeoutSeconds);
+          if (ttfbTimeoutInput) {
+            ttfbTimeoutInput.value = state.ttfbTimeoutRaw;
           }
         }
       } catch (error) {
@@ -1019,6 +1092,7 @@ const pageScript = String.raw`
       const segments = [];
       let offset = 0;
       let index = 0;
+      const segmentSizeBytes = toSegmentSizeBytes(state.segmentSizeMb);
       const meta = {
         encryption: state.encryptionMode,
         blockDataSize: state.blockDataSize,
@@ -1028,7 +1102,7 @@ const pageScript = String.raw`
       };
       let encryptedTotal = 0;
       while (offset < fileSize) {
-        const length = Math.min(SEGMENT_SIZE_BYTES, fileSize - offset);
+        const length = Math.min(segmentSizeBytes, fileSize - offset);
         const mapping = calculateUnderlying(offset, length, meta);
         const encryptedSize = Number.isFinite(mapping.underlyingLimit) && mapping.underlyingLimit > 0
           ? mapping.underlyingLimit
@@ -1163,7 +1237,7 @@ const pageScript = String.raw`
     const downloadSegment = async (index) => {
       const segment = state.segments[index];
       if (!segment) return;
-      let attempt = 0;
+      let attempt = Number(segment.retries) || 0;
       while (true) {
         if (state.cancelling) {
           throw new Error('cancelled');
@@ -1175,12 +1249,32 @@ const pageScript = String.raw`
         headers.set('Range', 'bytes=' + start + '-' + end);
         const controller = new AbortController();
         state.abortControllers.add(controller);
+        let ttfbTimer = null;
+        let ttfbTimedOut = false;
+        const cancelTtfbTimer = () => {
+          if (ttfbTimer) {
+            clearTimeout(ttfbTimer);
+            ttfbTimer = null;
+          }
+        };
+        const ttfbTimeoutMs = toTtfbTimeoutMs(state.ttfbTimeoutSeconds);
+        if (Number.isFinite(ttfbTimeoutMs) && ttfbTimeoutMs > 0) {
+          ttfbTimer = setTimeout(() => {
+            ttfbTimedOut = true;
+            try {
+              controller.abort();
+            } catch (abortError) {
+              console.warn('TTFB 超时取消请求失败', abortError);
+            }
+          }, ttfbTimeoutMs);
+        }
         try {
           const response = await fetch(state.remote.url, {
             method: state.remote.method || 'GET',
             headers,
             signal: controller.signal,
           });
+          cancelTtfbTimer();
           if (!(response.ok || response.status === 206)) {
             throw new Error('分段下载失败，HTTP ' + response.status);
           }
@@ -1201,6 +1295,7 @@ const pageScript = String.raw`
           segment.encrypted = payload;
           segment.status = 'done';
           segment.error = null;
+          segment.retries = 0;
           state.failedSegments.delete(segment.index);
           syncFailedSegmentsUi();
           if (state.cacheKey) {
@@ -1213,14 +1308,33 @@ const pageScript = String.raw`
           }
           return;
         } catch (error) {
+          cancelTtfbTimer();
           if (state.cancelling) {
             throw error instanceof Error ? error : new Error(String(error || 'cancelled'));
           }
-          const message = error instanceof Error && error.message ? error.message : String(error || '未知错误');
+          const rawMessage = error instanceof Error && error.message ? error.message : String(error || '未知错误');
+          const isTtfbTimeout = ttfbTimedOut && controller.signal.aborted;
+          const message = isTtfbTimeout ? '等待服务器响应超时' : rawMessage;
           attempt += 1;
+          segment.retries = attempt;
           const retryLimit = state.segmentRetryLimit;
           const shouldRetry = Number.isFinite(retryLimit) ? attempt <= retryLimit : true;
           if (shouldRetry) {
+            if (isTtfbTimeout) {
+              enqueueSegment(segment.index, true);
+              segment.error = message;
+              state.failedSegments.delete(segment.index);
+              log(
+                '分段 #' +
+                  (segment.index + 1) +
+                  ' ' +
+                  message +
+                  '（>' +
+                  clampTtfbTimeoutSeconds(state.ttfbTimeoutSeconds) +
+                  's）已重新排队等待新的连接。'
+              );
+              return;
+            }
             const isHttp429 = typeof message === 'string' && message.includes('HTTP 429');
             let retryDelayMs = RETRY_DELAY_MS;
             let shouldLogRetry = true;
@@ -1643,6 +1757,24 @@ const pageScript = String.raw`
       if (connectionLimitInput) {
         connectionLimitInput.value = String(state.connectionLimit);
       }
+      const fallbackSegmentSize = state.segmentSizeMb || DEFAULT_SEGMENT_SIZE_MB;
+      const rawSegmentSize = Number(segmentSizeInput?.value);
+      state.segmentSizeMb = clampSegmentSizeMb(
+        Number.isFinite(rawSegmentSize) && rawSegmentSize > 0 ? rawSegmentSize : fallbackSegmentSize,
+      );
+      state.segmentSizeRaw = String(state.segmentSizeMb);
+      if (segmentSizeInput) {
+        segmentSizeInput.value = state.segmentSizeRaw;
+      }
+      const fallbackTtfb = state.ttfbTimeoutSeconds || DEFAULT_TTFB_TIMEOUT_SECONDS;
+      const rawTtfb = Number(ttfbTimeoutInput?.value);
+      state.ttfbTimeoutSeconds = clampTtfbTimeoutSeconds(
+        Number.isFinite(rawTtfb) && rawTtfb > 0 ? rawTtfb : fallbackTtfb,
+      );
+      state.ttfbTimeoutRaw = String(state.ttfbTimeoutSeconds);
+      if (ttfbTimeoutInput) {
+        ttfbTimeoutInput.value = state.ttfbTimeoutRaw;
+      }
       const rawRetry = (retryLimitInput && retryLimitInput.value || '').trim().toLowerCase();
       if (rawRetry === INFINITE_RETRY_TOKEN) {
         state.segmentRetryLimit = Infinity;
@@ -1720,6 +1852,7 @@ const pageScript = String.raw`
         blockHeaderSize: normalized.blockHeaderSize,
         fileHeaderSize: normalized.fileHeaderSize,
         encryption: normalized.encryptionMode,
+        segmentSizeBytes: toSegmentSizeBytes(state.segmentSizeMb),
       });
       const currentSignature = buildSegmentSignature(buildCurrentMetaForSignature());
       const dataKeyEqual = areUint8ArraysEqual(normalized.dataKey, state.dataKey);
@@ -1901,6 +2034,26 @@ const pageScript = String.raw`
       persistParallelSetting(state.decryptParallelism);
     };
 
+    const updateSegmentSize = (value) => {
+      const parsed = Number(value);
+      state.segmentSizeMb = clampSegmentSizeMb(parsed);
+      state.segmentSizeRaw = String(state.segmentSizeMb);
+      if (segmentSizeInput) {
+        segmentSizeInput.value = state.segmentSizeRaw;
+      }
+      persistSegmentSizeSetting(state.segmentSizeMb);
+    };
+
+    const updateTtfbTimeout = (value) => {
+      const parsed = Number(value);
+      state.ttfbTimeoutSeconds = clampTtfbTimeoutSeconds(parsed);
+      state.ttfbTimeoutRaw = String(state.ttfbTimeoutSeconds);
+      if (ttfbTimeoutInput) {
+        ttfbTimeoutInput.value = state.ttfbTimeoutRaw;
+      }
+      persistTtfbTimeoutSetting(state.ttfbTimeoutSeconds);
+    };
+
     return {
       isEnabled: () => state.enabled,
       isRunning: () => state.running,
@@ -1913,6 +2066,8 @@ const pageScript = String.raw`
       updateConnectionLimit,
       updateRetryLimit,
       updateParallelLimit,
+      updateSegmentSize,
+      updateTtfbTimeout,
       retryFailedSegments,
       clearStoredTasks,
     };
@@ -2820,6 +2975,18 @@ const pageScript = String.raw`
   if (parallelLimitInput) {
     parallelLimitInput.addEventListener('change', (event) => {
       webDownloader.updateParallelLimit(event.target.value);
+    });
+  }
+
+  if (segmentSizeInput) {
+    segmentSizeInput.addEventListener('change', (event) => {
+      webDownloader.updateSegmentSize(event.target.value);
+    });
+  }
+
+  if (ttfbTimeoutInput) {
+    ttfbTimeoutInput.addEventListener('change', (event) => {
+      webDownloader.updateTtfbTimeout(event.target.value);
     });
   }
 
