@@ -79,6 +79,37 @@ persist = true
 #                                                        # Example: "landing.example.com,landingv2.example.com"
 #
 # # ═══════════════════════════════════════════════════════════════
+# # Web Downloader + Crypt (rclone-compatible) configuration
+# # ═══════════════════════════════════════════════════════════════
+# #
+# # WEB_DOWNLOADER_ENABLED = "false"
+# #   Enable the browser-based downloader (Range fetch, Dexie resume, crypt decrypt).
+# #   When "true", CRYPT_* parameters must describe your crypt volume and CRYPT_DATA_KEY must be set.
+# #
+# # WEB_DOWNLOADER_MAX_CONNECTIONS = "6"
+# #   Max parallel HTTP requests per download (1-16). Default 4. Higher values improve LAN speed
+# #   but stress upstream bandwidth.
+# #
+# # CRYPT_PREFIX = "/Encrypted"
+# #   Optional path prefix to auto-mark files as crypt (e.g. "/Crypt/remote/"). Leave blank when unused.
+# #
+# # CRYPT_INCLUDES = "/crypt/,/secure/"
+# #   Comma-separated substrings. If decoded path contains any entry it is treated as crypt.
+# #   Use this when you cannot rely on a single prefix.
+# #
+# # CRYPT_ENCRYPTION_MODE = "crypt"
+# #   Data format emitted by upstream worker. Currently only "crypt" is supported.
+# #
+# # CRYPT_FILE_HEADER_SIZE = "32"
+# # CRYPT_BLOCK_HEADER_SIZE = "16"
+# # CRYPT_BLOCK_DATA_SIZE = "65536"
+# #   Byte sizes for rclone crypt headers/data blocks. Keep defaults unless your upstream changed them.
+# #
+# # CRYPT_DATA_KEY = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+# #   32-byte key encoded as 64 hex characters (same as rclone CRYPT_DATA_KEY). Required when
+# #   WEB_DOWNLOADER_ENABLED is true. Generate via keygen.html or the landing page keygen panel.
+# #
+# # ═══════════════════════════════════════════════════════════════
 # # ⚠️ NEW: ALTCHA Proof-of-Work Anti-Bot Protection (防爬虫 PoW 验证)
 # # ═══════════════════════════════════════════════════════════════
 # #
