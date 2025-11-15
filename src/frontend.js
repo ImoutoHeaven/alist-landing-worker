@@ -791,8 +791,7 @@ const pageScript = String.raw`
       return { underlyingOffset, underlyingLimit, discard, blocks };
     };
 
-    const REQUESTS_PER_SECOND = 4;
-    const REQUEST_INTERVAL_MS = Math.floor(1000 / REQUESTS_PER_SECOND);
+    const REQUEST_INTERVAL_MS = 300;
     const DEFAULT_SEGMENT_RETRY_LIMIT = 30;
     const INFINITE_RETRY_TOKEN = 'inf';
     const RETRY_DELAY_MS = 20000;
