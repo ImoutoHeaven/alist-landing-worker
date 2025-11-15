@@ -814,7 +814,7 @@ const pageScript = String.raw`
       Math.round(clampTtfbTimeoutSeconds(maybeSeconds) * 1000);
 
     const STORAGE_DB_NAME = 'landing-webdownloader-v2';
-    const STORAGE_DB_VERSION = 2;
+    const STORAGE_DB_VERSION = 3;
     const STORAGE_TABLE_SETTINGS = 'settings';
     const STORAGE_TABLE_INFO = 'infoCache';
     const STORAGE_TABLE_HANDLES = 'writerHandles';
@@ -822,7 +822,8 @@ const pageScript = String.raw`
     const STORAGE_SESSION_FLAG = 'landing-webdownloader-session';
     const STORAGE_PREFIX = 'landing-web::';
     const STORAGE_VERSION = 1;
-    const INFO_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+    const GLOBAL_DATA_TTL_MS = 24 * 60 * 60 * 1000; // 24 小时
+    const INFO_CACHE_TTL_MS = GLOBAL_DATA_TTL_MS;
 
     const openStorageDatabase = (() => {
       let promise = null;
@@ -840,7 +841,7 @@ const pageScript = String.raw`
             [STORAGE_TABLE_HANDLES]: '&key',
           });
           db
-            .version(STORAGE_DB_VERSION)
+            .version(2)
             .stores({
               [STORAGE_TABLE_SETTINGS]: '&key',
               [STORAGE_TABLE_INFO]: '&key,timestamp',
@@ -852,6 +853,29 @@ const pageScript = String.raw`
                 const table = transaction.table(STORAGE_TABLE_SEGMENTS);
                 if (table) {
                   await table.clear();
+                }
+              } catch (upgradeError) {
+                console.warn('升级 Dexie 存储结构失败', upgradeError);
+              }
+            });
+          db
+            .version(STORAGE_DB_VERSION)
+            .stores({
+              [STORAGE_TABLE_SETTINGS]: '&key',
+              [STORAGE_TABLE_INFO]: '&key,timestamp',
+              [STORAGE_TABLE_HANDLES]: '&key,timestamp',
+              [STORAGE_TABLE_SEGMENTS]: '[key+index],key,timestamp',
+            })
+            .upgrade(async (transaction) => {
+              try {
+                const handlesTable = transaction.table(STORAGE_TABLE_HANDLES);
+                if (handlesTable) {
+                  const now = Date.now();
+                  await handlesTable.toCollection().modify((record) => {
+                    if (!Number.isFinite(record.timestamp) || record.timestamp <= 0) {
+                      record.timestamp = now;
+                    }
+                  });
                 }
               } catch (upgradeError) {
                 console.warn('升级 Dexie 存储结构失败', upgradeError);
@@ -922,6 +946,22 @@ const pageScript = String.raw`
         console.warn('访问 webDownloader Dexie 表 ' + tableName + ' 时出错', error);
         return defaultValue;
       }
+    };
+
+    const cleanupExpiredData = async () => {
+      const expiredBefore = Date.now() - GLOBAL_DATA_TTL_MS;
+      let totalCleaned = 0;
+      const tables = [STORAGE_TABLE_INFO, STORAGE_TABLE_SEGMENTS, STORAGE_TABLE_HANDLES];
+      for (const tableName of tables) {
+        const cleaned = await useStorageTable(
+          tableName,
+          (table) => table.where('timestamp').below(expiredBefore).delete(),
+          { defaultValue: 0 },
+        );
+        totalCleaned += Number(cleaned) || 0;
+      }
+      log('已清理 ' + totalCleaned + ' 条过期数据（24小时前）');
+      return totalCleaned;
     };
 
     const buildCacheKey = (path, sign) => {
@@ -1071,7 +1111,7 @@ const pageScript = String.raw`
       if (!key || !handle) return;
       await useStorageTable(
         STORAGE_TABLE_HANDLES,
-        (table) => table.put({ key, handle }),
+        (table) => table.put({ key, handle, timestamp: Date.now() }),
         { defaultValue: undefined },
       );
     };
@@ -1097,6 +1137,142 @@ const pageScript = String.raw`
         (table) => table.delete(key),
         { defaultValue: undefined },
       );
+    };
+
+    const parseSegmentSignatureMeta = (signature) => {
+      if (typeof signature !== 'string' || signature.length === 0) return null;
+      const parts = signature.split(':');
+      if (parts.length < 6) return null;
+      const [sizeStr, blockDataStr, blockHeaderStr, fileHeaderStr, encryptionStr, segmentSizeStr] = parts;
+      const size = Number(sizeStr);
+      const segmentSizeBytes = Number(segmentSizeStr);
+      if (!Number.isFinite(size) || size <= 0) return null;
+      if (!Number.isFinite(segmentSizeBytes) || segmentSizeBytes <= 0) return null;
+      return {
+        size,
+        blockDataSize: Number(blockDataStr) || 0,
+        blockHeaderSize: Number(blockHeaderStr) || 0,
+        fileHeaderSize: Number(fileHeaderStr) || 0,
+        encryption: encryptionStr === 'crypt' ? 'crypt' : 'plain',
+        segmentSizeBytes,
+      };
+    };
+
+    const calculateExpectedSegmentCount = (meta) => {
+      if (
+        !meta ||
+        !Number.isFinite(meta.size) ||
+        meta.size <= 0 ||
+        !Number.isFinite(meta.segmentSizeBytes) ||
+        meta.segmentSizeBytes <= 0
+      ) {
+        return 0;
+      }
+      return Math.max(1, Math.ceil(meta.size / meta.segmentSizeBytes));
+    };
+
+    const calculatePlainSegmentLength = (meta, index, totalSegments) => {
+      if (!meta || !Number.isFinite(meta.segmentSizeBytes) || meta.segmentSizeBytes <= 0) {
+        return 0;
+      }
+      if (index < totalSegments - 1) {
+        return meta.segmentSizeBytes;
+      }
+      const remainder = meta.size % meta.segmentSizeBytes;
+      if (remainder === 0) {
+        return meta.segmentSizeBytes;
+      }
+      return remainder;
+    };
+
+    const hasCompleteSegmentSet = (records, meta) => {
+      const expectedSegments = calculateExpectedSegmentCount(meta);
+      if (expectedSegments <= 0) return false;
+      if (!Array.isArray(records) || records.length < expectedSegments) {
+        return false;
+      }
+      const indexes = new Set();
+      let totalLength = 0;
+      let plainLengthMismatch = false;
+      records.forEach((record) => {
+        if (!record) return;
+        const recordIndex = Number(record.index);
+        const recordLength = Number(record.length);
+        if (!Number.isInteger(recordIndex) || recordIndex < 0) {
+          return;
+        }
+        if (!Number.isFinite(recordLength) || recordLength <= 0) {
+          return;
+        }
+        indexes.add(recordIndex);
+        totalLength += recordLength;
+        if (meta.encryption === 'plain') {
+          const expectedLength = calculatePlainSegmentLength(meta, recordIndex, expectedSegments);
+          if (expectedLength <= 0 || recordLength !== expectedLength) {
+            plainLengthMismatch = true;
+          }
+        }
+      });
+      if (indexes.size < expectedSegments) return false;
+      for (let i = 0; i < expectedSegments; i += 1) {
+        if (!indexes.has(i)) {
+          return false;
+        }
+      }
+      if (meta.encryption === 'plain' && plainLengthMismatch) {
+        return false;
+      }
+      if (!Number.isFinite(totalLength) || totalLength < meta.size) {
+        return false;
+      }
+      return true;
+    };
+
+    const cleanupCompletedSegments = async (key) => {
+      if (!key) return false;
+      const records = await loadPersistedSegmentRecords(key);
+      if (!records || records.length === 0) return false;
+      const grouped = new Map();
+      records.forEach((record) => {
+        if (!record || typeof record.signature !== 'string' || record.signature.length === 0) {
+          return;
+        }
+        if (!grouped.has(record.signature)) {
+          grouped.set(record.signature, []);
+        }
+        grouped.get(record.signature).push(record);
+      });
+      if (grouped.size === 0) return false;
+      const preferredSignature =
+        state.cacheKey === key ? buildSegmentSignature(buildCurrentMetaForSignature()) : '';
+      const candidates = [];
+      if (preferredSignature && grouped.has(preferredSignature)) {
+        candidates.push({ signature: preferredSignature, records: grouped.get(preferredSignature) });
+      }
+      grouped.forEach((groupRecords, signature) => {
+        if (signature === preferredSignature) return;
+        candidates.push({ signature, records: groupRecords });
+      });
+      for (const candidate of candidates) {
+        const meta = parseSegmentSignatureMeta(candidate.signature);
+        if (!meta) continue;
+        if (!hasCompleteSegmentSet(candidate.records, meta)) {
+          continue;
+        }
+        try {
+          await clearSegmentsForKey(key);
+        } catch (error) {
+          console.warn('清理已完成分段失败', error);
+          return false;
+        }
+        try {
+          await deleteWriterHandle(key);
+        } catch (error) {
+          console.warn('清理已完成分段时删除 writer handle 失败', error);
+        }
+        return true;
+      }
+      return false;
     };
 
     const clearAllStorageForKey = async (key) => {
@@ -1296,6 +1472,14 @@ const pageScript = String.raw`
       workflowPromise: null,
       resumedSegments: 0,
     };
+
+    (async () => {
+      try {
+        await cleanupExpiredData();
+      } catch (cleanupError) {
+        console.warn('清理 webDownloader 过期数据失败', cleanupError);
+      }
+    })();
 
     const hydrateStoredSettings = async () => {
       try {
@@ -1575,6 +1759,17 @@ const pageScript = String.raw`
       state.writer.chunks.push(chunk);
     };
 
+    const cleanupSegmentsAfterFinalize = async () => {
+      if (!state.cacheKey) return;
+      try {
+        await clearSegmentsForKey(state.cacheKey);
+        await deleteWriterHandle(state.cacheKey);
+        log('已清理下载分段数据');
+      } catch (error) {
+        console.warn('下载完成后清理缓存分段失败', error);
+      }
+    };
+
     const finalizeWriter = async () => {
       if (!state.writer) return;
       if (state.writer.type === 'fs') {
@@ -1585,6 +1780,7 @@ const pageScript = String.raw`
           console.error('关闭文件写入器失败', error);
         }
         setWriter(null);
+        await cleanupSegmentsAfterFinalize();
         return;
       }
       const blob = new Blob(state.writer.chunks, { type: 'application/octet-stream' });
@@ -1599,6 +1795,7 @@ const pageScript = String.raw`
       if (state.writer.chunks) state.writer.chunks.length = 0;
       log('已触发浏览器下载');
       setWriter(null);
+      await cleanupSegmentsAfterFinalize();
     };
 
     const decodeDownloadUrl = (download) => {
@@ -2437,6 +2634,12 @@ const pageScript = String.raw`
           }
         }
       }
+      if (state.cacheKey) {
+        const cleanedCompletedSegments = await cleanupCompletedSegments(state.cacheKey);
+        if (cleanedCompletedSegments) {
+          log('检测到已完成的历史任务缓存，已自动清理分段数据。');
+        }
+      }
       state.downloadedEncrypted = 0;
       state.decryptedBytes = 0;
       state.failedSegments.clear();
@@ -2468,6 +2671,10 @@ const pageScript = String.raw`
       const cached = await loadCachedInfo(key);
       if (!cached || !cached.download) {
         return null;
+      }
+      const cleaned = await cleanupCompletedSegments(key);
+      if (cleaned) {
+        log('检测到已完成的缓存任务，已自动清理残留分段。');
       }
       await prepareFromInfo(cached, { autoStart, path, sign });
       return cached;
