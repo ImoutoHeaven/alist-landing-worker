@@ -17,8 +17,59 @@ export const cssStyles = `
 
 body {
   margin: 0;
-  background: #0b0b0f;
+  position: relative;
+  background: #050607;
+  min-height: 100vh;
   color: #f4f4f8;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(circle at var(--glow-x, 50%) var(--glow-y, 0%), rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), 0.35), transparent 55%),
+    radial-gradient(circle at calc(100% - var(--glow-x, 50%)) calc(100% - var(--glow-y, 0%)), rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), 0.2), transparent 55%);
+  pointer-events: none;
+  opacity: var(--breathe-opacity, 1);
+  transition: all 0.6s ease-out;
+  z-index: 0;
+}
+
+/* Edge reflections - localized glow with dynamic width and color */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(ellipse var(--glow-h-width-top, 6.75%) var(--glow-v-height-top, 18px) at var(--glow-x, 50%) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), var(--reflect-top, 0)) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), calc(var(--reflect-top, 0) * 0.4)) 40%,
+      transparent 70%
+    ) top / 100% var(--glow-v-height-top, 18px) no-repeat,
+    radial-gradient(ellipse var(--glow-h-width-bottom, 6.75%) var(--glow-v-height-bottom, 18px) at var(--glow-x, 50%) 100%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), var(--reflect-bottom, 0)) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), calc(var(--reflect-bottom, 0) * 0.4)) 40%,
+      transparent 70%
+    ) bottom / 100% var(--glow-v-height-bottom, 18px) no-repeat,
+    radial-gradient(ellipse var(--glow-h-width-left, 18px) var(--glow-v-height-left, 6.75%) at 0% var(--glow-y, 0%),
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), var(--reflect-left, 0)) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), calc(var(--reflect-left, 0) * 0.4)) 40%,
+      transparent 70%
+    ) left / var(--glow-h-width-left, 18px) 100% no-repeat,
+    radial-gradient(ellipse var(--glow-h-width-right, 18px) var(--glow-v-height-right, 6.75%) at 100% var(--glow-y, 0%),
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), var(--reflect-right, 0)) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), calc(var(--reflect-right, 0) * 0.4)) 40%,
+      transparent 70%
+    ) right / var(--glow-h-width-right, 18px) 100% no-repeat;
+  transition: all 0.6s ease-out;
+}
+
+header, main {
+  position: relative;
+  z-index: 1;
 }
 
 .web-only {

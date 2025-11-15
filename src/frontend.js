@@ -13,6 +13,350 @@ const pageScript = String.raw`
 (() => {
   'use strict';
 
+  // Glow effect: mouse tracking + auto wandering
+  let mouseIdleTimer = null;
+  let isAutoGlow = true;
+  let glowAnimationFrame = null;
+  let currentGlowX = 0.5;
+  let currentGlowY = 0;
+  let targetGlowX = 0.5;
+  let targetGlowY = 0;
+  let lastFrameTime = Date.now();
+  let isResting = false;
+  let restStartTime = 0;
+
+  // 鼠标采样系统
+  let lastMouseSampleTime = 0;
+  const MOUSE_SAMPLE_INTERVAL = 3000; // 每3秒采样一次鼠标位置
+  let latestMouseX = 0;
+  let latestMouseY = 0;
+
+  // 呼吸动画系统（随机亮度）
+  let breathePhase = 0;
+  const BREATHE_CYCLE = 4; // 4秒一个呼吸周期
+  let breatheMinOpacity = 0.5 + Math.random() * 0.2; // 初始最小亮度 0.5-0.7
+  let breatheMaxOpacity = 1.0 + Math.random() * 0.2; // 初始最大亮度 1.0-1.2
+
+  // 页面可见性管理
+  let visibilityTimer = null;
+  let isRenderingStopped = false;
+  let fadeInPhase = 1; // 淡入进度 0-1
+  const FADE_IN_DURATION = 2.5; // 2.5秒淡入
+
+  // 颜色渐变系统
+  const colorTable = [
+    { r: 62, g: 110, b: 255 },   // 当前蓝色
+    { r: 0, g: 191, b: 255 },    // 深天蓝 DeepSkyBlue
+    { r: 64, g: 224, b: 208 },   // 青绿 Turquoise
+    { r: 138, g: 43, b: 226 },   // 蓝紫 BlueViolet
+    { r: 147, g: 51, b: 234 },   // 紫色 Purple
+    { r: 199, g: 21, b: 133 },   // 深粉 MediumVioletRed
+    { r: 255, g: 20, b: 147 },   // 玫红 DeepPink
+    { r: 72, g: 61, b: 139 },    // 深蓝紫 DarkSlateBlue
+  ];
+  let currentColorIndex = 0;
+  let targetColorIndex = 1;
+  let colorTransitionPhase = 0;
+  const COLOR_TRANSITION_DURATION = 45; // 45秒超缓慢渐变
+
+  // 速度系统
+  const MAX_SPEED = 0.08; // 每秒最多移动 8% 的屏幕宽度（很慢）
+  const WANDER_ACCELERATION = 0.12; // 自动游走的加速度系数
+  const MOUSE_ACCELERATION = 0.04; // 鼠标跟随的加速度系数（更慢更柔和）
+  const WANDER_REACHED_THRESHOLD = 0.01; // 到达目标的阈值（1%）
+  const REST_DURATION = 3000; // 到达目标后休息 3 秒
+
+  let currentSpeedX = 0; // 当前X方向速度
+  let currentSpeedY = 0; // 当前Y方向速度
+
+  const updateGlowPosition = (x, y) => {
+    const xPercent = (x / window.innerWidth * 100).toFixed(1);
+    const yPercent = (y / window.innerHeight * 100).toFixed(1);
+    document.body.style.setProperty('--glow-x', xPercent + '%');
+    document.body.style.setProperty('--glow-y', yPercent + '%');
+    currentGlowX = x / window.innerWidth;
+    currentGlowY = y / window.innerHeight;
+
+    // 计算边缘反射强度（符合物理规律：反射不能超过入射光强度）
+    const normalizedX = currentGlowX;
+    const normalizedY = currentGlowY;
+
+    // 光晕参数（对应 body::before 中的主光晕）
+    const GLOW_MAX_INTENSITY = 0.35; // 主光晕的最大强度
+    const GLOW_RADIUS = 0.55; // 光晕半径（对应 transparent 55%）
+    const REFLECTION_COEFFICIENT = 0.6; // 反射系数（60% 的光被反射，40% 被吸收）
+
+    // 计算光晕中心到各边缘的距离
+    const distanceToTop = normalizedY;
+    const distanceToBottom = 1 - normalizedY;
+    const distanceToLeft = normalizedX;
+    const distanceToRight = 1 - normalizedX;
+
+    // 计算光晕在各边缘的实际强度（径向衰减）
+    const glowIntensityAtTop = GLOW_MAX_INTENSITY * Math.max(0, 1 - distanceToTop / GLOW_RADIUS);
+    const glowIntensityAtBottom = GLOW_MAX_INTENSITY * Math.max(0, 1 - distanceToBottom / GLOW_RADIUS);
+    const glowIntensityAtLeft = GLOW_MAX_INTENSITY * Math.max(0, 1 - distanceToLeft / GLOW_RADIUS);
+    const glowIntensityAtRight = GLOW_MAX_INTENSITY * Math.max(0, 1 - distanceToRight / GLOW_RADIUS);
+
+    // 计算边缘接近度（在边缘附近才有反射）
+    const edgeThreshold = 0.3; // 在30%范围内才有反射
+    const proximityTop = normalizedY < edgeThreshold ? Math.pow(1 - normalizedY / edgeThreshold, 2) : 0;
+    const proximityBottom = normalizedY > (1 - edgeThreshold) ? Math.pow((normalizedY - (1 - edgeThreshold)) / edgeThreshold, 2) : 0;
+    const proximityLeft = normalizedX < edgeThreshold ? Math.pow(1 - normalizedX / edgeThreshold, 2) : 0;
+    const proximityRight = normalizedX > (1 - edgeThreshold) ? Math.pow((normalizedX - (1 - edgeThreshold)) / edgeThreshold, 2) : 0;
+
+    // 反射强度 = 光晕实际强度 × 反射系数 × 接近度
+    const reflectTop = glowIntensityAtTop * REFLECTION_COEFFICIENT * proximityTop;
+    const reflectBottom = glowIntensityAtBottom * REFLECTION_COEFFICIENT * proximityBottom;
+    const reflectLeft = glowIntensityAtLeft * REFLECTION_COEFFICIENT * proximityLeft;
+    const reflectRight = glowIntensityAtRight * REFLECTION_COEFFICIENT * proximityRight;
+
+    document.body.style.setProperty('--reflect-top', reflectTop.toFixed(3));
+    document.body.style.setProperty('--reflect-bottom', reflectBottom.toFixed(3));
+    document.body.style.setProperty('--reflect-left', reflectLeft.toFixed(3));
+    document.body.style.setProperty('--reflect-right', reflectRight.toFixed(3));
+
+    // 计算光晕宽度：强度越高，扩散越宽（缩小到 45%）
+    // 上下边缘的光晕尺寸
+    const glowHWidthTop = 6.75 + reflectTop * 11.25; // 水平宽度：6.75%-18%
+    const glowVHeightTop = 18 + reflectTop * 54; // 垂直扩散：18px-72px
+    const glowHWidthBottom = 6.75 + reflectBottom * 11.25;
+    const glowVHeightBottom = 18 + reflectBottom * 54;
+
+    // 左右边缘的光晕尺寸
+    const glowHWidthLeft = 18 + reflectLeft * 54; // 水平扩散：18px-72px
+    const glowVHeightLeft = 6.75 + reflectLeft * 11.25; // 垂直宽度：6.75%-18%
+    const glowHWidthRight = 18 + reflectRight * 54;
+    const glowVHeightRight = 6.75 + reflectRight * 11.25;
+
+    document.body.style.setProperty('--glow-h-width-top', glowHWidthTop + '%');
+    document.body.style.setProperty('--glow-v-height-top', glowVHeightTop + 'px');
+    document.body.style.setProperty('--glow-h-width-bottom', glowHWidthBottom + '%');
+    document.body.style.setProperty('--glow-v-height-bottom', glowVHeightBottom + 'px');
+    document.body.style.setProperty('--glow-h-width-left', glowHWidthLeft + 'px');
+    document.body.style.setProperty('--glow-v-height-left', glowVHeightLeft + '%');
+    document.body.style.setProperty('--glow-h-width-right', glowHWidthRight + 'px');
+    document.body.style.setProperty('--glow-v-height-right', glowVHeightRight + '%');
+  };
+
+  const getRandomWanderTarget = () => {
+    // 在屏幕范围内随机选择一个点
+    // 限制在 10%-90% 的范围内，避免太靠边
+    return {
+      x: 0.1 + Math.random() * 0.8,
+      y: 0.05 + Math.random() * 0.2
+    };
+  };
+
+  const moveTowardsTarget = (currentX, currentY, targetX, targetY, deltaTime, acceleration) => {
+    const dx = targetX - currentX;
+    const dy = targetY - currentY;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+
+    if (distance < WANDER_REACHED_THRESHOLD) {
+      // 到达目标，速度归零
+      currentSpeedX = 0;
+      currentSpeedY = 0;
+      return { x: targetX, y: targetY, reached: true };
+    }
+
+    // 计算目标速度方向（单位向量 × 最大速度）
+    const targetSpeedX = (dx / distance) * MAX_SPEED;
+    const targetSpeedY = (dy / distance) * MAX_SPEED;
+
+    // 平滑过渡到目标速度（使用传入的加速度系数）
+    currentSpeedX += (targetSpeedX - currentSpeedX) * acceleration;
+    currentSpeedY += (targetSpeedY - currentSpeedY) * acceleration;
+
+    // 应用速度移动
+    const moveX = currentSpeedX * deltaTime;
+    const moveY = currentSpeedY * deltaTime;
+    const newX = currentX + moveX;
+    const newY = currentY + moveY;
+
+    // 检查是否会越过目标
+    const newDx = targetX - newX;
+    const newDy = targetY - newY;
+    const newDistance = Math.sqrt(newDx * newDx + newDy * newDy);
+
+    if (newDistance < WANDER_REACHED_THRESHOLD) {
+      // 即将到达，直接到达并归零速度
+      currentSpeedX = 0;
+      currentSpeedY = 0;
+      return { x: targetX, y: targetY, reached: true };
+    }
+
+    return {
+      x: newX,
+      y: newY,
+      reached: false
+    };
+  };
+
+  const animateGlow = () => {
+    const now = Date.now();
+    const deltaTime = (now - lastFrameTime) / 1000;
+    lastFrameTime = now;
+
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+
+    // 更新淡入效果
+    if (fadeInPhase < 1) {
+      fadeInPhase += deltaTime / FADE_IN_DURATION;
+      fadeInPhase = Math.min(fadeInPhase, 1);
+    }
+
+    // 更新颜色渐变
+    colorTransitionPhase += deltaTime / COLOR_TRANSITION_DURATION;
+    if (colorTransitionPhase >= 1) {
+      // 到达目标颜色，选择下一个随机目标
+      currentColorIndex = targetColorIndex;
+      do {
+        targetColorIndex = Math.floor(Math.random() * colorTable.length);
+      } while (targetColorIndex === currentColorIndex);
+      colorTransitionPhase = 0;
+    }
+
+    // RGB 线性插值
+    const currentColor = colorTable[currentColorIndex];
+    const targetColor = colorTable[targetColorIndex];
+    const r = Math.round(currentColor.r + (targetColor.r - currentColor.r) * colorTransitionPhase);
+    const g = Math.round(currentColor.g + (targetColor.g - currentColor.g) * colorTransitionPhase);
+    const b = Math.round(currentColor.b + (targetColor.b - currentColor.b) * colorTransitionPhase);
+
+    // 设置颜色 CSS 变量
+    document.body.style.setProperty('--glow-r', r);
+    document.body.style.setProperty('--glow-g', g);
+    document.body.style.setProperty('--glow-b', b);
+
+    // 更新呼吸动画（随机亮度）
+    breathePhase += deltaTime / BREATHE_CYCLE;
+    if (breathePhase >= 1) {
+      // 完成一个呼吸周期，重新随机亮度范围
+      breathePhase = 0;
+      breatheMinOpacity = 0.5 + Math.random() * 0.2; // 0.5-0.7
+      breatheMaxOpacity = 1.0 + Math.random() * 0.2; // 1.0-1.2
+    }
+    // 正弦波呼吸效果 × 淡入系数
+    const breatheValue = 0.5 + 0.5 * Math.sin(breathePhase * Math.PI * 2 - Math.PI / 2);
+    const currentOpacity = breatheMinOpacity + (breatheMaxOpacity - breatheMinOpacity) * breatheValue;
+    document.body.style.setProperty('--breathe-opacity', (currentOpacity * fadeInPhase).toFixed(3));
+
+    if (isAutoGlow) {
+      // 自动游走模式
+      if (isResting) {
+        // 休息中，检查是否休息完毕
+        if (now - restStartTime >= REST_DURATION) {
+          isResting = false;
+          // 选择新的随机目标
+          const newTarget = getRandomWanderTarget();
+          targetGlowX = newTarget.x;
+          targetGlowY = newTarget.y;
+          // 休息结束，速度从零开始（会有加速过程）
+          currentSpeedX = 0;
+          currentSpeedY = 0;
+        }
+        // 休息期间不移动
+      } else {
+        // 向目标移动（使用游走加速度）
+        const result = moveTowardsTarget(currentGlowX, currentGlowY, targetGlowX, targetGlowY, deltaTime, WANDER_ACCELERATION);
+
+        if (result.reached) {
+          // 到达目标，开始休息
+          isResting = true;
+          restStartTime = now;
+        }
+
+        updateGlowPosition(result.x * w, result.y * h);
+      }
+    } else {
+      // 鼠标跟随模式：定期采样鼠标位置（每3秒更新一次目标）
+      if (now - lastMouseSampleTime >= MOUSE_SAMPLE_INTERVAL) {
+        setMouseTarget(latestMouseX, latestMouseY);
+        lastMouseSampleTime = now;
+      }
+
+      // 向目标移动（使用更慢的加速度，更柔和）
+      const result = moveTowardsTarget(currentGlowX, currentGlowY, targetGlowX, targetGlowY, deltaTime, MOUSE_ACCELERATION);
+      updateGlowPosition(result.x * w, result.y * h);
+    }
+
+    glowAnimationFrame = requestAnimationFrame(animateGlow);
+  };
+
+  const enableAutoGlow = () => {
+    if (isAutoGlow) return;
+    isAutoGlow = true;
+    // 立即选择一个新的随机目标
+    const newTarget = getRandomWanderTarget();
+    targetGlowX = newTarget.x;
+    targetGlowY = newTarget.y;
+  };
+
+  const setMouseTarget = (x, y) => {
+    isAutoGlow = false;
+    targetGlowX = x / window.innerWidth;
+    targetGlowY = y / window.innerHeight;
+  };
+
+  document.addEventListener('mousemove', (e) => {
+    // 只有页面可见时才响应鼠标移动
+    if (document.hidden) return;
+
+    // 记录最新鼠标位置（不立即更新目标）
+    latestMouseX = e.clientX;
+    latestMouseY = e.clientY;
+
+    // 如果是第一次移动鼠标（从自动游走切换过来），立即采样一次
+    if (isAutoGlow) {
+      isAutoGlow = false;
+      lastMouseSampleTime = Date.now();
+      setMouseTarget(latestMouseX, latestMouseY);
+    }
+
+    // 重置空闲计时器
+    clearTimeout(mouseIdleTimer);
+    mouseIdleTimer = setTimeout(() => {
+      enableAutoGlow();
+    }, 6000);
+  });
+
+  // 页面可见性变化监听：切换标签页或最小化时停止捕捉鼠标
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      // 页面不可见：停止捕捉鼠标，进入自动游走模式
+      clearTimeout(mouseIdleTimer);
+      enableAutoGlow();
+
+      // 10秒后停止渲染（节省性能）
+      visibilityTimer = setTimeout(() => {
+        isRenderingStopped = true;
+        cancelAnimationFrame(glowAnimationFrame);
+
+        // 淡出所有光晕效果
+        document.body.style.setProperty('--breathe-opacity', '0');
+        document.body.style.setProperty('--reflect-top', '0');
+        document.body.style.setProperty('--reflect-bottom', '0');
+        document.body.style.setProperty('--reflect-left', '0');
+        document.body.style.setProperty('--reflect-right', '0');
+      }, 10000);
+    } else {
+      // 页面可见：取消计时器，恢复渲染
+      clearTimeout(visibilityTimer);
+
+      if (isRenderingStopped) {
+        // 重新启动渲染，从淡入开始
+        isRenderingStopped = false;
+        fadeInPhase = 0; // 重置淡入进度
+        lastFrameTime = Date.now();
+        animateGlow();
+      }
+    }
+  });
+
+  animateGlow();
+
   /**
    * Base64url 编码（URL 安全 base64）
    * @param {string} str
