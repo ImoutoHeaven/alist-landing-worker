@@ -41,7 +41,9 @@ const VALID_ACTIONS = [
   'verify-turn',
   'verify-both',
   'verify-web-download',
+  'verify-decrypt',
   'pass-web-download',
+  'pass-decrypt',
   'pass-web',
   'pass-server',
   'pass-asis',
@@ -118,9 +120,11 @@ function parseVerificationNeeds(action, config) {
     case 'verify-both':
       return { needAltcha: true, needTurnstile: true };
     case 'verify-web-download':
+    case 'verify-decrypt':
       return defaultNeeds;
     case 'block':
     case 'pass-web-download':
+    case 'pass-decrypt':
     case 'pass-web':
     case 'pass-server':
     case 'pass-asis':
@@ -658,6 +662,7 @@ const resolveConfig = (env = {}) => {
   const cryptPrefix = normalizeString(env.CRYPT_PREFIX);
   const cryptIncludes = parsePrefixList(env.CRYPT_INCLUDES);
   const webDownloaderEnabled = parseBoolean(env.WEB_DOWNLOADER_ENABLED, false);
+  const clientDecryptEnabled = parseBoolean(env.CLIENT_DECRYPT_ENABLED, false);
   let webDownloaderMaxConnections = parseInteger(
     env.WEB_DOWNLOADER_MAX_CONNECTIONS,
     DEFAULT_WEB_DOWNLOADER_MAX_CONNECTIONS
@@ -699,8 +704,8 @@ const resolveConfig = (env = {}) => {
       throw new Error(`CRYPT_DATA_KEY must be a ${CRYPT_DATA_KEY_LENGTH * 2}-character hex string`);
     }
     cryptDataKeyBase64 = uint8ToBase64(dataKeyBytes);
-  } else if (webDownloaderEnabled) {
-    throw new Error('CRYPT_DATA_KEY is required when WEB_DOWNLOADER_ENABLED is true');
+  } else if (webDownloaderEnabled || clientDecryptEnabled) {
+    throw new Error('CRYPT_DATA_KEY is required when WEB_DOWNLOADER_ENABLED or CLIENT_DECRYPT_ENABLED is true');
   }
 
   // Parse database mode for rate limiting
@@ -1140,6 +1145,7 @@ const resolveConfig = (env = {}) => {
     },
     webDownloaderEnabled,
     webDownloaderMaxConnections,
+    clientDecryptEnabled,
     env,
   };
 };
@@ -2312,8 +2318,9 @@ const isCryptPath = (decodedPath, cryptConfig) => {
   return false;
 };
 
-const parseWebDownloadPolicy = (action) => ({
+const parseClientBehavior = (action) => ({
   forceWebDownloader: action === 'verify-web-download' || action === 'pass-web-download',
+  forceClientDecrypt: action === 'verify-decrypt' || action === 'pass-decrypt',
 });
 
 const handleOptions = (request) => new Response(null, { headers: safeHeaders(request.headers.get('Origin')) });
@@ -2400,8 +2407,15 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
     return respondJson(origin, { code: 403, message: 'access denied' }, 403);
   }
 
-  const { forceWebDownloader } = parseWebDownloadPolicy(action);
+  const { forceWebDownloader, forceClientDecrypt } = parseClientBehavior(action);
   const isCrypt = isCryptPath(decodedPath, config.crypt);
+  let derivedFileName = '';
+  if (decodedPath && decodedPath !== '/') {
+    const segments = decodedPath.split('/').filter((entry) => entry.length > 0);
+    if (segments.length > 0) {
+      derivedFileName = segments[segments.length - 1];
+    }
+  }
 
   let needAltcha = config.altchaEnabled;
   let needTurnstile = config.underAttack;
@@ -3205,6 +3219,9 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
 
   const needWebDownloader =
     config.webDownloaderEnabled && (isCrypt || forceWebDownloader);
+  const clientDecryptEligible = config.clientDecryptEnabled && isCrypt;
+  const needClientDecrypt =
+    clientDecryptEligible && (isCrypt || forceClientDecrypt);
 
   const responsePayload = {
     code: 200,
@@ -3214,13 +3231,15 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
       },
       meta: {
         path: decodedPath,
+        fileName: derivedFileName,
+        size: Number.isFinite(sizeBytes) ? sizeBytes : null,
       },
       settings: {
         underAttack: needTurnstile,
       },
     },
   };
-  if (needWebDownloader) {
+  if (needWebDownloader || needClientDecrypt) {
     const encryptionMode = isCrypt ? (config.crypt?.encryptionMode || 'crypt') : 'plain';
     const fileHeaderSize = isCrypt ? config.crypt?.fileHeaderSize || 0 : 0;
     const blockHeaderSize = isCrypt ? config.crypt?.blockHeaderSize || 0 : 0;
@@ -3238,7 +3257,9 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
       method: 'GET',
       headers: {},
       length,
-      concurrency: config.webDownloaderMaxConnections,
+      ...(needWebDownloader
+        ? { concurrency: config.webDownloaderMaxConnections }
+        : {}),
     };
     responsePayload.data.download.urlBase64 = urlBase64;
     responsePayload.data.download.meta = {
@@ -3248,12 +3269,29 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
       blockDataSize,
       dataKey: dataKeyBase64,
     };
+    responsePayload.data.meta.isCrypt = isCrypt;
+  }
+  if (needWebDownloader) {
     responsePayload.data.download.settings = {
       webDownloader: true,
       maxConnections: config.webDownloaderMaxConnections,
     };
     responsePayload.data.settings.webDownloader = true;
-    responsePayload.data.meta.isCrypt = isCrypt;
+  }
+  if (needClientDecrypt) {
+    const downloadMeta = responsePayload.data.download.meta || {};
+    responsePayload.data.decrypt = {
+      enabled: true,
+      encryption: downloadMeta.encryption || 'plain',
+      fileHeaderSize: downloadMeta.fileHeaderSize || 0,
+      blockHeaderSize: downloadMeta.blockHeaderSize || 0,
+      blockDataSize: downloadMeta.blockDataSize || 0,
+      dataKey: downloadMeta.dataKey || '',
+      length: Number.isFinite(sizeBytes) ? sizeBytes : null,
+      path: decodedPath,
+      fileName: derivedFileName,
+    };
+    responsePayload.data.settings.clientDecrypt = true;
   }
   if (needAltcha && altchaTokenHash && canUseUnified) {
     ctx.waitUntil(
@@ -3842,7 +3880,7 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
     return respondJson(origin, { code: 400, message: 'invalid path encoding' }, 400);
   }
 
-  const { forceWebDownloader } = parseWebDownloadPolicy(action);
+  const { forceWebDownloader, forceClientDecrypt } = parseClientBehavior(action);
   const isCrypt = isCryptPath(decodedPath, config.crypt);
 
   // Determine behavior based on action
@@ -3861,9 +3899,11 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
   const needsVerification = needAltcha || needTurnstile;
   const needWebDownloader =
     config.webDownloaderEnabled && (isCrypt || forceWebDownloader);
+  const needClientDecrypt =
+    config.clientDecryptEnabled && (isCrypt || forceClientDecrypt);
 
   const fastRedirectCandidate =
-    !needWebDownloader &&
+    !needWebDownloader && !needClientDecrypt &&
     (forceRedirect || (config.fastRedirect && !forceWeb && !needsVerification));
   const shouldRedirect = fastRedirectCandidate;
 
@@ -4210,6 +4250,15 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
     webDownloaderConfig: {
       maxConnections: config.webDownloaderMaxConnections,
     },
+    clientDecrypt: needClientDecrypt,
+    decryptConfig: needClientDecrypt
+      ? {
+          encryption: isCrypt ? (config.crypt?.encryptionMode || 'crypt') : 'plain',
+          fileHeaderSize: isCrypt ? config.crypt?.fileHeaderSize || 0 : 0,
+          blockHeaderSize: isCrypt ? config.crypt?.blockHeaderSize || 0 : 0,
+          blockDataSize: isCrypt ? config.crypt?.blockDataSize || 0 : 0,
+        }
+      : null,
   });
 };
 

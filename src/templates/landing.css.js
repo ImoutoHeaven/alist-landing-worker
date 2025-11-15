@@ -80,6 +80,23 @@ body.web-downloader-active .web-only {
   display: block;
 }
 
+.client-only {
+  display: none;
+}
+
+body.client-decrypt-active .client-only {
+  display: block;
+}
+
+.mode-shared {
+  display: none;
+}
+
+body.web-downloader-active .mode-shared,
+body.client-decrypt-active .mode-shared {
+  display: block;
+}
+
 /* ========== Loading Spinner ========== */
 @keyframes spin {
   from { transform: rotate(0deg); }
@@ -276,6 +293,203 @@ button:disabled {
 
 .controls button.secondary:hover:not(:disabled) {
   background: rgba(148,163,184,0.20);
+}
+
+.client-decrypt {
+  position: relative;
+  margin: 0 0 1.5rem;
+  padding: 1rem 1.25rem;
+  border: 1px solid rgba(56,189,248,0.2);
+  border-radius: 1rem;
+  background: rgba(15,23,42,0.4);
+  -webkit-backdrop-filter: blur(10px) saturate(140%);
+  backdrop-filter: blur(10px) saturate(140%);
+  transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.client-decrypt[hidden] {
+  display: none;
+}
+
+.client-decrypt.is-dropping {
+  border-color: rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), 0.7);
+  background: rgba(15,23,42,0.6);
+  box-shadow:
+    0 0 0 2px rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), 0.35),
+    0 8px 24px rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), 0.25);
+  transform: scale(1.01);
+}
+
+/* 离线解密容器边缘辉光效果 */
+.client-decrypt::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background:
+    /* 顶部边缘 - 扁平椭圆，紧贴边缘 */
+    radial-gradient(ellipse var(--elem-glow-h-width-top, 15%) 1px at var(--elem-glow-x, 50%) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), var(--elem-reflect-top, 0)) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), calc(var(--elem-reflect-top, 0) * 0.3)) 50%,
+      transparent 100%
+    ) top / 100% 1px no-repeat,
+    /* 底部边缘 */
+    radial-gradient(ellipse var(--elem-glow-h-width-bottom, 15%) 1px at var(--elem-glow-x, 50%) 100%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), var(--elem-reflect-bottom, 0)) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), calc(var(--elem-reflect-bottom, 0) * 0.3)) 50%,
+      transparent 100%
+    ) bottom / 100% 1px no-repeat,
+    /* 左边缘 */
+    radial-gradient(ellipse 1px var(--elem-glow-v-height-left, 15%) at 0% var(--elem-glow-y, 50%),
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), var(--elem-reflect-left, 0)) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), calc(var(--elem-reflect-left, 0) * 0.3)) 50%,
+      transparent 100%
+    ) left / 1px 100% no-repeat,
+    /* 右边缘 */
+    radial-gradient(ellipse 1px var(--elem-glow-v-height-right, 15%) at 100% var(--elem-glow-y, 50%),
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), var(--elem-reflect-right, 0)) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), calc(var(--elem-reflect-right, 0) * 0.3)) 50%,
+      transparent 100%
+    ) right / 1px 100% no-repeat;
+}
+
+.client-decrypt-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.client-decrypt-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #f8fafc;
+  margin-bottom: 0.35rem;
+}
+
+.client-decrypt-desc {
+  margin: 0;
+  color: #cbd5f5;
+  font-size: 0.85rem;
+}
+
+.client-decrypt-hint {
+  font-size: 0.8rem;
+  color: #38bdf8;
+  background: rgba(56,189,248,0.12);
+  border: 1px solid rgba(56,189,248,0.3);
+  border-radius: 999px;
+  padding: 0.3rem 0.75rem;
+  white-space: nowrap;
+  -webkit-backdrop-filter: blur(8px) saturate(140%);
+  backdrop-filter: blur(8px) saturate(140%);
+}
+
+.client-decrypt-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.client-decrypt-file {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.75rem 0.85rem;
+  border-radius: 0.75rem;
+  background: rgba(15,23,42,0.7);
+  border: 1px solid rgba(148,163,184,0.25);
+  -webkit-backdrop-filter: blur(12px) saturate(130%);
+  backdrop-filter: blur(12px) saturate(130%);
+  overflow: hidden;
+}
+
+/* 解密进度条 - 透明毛玻璃效果，光斑透过且颜色同步 */
+.client-decrypt-file::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: var(--decrypt-progress, 0%);
+  background: rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), 0.12);
+  -webkit-backdrop-filter: blur(8px) saturate(150%);
+  backdrop-filter: blur(8px) saturate(150%);
+  border-radius: inherit;
+  transition: width 0.3s ease;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* 文件信息块边缘辉光效果 */
+.client-decrypt-file::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background:
+    /* 顶部边缘 - 扁平椭圆，紧贴边缘 */
+    radial-gradient(ellipse var(--elem-glow-h-width-top, 15%) 1px at var(--elem-glow-x, 50%) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), var(--elem-reflect-top, 0)) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), calc(var(--elem-reflect-top, 0) * 0.3)) 50%,
+      transparent 100%
+    ) top / 100% 1px no-repeat,
+    /* 底部边缘 */
+    radial-gradient(ellipse var(--elem-glow-h-width-bottom, 15%) 1px at var(--elem-glow-x, 50%) 100%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), var(--elem-reflect-bottom, 0)) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), calc(var(--elem-reflect-bottom, 0) * 0.3)) 50%,
+      transparent 100%
+    ) bottom / 100% 1px no-repeat,
+    /* 左边缘 */
+    radial-gradient(ellipse 1px var(--elem-glow-v-height-left, 15%) at 0% var(--elem-glow-y, 50%),
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), var(--elem-reflect-left, 0)) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), calc(var(--elem-reflect-left, 0) * 0.3)) 50%,
+      transparent 100%
+    ) left / 1px 100% no-repeat,
+    /* 右边缘 */
+    radial-gradient(ellipse 1px var(--elem-glow-v-height-right, 15%) at 100% var(--elem-glow-y, 50%),
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), var(--elem-reflect-right, 0)) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), calc(var(--elem-reflect-right, 0) * 0.3)) 50%,
+      transparent 100%
+    ) right / 1px 100% no-repeat;
+}
+
+.client-file-name {
+  position: relative;
+  z-index: 1;
+  font-size: 0.95rem;
+  color: #e2e8f0;
+  word-break: break-all;
+}
+
+.client-file-size {
+  position: relative;
+  z-index: 1;
+  font-size: 0.8rem;
+  color: #94a3b8;
+  min-width: 80px;
+  text-align: right;
+}
+
+.client-decrypt-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.client-decrypt-actions button {
+  flex: 1 1 160px;
 }
 
 /* ========== Advanced Panel ========== */
@@ -567,6 +781,20 @@ button:disabled {
     width: 100%;
     padding: 1.25rem;
   }
+
+  .client-decrypt {
+    padding: 0.75rem 1rem;
+  }
+
+  .client-decrypt-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.75rem;
+  }
+
+  .client-decrypt-hint {
+    align-self: flex-start;
+  }
 }
 
 /* ========== Fallback for browsers without backdrop-filter ========== */
@@ -593,6 +821,22 @@ button:disabled {
 
   .log {
     background: rgba(15,23,42,0.75);
+  }
+
+  .client-decrypt {
+    background: rgba(15,23,42,0.7);
+  }
+
+  .client-decrypt-file {
+    background: rgba(15,23,42,0.85);
+  }
+
+  .client-decrypt-hint {
+    background: rgba(56,189,248,0.25);
+  }
+
+  .client-decrypt-file::before {
+    background: rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), 0.3);
   }
 }
 `;

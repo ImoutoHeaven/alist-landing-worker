@@ -109,6 +109,11 @@ persist = true
 # #   32-byte key encoded as 64 hex characters (same as rclone CRYPT_DATA_KEY). Required when
 # #   WEB_DOWNLOADER_ENABLED is true. Generate via keygen.html or the landing page keygen panel.
 # #
+# # CLIENT_DECRYPT_ENABLED = "false"
+# #   Enable offline decrypt helper UI. When true (or when a path action is set to verify-decrypt/pass-decrypt)
+# #   the worker exposes crypt metadata even if WEB_DOWNLOADER_ENABLED stays false, allowing users to download
+# #   ciphertext via IDM/aria2/etc. and re-upload it for browser-side decryption. Requires CRYPT_DATA_KEY.
+# #
 # # ═══════════════════════════════════════════════════════════════
 # # ⚠️ NEW: ALTCHA Proof-of-Work Anti-Bot Protection (防爬虫 PoW 验证)
 # # ═══════════════════════════════════════════════════════════════

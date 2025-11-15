@@ -533,8 +533,16 @@ const pageScript = String.raw`
   const logEl = $('log');
   const turnstileContainer = $('turnstileContainer');
   const turnstileMessage = $('turnstileMessage');
+  const clientDecryptSection = $('clientDecryptSection');
+  const clientDecryptFileInput = $('clientDecryptFileInput');
+  const clientDecryptSelectBtn = $('clientDecryptSelect');
+  const clientDecryptStartBtn = $('clientDecryptStart');
+  const clientDecryptCancelBtn = $('clientDecryptCancel');
+  const clientDecryptFileNameEl = $('clientDecryptFileName');
+  const clientDecryptFileSizeEl = $('clientDecryptFileSize');
   const autoRedirectEnabled = window.__AUTO_REDIRECT__ === true;
   const webDownloaderProps = window.__WEB_DOWNLOADER_PROPS__ || {};
+  const clientDecryptSupported = webDownloaderProps?.clientDecrypt === true;
 
   const log = (message) => {
     const time = new Date().toLocaleTimeString();
@@ -557,6 +565,10 @@ const pageScript = String.raw`
     statusEl.textContent = text;
     log(text);
   };
+
+  if (clientDecryptSection && clientDecryptSupported) {
+    clientDecryptSection.hidden = false;
+  }
 
   const formatBytes = (bytes) => {
     if (!Number.isFinite(bytes) || bytes < 0) return '0 B';
@@ -592,6 +604,159 @@ const pageScript = String.raw`
     Array.from(bytes || [])
       .map((b) => b.toString(16).padStart(2, '0'))
       .join('');
+
+  const BYTES_PER_MB = 1024 * 1024;
+  const MIN_SEGMENT_SIZE_MB = 2;
+  const MAX_SEGMENT_SIZE_MB = 48;
+  const DEFAULT_SEGMENT_SIZE_MB = 32;
+  const MIN_PARALLEL_THREADS = 1;
+  const MAX_PARALLEL_THREADS = 32;
+  const DEFAULT_PARALLEL_THREADS = 6;
+
+  const CRYPT_HEADER_MAGIC = new Uint8Array([82, 67, 76, 79, 78, 69, 0, 0]);
+  const CRYPT_NONCE_SIZE = 24;
+
+  const cloneUint8 = (input) => {
+    if (!input) return new Uint8Array(0);
+    return input.slice ? input.slice() : new Uint8Array(input);
+  };
+
+  const incrementNonce = (baseNonce, increment) => {
+    const output = cloneUint8(baseNonce);
+    let carry = BigInt(increment);
+    let index = 0;
+    while (carry > 0n && index < output.length) {
+      const sum = BigInt(output[index]) + (carry & 0xffn);
+      output[index] = Number(sum & 0xffn);
+      carry = (carry >> 8n) + (sum >> 8n);
+      index += 1;
+    }
+    return output;
+  };
+
+  const extractCryptNonce = (headerBuffer) => {
+    if (!headerBuffer || headerBuffer.length < CRYPT_HEADER_MAGIC.length + CRYPT_NONCE_SIZE) {
+      throw new Error('crypt header 长度不足');
+    }
+    for (let i = 0; i < CRYPT_HEADER_MAGIC.length; i += 1) {
+      if (headerBuffer[i] !== CRYPT_HEADER_MAGIC[i]) {
+        throw new Error('crypt header 魔数不匹配');
+      }
+    }
+    const nonceStart = CRYPT_HEADER_MAGIC.length;
+    const nonceEnd = nonceStart + CRYPT_NONCE_SIZE;
+    return cloneUint8(headerBuffer.subarray(nonceStart, nonceEnd));
+  };
+
+  const decryptBlock = (cipherBlock, dataKey, baseNonce, blockIndex) => {
+    const nonce = incrementNonce(baseNonce, blockIndex);
+    const opened = window.nacl?.secretbox?.open(cipherBlock, nonce, dataKey);
+    if (!opened) return null;
+    return new Uint8Array(opened);
+  };
+
+  const calculateUnderlying = (offset, limit, meta) => {
+    const fallbackLimit = limit >= 0 ? limit : -1;
+    if (
+      !meta ||
+      meta.encryption === 'plain' ||
+      !Number.isFinite(meta.blockDataSize) ||
+      meta.blockDataSize <= 0 ||
+      !Number.isFinite(meta.blockHeaderSize) ||
+      meta.blockHeaderSize <= 0 ||
+      !Number.isFinite(meta.fileHeaderSize) ||
+      meta.fileHeaderSize <= 0
+    ) {
+      return {
+        underlyingOffset: offset,
+        underlyingLimit: fallbackLimit,
+        discard: 0,
+        blocks: 0,
+      };
+    }
+
+    const blockData = meta.blockDataSize;
+    const blockHeader = meta.blockHeaderSize;
+    const headerSize = meta.fileHeaderSize;
+    const blocks = Math.floor(offset / blockData);
+    const discard = offset % blockData;
+    let underlyingOffset = headerSize + blocks * (blockHeader + blockData);
+    let underlyingLimit = -1;
+    if (limit >= 0) {
+      let bytesToRead = limit - (blockData - discard);
+      let blocksToRead = 1;
+      if (bytesToRead > 0) {
+        const extraBlocks = Math.floor(bytesToRead / blockData);
+        const remainder = bytesToRead % blockData;
+        blocksToRead += extraBlocks;
+        if (remainder !== 0) {
+          blocksToRead += 1;
+        }
+      }
+      underlyingLimit = blocksToRead * (blockHeader + blockData);
+    }
+
+    return { underlyingOffset, underlyingLimit, discard, blocks };
+  };
+
+  const decodeDownloadUrl = (download) => {
+    if (download.urlBase64) {
+      try {
+        return atob(download.urlBase64);
+      } catch (error) {
+        console.warn('download.urlBase64 解码失败，回退到 url', error);
+      }
+    }
+    return download.url;
+  };
+
+  const normalizeDownloadInfo = (info) => {
+    if (!info || !info.download) {
+      throw new Error('缺少下载信息');
+    }
+    const remote = {
+      url: decodeDownloadUrl(info.download),
+      method: info.download.remote?.method || 'GET',
+      headers: info.download.remote?.headers || {},
+    };
+    const remoteLength = Number(info.download.remote?.length);
+    const metaSize = Number(info.meta?.size);
+    let totalSize = 0;
+    if (Number.isFinite(remoteLength) && remoteLength > 0) {
+      totalSize = remoteLength;
+    } else if (Number.isFinite(metaSize) && metaSize > 0) {
+      totalSize = metaSize;
+    }
+    const downloadMeta = info.download.meta || {};
+    const encryptionMode = downloadMeta.encryption === 'crypt' ? 'crypt' : 'plain';
+    const blockHeaderSize = Number(downloadMeta.blockHeaderSize) || 0;
+    const blockDataSize = Number(downloadMeta.blockDataSize) || 0;
+    const fileHeaderSize = Number(downloadMeta.fileHeaderSize) || 0;
+    const dataKey = downloadMeta.dataKey ? base64ToUint8(downloadMeta.dataKey) : null;
+    const meta = info.meta && typeof info.meta === 'object' ? { ...info.meta } : {};
+    meta.size = totalSize;
+    const pathValue = typeof meta.path === 'string' ? meta.path : '';
+    const fileNameCandidate = typeof meta.fileName === 'string' && meta.fileName.trim().length > 0
+      ? meta.fileName.trim()
+      : '';
+    let fallbackName = '';
+    if (!fileNameCandidate && pathValue) {
+      const parts = pathValue.split('/').filter(Boolean);
+      fallbackName = parts.length > 0 ? parts[parts.length - 1] : '';
+    }
+    const fileName = fileNameCandidate || fallbackName || 'download.bin';
+    return {
+      remote,
+      totalSize,
+      meta,
+      encryptionMode,
+      blockHeaderSize,
+      blockDataSize,
+      fileHeaderSize,
+      dataKey,
+      fileName,
+    };
+  };
 
   if (connectionLimitInput && !connectionLimitInput.value) {
     const defaultConnections = clamp(Number(webDownloaderProps?.config?.maxConnections) || 6, 1, 16, 6);
@@ -668,11 +833,11 @@ const pageScript = String.raw`
 
     const pendingSegmentWaiters = [];
 
-    const state = {
-      downloadURL: '',
-      infoReady: false,
-      downloadBtnMode: 'download', // 'download' or 'copy'
-      awaitingRetryUnlock: false,
+  const state = {
+    downloadURL: '',
+    infoReady: false,
+    downloadBtnMode: 'download', // 'download' or 'copy'
+    awaitingRetryUnlock: false,
       mode: 'legacy',
     webTask: null,
     security: {
@@ -685,24 +850,45 @@ const pageScript = String.raw`
       scriptLoading: null,
       widgetId: null,
     },
-    verification: {
-      needAltcha: false,
-      needTurnstile: false,
-      altchaReady: false,
-      turnstileReady: false,
-      altchaSolution: null,
-      turnstileToken: null,
-      altchaIssuedAt: 0,
-      turnstileIssuedAt: 0,
-      tokenResolvers: [],
-    },
+      verification: {
+        needAltcha: false,
+        needTurnstile: false,
+        altchaReady: false,
+        turnstileReady: false,
+        altchaSolution: null,
+        turnstileToken: null,
+        altchaIssuedAt: 0,
+        turnstileIssuedAt: 0,
+        tokenResolvers: [],
+      },
+      clientDecrypt: {
+        enabled: clientDecryptSupported,
+        ready: false,
+        running: false,
+        completed: false,
+        file: null,
+        fileName: '',
+        fileSize: 0,
+        decryptParallelism: DEFAULT_PARALLEL_THREADS,
+        decryptParallelRaw: String(DEFAULT_PARALLEL_THREADS),
+        segmentSizeMb: DEFAULT_SEGMENT_SIZE_MB,
+        segmentSizeRaw: String(DEFAULT_SEGMENT_SIZE_MB),
+      },
   };
 
+  const syncBodyModeClasses = () => {
+    if (!document || !document.body) return;
+    document.body.classList.toggle('web-downloader-active', state.mode === 'web');
+    document.body.classList.toggle('client-decrypt-active', state.mode === 'client-decrypt');
+  };
+
+  if (clientDecryptSupported && !webDownloaderProps?.enabled) {
+    state.mode = 'client-decrypt';
+  }
+  syncBodyModeClasses();
+
   const webDownloader = (() => {
-    const BYTES_PER_MB = 1024 * 1024;
-    const MIN_SEGMENT_SIZE_MB = 2;
-    const MAX_SEGMENT_SIZE_MB = 48;
-    const DEFAULT_SEGMENT_SIZE_MB = 32;
+    // use shared segment size constants
     const MIN_CONNECTIONS = 1;
     const MAX_CONNECTIONS = 32;
     const DEFAULT_CONNECTIONS = clamp(
@@ -712,84 +898,12 @@ const pageScript = String.raw`
       16
     );
     const DEFAULT_RETRY_LIMIT = 5;
-    const NONCE_SIZE = 24;
     const SPEED_WINDOW = 1500;
 
     const sleep = (ms) =>
       new Promise((resolve) => {
         setTimeout(resolve, Math.max(0, ms));
       });
-
-    const cloneUint8 = (input) => {
-      if (!input) return new Uint8Array(0);
-      return input.slice ? input.slice() : new Uint8Array(input);
-    };
-
-    const incrementNonce = (baseNonce, increment) => {
-      const output = cloneUint8(baseNonce);
-      let carry = BigInt(increment);
-      let index = 0;
-      while (carry > 0n && index < output.length) {
-        const sum = BigInt(output[index]) + (carry & 0xffn);
-        output[index] = Number(sum & 0xffn);
-        carry = (carry >> 8n) + (sum >> 8n);
-        index += 1;
-      }
-      return output;
-    };
-
-    const decryptBlock = (cipherBlock, dataKey, baseNonce, blockIndex) => {
-      const nonce = incrementNonce(baseNonce, blockIndex);
-      const opened = window.nacl?.secretbox?.open(cipherBlock, nonce, dataKey);
-      if (!opened) return null;
-      return new Uint8Array(opened);
-    };
-
-    const calculateUnderlying = (offset, limit, meta) => {
-      const fallbackLimit = limit >= 0 ? limit : -1;
-      if (
-        !meta ||
-        meta.encryption === 'plain' ||
-        !Number.isFinite(meta.blockDataSize) ||
-        meta.blockDataSize <= 0 ||
-        !Number.isFinite(meta.blockHeaderSize) ||
-        meta.blockHeaderSize <= 0 ||
-        !Number.isFinite(meta.fileHeaderSize) ||
-        meta.fileHeaderSize <= 0
-      ) {
-        return {
-          underlyingOffset: offset,
-          underlyingLimit: fallbackLimit,
-          discard: 0,
-          blocks: 0,
-        };
-      }
-
-      const blockData = meta.blockDataSize;
-      const blockHeader = meta.blockHeaderSize;
-      const headerSize = meta.fileHeaderSize;
-
-      const blocks = Math.floor(offset / blockData);
-      const discard = offset % blockData;
-
-      let underlyingOffset = headerSize + blocks * (blockHeader + blockData);
-      let underlyingLimit = -1;
-      if (limit >= 0) {
-        let bytesToRead = limit - (blockData - discard);
-        let blocksToRead = 1;
-        if (bytesToRead > 0) {
-          const extraBlocks = Math.floor(bytesToRead / blockData);
-          const remainder = bytesToRead % blockData;
-          blocksToRead += extraBlocks;
-          if (remainder !== 0) {
-            blocksToRead += 1;
-          }
-        }
-        underlyingLimit = blocksToRead * (blockHeader + blockData);
-      }
-
-      return { underlyingOffset, underlyingLimit, discard, blocks };
-    };
 
     const REQUEST_INTERVAL_MS = 300;
     const DEFAULT_SEGMENT_RETRY_LIMIT = 30;
@@ -801,9 +915,6 @@ const pageScript = String.raw`
     const MIN_TTFB_TIMEOUT_SECONDS = 5;
     const MAX_TTFB_TIMEOUT_SECONDS = 120;
     const DEFAULT_TTFB_TIMEOUT_SECONDS = 20;
-    const MIN_PARALLEL_THREADS = 1;
-    const MAX_PARALLEL_THREADS = 32;
-    const DEFAULT_PARALLEL_THREADS = 6;
 
     const clampSegmentSizeMb = (value) =>
       clamp(Number(value), MIN_SEGMENT_SIZE_MB, MAX_SEGMENT_SIZE_MB, DEFAULT_SEGMENT_SIZE_MB);
@@ -1615,6 +1726,7 @@ const pageScript = String.raw`
         downloadBtn.textContent = '开始下载';
       }
       document.body.classList.remove('web-downloader-active');
+      document.body.classList.remove('client-decrypt-active');
     };
 
     const activateUi = () => {
@@ -1834,11 +1946,11 @@ const pageScript = String.raw`
         }
       }
       const nonceStart = magic.length;
-      const nonceEnd = nonceStart + NONCE_SIZE;
-      state.baseNonce = cloneUint8(buffer.subarray(nonceStart, nonceEnd));
-      if (!state.baseNonce || state.baseNonce.length !== NONCE_SIZE) {
-        throw new Error('crypt header 中 nonce 无效');
-      }
+        const nonceEnd = nonceStart + CRYPT_NONCE_SIZE;
+        state.baseNonce = cloneUint8(buffer.subarray(nonceStart, nonceEnd));
+        if (!state.baseNonce || state.baseNonce.length !== CRYPT_NONCE_SIZE) {
+          throw new Error('crypt header 中 nonce 无效');
+        }
     };
 
     const createSegments = () => {
@@ -2910,10 +3022,10 @@ const pageScript = String.raw`
       persistTtfbTimeoutSetting(state.ttfbTimeoutSeconds);
     };
 
-    return {
-      isEnabled: () => state.enabled,
-      isRunning: () => state.running,
-      prepareFromInfo,
+  return {
+    isEnabled: () => state.enabled,
+    isRunning: () => state.running,
+    prepareFromInfo,
       prepareFromCache,
       refreshFromInfo,
       handlePrimaryAction,
@@ -2930,6 +3042,632 @@ const pageScript = String.raw`
       clearStoredTasks,
     };
   })();
+
+  const clientDecryptor = (() => {
+    const state = {
+      enabled: false,
+      prepared: false,
+      running: false,
+      encryptionMode: 'plain',
+      blockHeaderSize: 0,
+      blockDataSize: 0,
+      fileHeaderSize: 0,
+      totalSize: 0,
+      totalEncrypted: 0,
+      dataKey: null,
+      baseNonce: null,
+      fileName: '',
+      path: '',
+      sourceFile: null,
+      cancelRequested: false,
+      decryptParallelism: DEFAULT_PARALLEL_THREADS,
+      decryptParallelRaw: String(DEFAULT_PARALLEL_THREADS),
+      segmentSizeMb: DEFAULT_SEGMENT_SIZE_MB,
+      segmentSizeRaw: String(DEFAULT_SEGMENT_SIZE_MB),
+      segments: [],
+    };
+
+    const reset = () => {
+      state.enabled = false;
+      state.prepared = false;
+      state.running = false;
+      state.encryptionMode = 'plain';
+      state.blockHeaderSize = 0;
+      state.blockDataSize = 0;
+      state.fileHeaderSize = 0;
+      state.totalSize = 0;
+      state.totalEncrypted = 0;
+      state.dataKey = null;
+      state.baseNonce = null;
+      state.fileName = '';
+      state.path = '';
+      state.sourceFile = null;
+      state.cancelRequested = false;
+      state.segments = [];
+    };
+
+    const prepareFromInfo = (info, ctx = {}) => {
+      const normalized = normalizeDownloadInfo(info);
+      if (!normalized.dataKey || normalized.dataKey.length === 0) {
+        throw new Error('缺少 CRYPT_DATA_KEY，无法执行离线解密');
+      }
+      state.enabled = true;
+      state.prepared = true;
+      state.running = false;
+      state.encryptionMode = normalized.encryptionMode;
+      state.blockHeaderSize = Number(normalized.blockHeaderSize) || 0;
+      state.blockDataSize = Number(normalized.blockDataSize) || 0;
+      state.fileHeaderSize = Number(normalized.fileHeaderSize) || 0;
+      state.totalSize = Number(normalized.totalSize) || 0;
+      state.totalEncrypted = 0;
+      state.dataKey = normalized.dataKey;
+      state.baseNonce = null;
+      state.fileName = normalized.fileName;
+      state.path = typeof ctx.path === 'string' ? ctx.path : '';
+      state.sourceFile = null;
+      state.cancelRequested = false;
+      state.segments = [];
+    };
+
+    const clampSegmentSizeValue = (value) =>
+      clamp(Number(value), MIN_SEGMENT_SIZE_MB, MAX_SEGMENT_SIZE_MB, DEFAULT_SEGMENT_SIZE_MB);
+
+    const clampParallelThreads = (value) => {
+      if (!Number.isFinite(value)) {
+        return DEFAULT_PARALLEL_THREADS;
+      }
+      const rounded = Math.floor(value);
+      if (rounded < MIN_PARALLEL_THREADS) return MIN_PARALLEL_THREADS;
+      if (rounded > MAX_PARALLEL_THREADS) return MAX_PARALLEL_THREADS;
+      return rounded;
+    };
+
+    const resolveParallelism = (overrideValue) => {
+      const configured = clampParallelThreads(
+        Number.isFinite(overrideValue) ? overrideValue : state.decryptParallelism,
+      );
+      if (
+        typeof navigator !== 'undefined' &&
+        navigator &&
+        Number.isFinite(navigator.hardwareConcurrency)
+      ) {
+        const hardwareClamped = clampParallelThreads(navigator.hardwareConcurrency);
+        return Math.max(MIN_PARALLEL_THREADS, Math.min(configured, hardwareClamped));
+      }
+      return configured;
+    };
+
+    const updateParallelLimit = (value) => {
+      const raw = typeof value === 'string' ? value.trim() : '';
+      if (!raw) {
+        state.decryptParallelism = DEFAULT_PARALLEL_THREADS;
+        state.decryptParallelRaw = String(DEFAULT_PARALLEL_THREADS);
+        return state.decryptParallelism;
+      }
+      const parsed = Number.parseInt(raw, 10);
+      if (!Number.isFinite(parsed)) {
+        return state.decryptParallelism;
+      }
+      state.decryptParallelism = clampParallelThreads(parsed);
+      state.decryptParallelRaw = String(state.decryptParallelism);
+      return state.decryptParallelism;
+    };
+
+    const updateSegmentSize = (value) => {
+      state.segmentSizeMb = clampSegmentSizeValue(value);
+      state.segmentSizeRaw = String(state.segmentSizeMb);
+      return state.segmentSizeMb;
+    };
+
+    const buildSegments = (segmentSizeMb) => {
+      if (!Number.isFinite(state.totalSize) || state.totalSize <= 0) {
+        throw new Error('文件大小未知，无法解密');
+      }
+      const meta = {
+        encryption: state.encryptionMode,
+        blockDataSize: state.blockDataSize,
+        blockHeaderSize: state.blockHeaderSize,
+        fileHeaderSize: state.fileHeaderSize,
+      };
+      const segmentSizeBytes = Math.round(clampSegmentSizeValue(segmentSizeMb) * BYTES_PER_MB);
+      const segments = [];
+      let offset = 0;
+      let index = 0;
+      let encryptedTotal = 0;
+      while (offset < state.totalSize) {
+        const length = Math.min(segmentSizeBytes, state.totalSize - offset);
+        const mapping = calculateUnderlying(offset, length, meta);
+        const encryptedSize = Number.isFinite(mapping.underlyingLimit) && mapping.underlyingLimit > 0
+          ? mapping.underlyingLimit
+          : length;
+        encryptedTotal += encryptedSize;
+        segments.push({
+          index,
+          offset,
+          length,
+          mapping,
+        });
+        offset += length;
+        index += 1;
+      }
+      state.segments = segments;
+      state.totalEncrypted = encryptedTotal > 0 ? encryptedTotal : state.totalSize;
+      return segments;
+    };
+
+    const readEncryptedSegment = async (segment) => {
+      if (!state.sourceFile) {
+        throw new Error('缺少密文文件');
+      }
+      const mapping = segment.mapping || {};
+      const start = Number(mapping.underlyingOffset) || 0;
+      const limit = Number(mapping.underlyingLimit) || segment.length;
+      const end = limit > 0 ? start + limit : start + segment.length;
+      const slice = state.sourceFile.slice(start, end);
+      const buffer = await slice.arrayBuffer();
+      return new Uint8Array(buffer);
+    };
+
+    const ensureBaseNonceFromFile = async () => {
+      if (state.encryptionMode !== 'crypt' || state.baseNonce) {
+        return;
+      }
+      if (!state.sourceFile) {
+        throw new Error('缺少密文文件');
+      }
+      if (!Number.isFinite(state.fileHeaderSize) || state.fileHeaderSize <= 0) {
+        throw new Error('缺少 crypt header 尺寸配置');
+      }
+      const headerSlice = state.sourceFile.slice(0, state.fileHeaderSize);
+      const headerBuffer = new Uint8Array(await headerSlice.arrayBuffer());
+      state.baseNonce = extractCryptNonce(headerBuffer);
+    };
+
+    const decryptSegmentPayload = (segment, buffer) => {
+      if (state.encryptionMode === 'plain') {
+        if (buffer.length < segment.length) {
+          throw new Error('密文长度不足');
+        }
+        return buffer.subarray(0, segment.length);
+      }
+      const output = new Uint8Array(segment.length);
+      let produced = 0;
+      let offset = 0;
+      let discard = segment.mapping.discard;
+      let blockIndex = segment.mapping.blocks;
+      while (offset < buffer.length && produced < segment.length) {
+        if (offset + state.blockHeaderSize > buffer.length) {
+          break;
+        }
+        let end = offset + state.blockHeaderSize + state.blockDataSize;
+        if (end > buffer.length) {
+          end = buffer.length;
+        }
+        const cipherBlock = buffer.subarray(offset, end);
+        offset = end;
+        const plainBlock = decryptBlock(cipherBlock, state.dataKey, state.baseNonce, blockIndex);
+        if (!plainBlock) {
+          throw new Error('解密失败，请确认密钥');
+        }
+        let chunk = plainBlock;
+        if (blockIndex === segment.mapping.blocks && discard > 0) {
+          if (chunk.length <= discard) {
+            discard -= chunk.length;
+            blockIndex += 1;
+            continue;
+          }
+          chunk = chunk.subarray(discard);
+          discard = 0;
+        }
+        const remaining = segment.length - produced;
+        if (chunk.length > remaining) {
+          output.set(chunk.subarray(0, remaining), produced);
+          produced += remaining;
+          break;
+        }
+        output.set(chunk, produced);
+        produced += chunk.length;
+        blockIndex += 1;
+      }
+      if (produced !== segment.length) {
+        throw new Error('解密输出长度不匹配');
+      }
+      return output;
+    };
+
+    const start = async (options = {}) => {
+      if (!state.prepared) {
+        throw new Error('clientDecryptor 未准备就绪');
+      }
+      if (!state.sourceFile) {
+        throw new Error('请先选择加密文件');
+      }
+      if (state.encryptionMode !== 'crypt') {
+        throw new Error('该文件无需离线解密');
+      }
+      if (!state.dataKey || state.dataKey.length === 0) {
+        throw new Error('缺少 CRYPT_DATA_KEY，无法解密');
+      }
+      const {
+        segmentSizeMb = state.segmentSizeMb,
+        parallelism: overrideParallel,
+        onReadProgress,
+        onDecryptProgress,
+        writeChunk,
+      } = options;
+      if (typeof writeChunk !== 'function') {
+        throw new Error('缺少写入处理函数');
+      }
+      const effectiveSegmentSize = updateSegmentSize(segmentSizeMb);
+      const effectiveParallel = updateParallelLimit(
+        Number.isFinite(overrideParallel) ? String(overrideParallel) : state.decryptParallelRaw,
+      );
+      const segments = buildSegments(effectiveSegmentSize);
+      await ensureBaseNonceFromFile();
+      const expectedEncryptedSize = state.totalEncrypted + (Number(state.fileHeaderSize) || 0);
+      if (expectedEncryptedSize > 0 && Math.abs(state.sourceFile.size - expectedEncryptedSize) > state.blockHeaderSize + state.blockDataSize) {
+        console.warn('密文文件大小与预期不完全一致', state.sourceFile.size, expectedEncryptedSize);
+      }
+      state.running = true;
+      state.cancelRequested = false;
+      let readBytes = 0;
+      let decryptedBytes = 0;
+      const totalSegments = segments.length;
+      const parallelWorkers = Math.min(
+        Math.max(1, resolveParallelism(effectiveParallel)),
+        totalSegments || 1,
+      );
+      let nextToAssign = 0;
+      let nextToWrite = 0;
+      const pendingResults = new Map();
+      let flushError = null;
+      let flushChain = Promise.resolve();
+
+      const scheduleFlush = () => {
+        flushChain = flushChain
+          .then(async () => {
+            while (pendingResults.has(nextToWrite)) {
+              const chunk = pendingResults.get(nextToWrite);
+              pendingResults.delete(nextToWrite);
+              if (state.cancelRequested) {
+                throw new Error('解密已取消');
+              }
+              await writeChunk(chunk);
+              decryptedBytes = Math.min(state.totalSize, decryptedBytes + chunk.length);
+              if (typeof onDecryptProgress === 'function') {
+                onDecryptProgress(decryptedBytes, state.totalSize);
+              }
+              nextToWrite += 1;
+              await new Promise((resolve) => setTimeout(resolve, 0));
+            }
+          })
+          .catch((error) => {
+            flushError = error instanceof Error ? error : new Error(String(error));
+            throw flushError;
+          });
+      };
+
+      const worker = async () => {
+        while (true) {
+          if (flushError) {
+            throw flushError;
+          }
+          if (state.cancelRequested) {
+            throw new Error('解密已取消');
+          }
+          const currentIndex = nextToAssign;
+          if (currentIndex >= totalSegments) {
+            break;
+          }
+          nextToAssign += 1;
+          const segment = segments[currentIndex];
+          const encrypted = await readEncryptedSegment(segment);
+          readBytes = Math.min(state.totalEncrypted, readBytes + encrypted.length);
+          if (typeof onReadProgress === 'function') {
+            onReadProgress(readBytes, state.totalEncrypted);
+          }
+          const plain = decryptSegmentPayload(segment, encrypted);
+          pendingResults.set(currentIndex, plain);
+          scheduleFlush();
+        }
+      };
+      try {
+        const workerTasks = [];
+        for (let i = 0; i < parallelWorkers; i += 1) {
+          workerTasks.push(worker());
+        }
+        await Promise.all(workerTasks);
+        await flushChain;
+        if (flushError) {
+          throw flushError;
+        }
+        if (nextToWrite !== totalSegments) {
+          throw new Error('仍有分段未完成解密');
+        }
+      } finally {
+        state.running = false;
+        state.cancelRequested = false;
+      }
+    };
+
+    const cancel = () => {
+      state.cancelRequested = true;
+    };
+
+    return {
+      prepareFromInfo,
+      reset,
+      setSourceFile: (file) => {
+        state.sourceFile = file;
+      },
+      clearSourceFile: () => {
+        state.sourceFile = null;
+      },
+      start,
+      cancel,
+      isRunning: () => state.running,
+      isPrepared: () => state.prepared,
+      hasFile: () => Boolean(state.sourceFile),
+      getFileName: () => state.fileName,
+      getTotalSize: () => state.totalSize,
+      getEncryptedSize: () => state.totalEncrypted,
+      updateParallelLimit,
+      updateSegmentSize,
+      getParallelism: () => state.decryptParallelism,
+      getSegmentSizeMb: () => state.segmentSizeMb,
+    };
+  })();
+
+  const clientDecryptUiState = state.clientDecrypt;
+
+  const refreshClientDecryptSettingsState = () => {
+    if (!clientDecryptUiState) return;
+    const parallel = clientDecryptor.getParallelism();
+    clientDecryptUiState.decryptParallelism = parallel;
+    clientDecryptUiState.decryptParallelRaw = String(parallel);
+    const segmentSize = clientDecryptor.getSegmentSizeMb();
+    clientDecryptUiState.segmentSizeMb = segmentSize;
+    clientDecryptUiState.segmentSizeRaw = String(segmentSize);
+  };
+
+  const syncClientDecryptorSettingsFromInputs = () => {
+    if (parallelLimitInput) {
+      clientDecryptor.updateParallelLimit(parallelLimitInput.value);
+    }
+    if (segmentSizeInput) {
+      clientDecryptor.updateSegmentSize(segmentSizeInput.value);
+    }
+    refreshClientDecryptSettingsState();
+  };
+
+  syncClientDecryptorSettingsFromInputs();
+
+  const formatProgressText = (value, total) => {
+    if (!Number.isFinite(total) || total <= 0) {
+      return '0%';
+    }
+    const percent = Math.min(100, (value / total) * 100);
+    return percent.toFixed(2) + '%';
+  };
+
+  const updateClientReadProgress = (value, total) => {
+    if (!downloadBar || !downloadText) return;
+    const text = formatProgressText(value, total);
+    downloadBar.style.width = text;
+    downloadText.textContent = Number.isFinite(total) && total > 0
+      ? text + ' (' + formatBytes(value) + ' / ' + formatBytes(total) + ')'
+      : text;
+  };
+
+  const updateClientDecryptProgress = (value, total) => {
+    const text = formatProgressText(value, total);
+    // 更新 web-only 解密进度条
+    if (decryptBar && decryptText) {
+      decryptBar.style.width = text;
+      decryptText.textContent = Number.isFinite(total) && total > 0
+        ? text + ' (' + formatBytes(value) + ' / ' + formatBytes(total) + ')'
+        : text;
+    }
+    // 更新离线解密模式的文件容器进度（通过 CSS 变量）
+    if (clientDecryptFileNameEl && clientDecryptFileNameEl.parentElement) {
+      clientDecryptFileNameEl.parentElement.style.setProperty('--decrypt-progress', text);
+    }
+  };
+
+  const resetClientDecryptProgress = () => {
+    if (downloadBar) downloadBar.style.width = '0%';
+    if (downloadText) downloadText.textContent = '0%';
+    if (decryptBar) decryptBar.style.width = '0%';
+    if (decryptText) decryptText.textContent = '0%';
+    // 重置离线解密模式的文件容器进度
+    if (clientDecryptFileNameEl && clientDecryptFileNameEl.parentElement) {
+      clientDecryptFileNameEl.parentElement.style.setProperty('--decrypt-progress', '0%');
+    }
+  };
+
+  const syncClientDecryptFileInfo = () => {
+    if (!clientDecryptFileNameEl || !clientDecryptFileSizeEl) return;
+    if (clientDecryptUiState.file) {
+      clientDecryptFileNameEl.textContent = clientDecryptUiState.file.name || clientDecryptUiState.fileName || '密文文件';
+      clientDecryptFileSizeEl.textContent = formatBytes(clientDecryptUiState.file.size);
+    } else if (clientDecryptUiState.fileName) {
+      clientDecryptFileNameEl.textContent = clientDecryptUiState.fileName;
+      clientDecryptFileSizeEl.textContent = clientDecryptUiState.fileSize > 0
+        ? formatBytes(clientDecryptUiState.fileSize)
+        : '--';
+    } else {
+      clientDecryptFileNameEl.textContent = '尚未选择文件';
+      clientDecryptFileSizeEl.textContent = '--';
+    }
+  };
+
+    const setClientDecryptFile = (file) => {
+    clientDecryptUiState.file = file || null;
+    clientDecryptUiState.fileName = file ? file.name : clientDecryptUiState.fileName;
+    clientDecryptUiState.fileSize = file ? file.size : clientDecryptUiState.fileSize;
+    clientDecryptUiState.completed = false;
+    syncClientDecryptFileInfo();
+  };
+
+  const clearClientDecryptFile = () => {
+    clientDecryptUiState.file = null;
+    clientDecryptUiState.completed = false;
+    syncClientDecryptFileInfo();
+    if (clientDecryptFileInput) {
+      clientDecryptFileInput.value = '';
+    }
+    clientDecryptor.clearSourceFile();
+  };
+
+  const syncClientDecryptControls = () => {
+    if (clientDecryptStartBtn) {
+      let disabled =
+        !clientDecryptUiState.enabled ||
+        !clientDecryptUiState.ready ||
+        !clientDecryptUiState.file ||
+        clientDecryptUiState.running;
+      let label = '开始解密';
+      if (clientDecryptUiState.running) {
+        label = '解密中...';
+      } else if (clientDecryptUiState.completed) {
+        label = '解密完成';
+        disabled = true;
+      }
+      clientDecryptStartBtn.textContent = label;
+      clientDecryptStartBtn.disabled = disabled;
+    }
+    if (clientDecryptCancelBtn) {
+      clientDecryptCancelBtn.hidden = !clientDecryptUiState.running;
+    }
+  };
+
+  const triggerClientDecryptDownload = (url, { userGesture = false } = {}) => {
+    if (!url || typeof url !== 'string') {
+      return false;
+    }
+    try {
+      const opened = window.open(url, '_blank', 'noopener,noreferrer');
+      if (opened) {
+        if (userGesture) {
+          log('已在新标签页打开密文下载');
+        } else {
+          log('已尝试在新标签页打开密文下载，若浏览器拦截请点击“开始下载”按钮');
+        }
+        return true;
+      }
+    } catch (error) {
+      console.warn('自动打开密文下载失败', error);
+    }
+    return false;
+  };
+
+  const initClientDecryptDropzone = () => {
+    if (!clientDecryptSection || !clientDecryptSupported) {
+      return;
+    }
+    const prevent = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    const activate = () => {
+      clientDecryptSection.classList.add('is-dropping');
+    };
+    const deactivate = () => {
+      clientDecryptSection.classList.remove('is-dropping');
+    };
+    ['dragenter', 'dragover'].forEach((type) => {
+      clientDecryptSection.addEventListener(type, (event) => {
+        prevent(event);
+        if (event.dataTransfer) {
+          event.dataTransfer.dropEffect = 'copy';
+        }
+        activate();
+      });
+    });
+    clientDecryptSection.addEventListener('dragleave', (event) => {
+      // Only deactivate if leaving the container entirely (not entering a child element)
+      const rect = clientDecryptSection.getBoundingClientRect();
+      const x = event.clientX;
+      const y = event.clientY;
+      if (x <= rect.left || x >= rect.right || y <= rect.top || y >= rect.bottom) {
+        deactivate();
+      }
+    });
+    clientDecryptSection.addEventListener('drop', (event) => {
+      prevent(event);
+      deactivate();
+      const dropped = event.dataTransfer?.files;
+      if (!dropped || dropped.length === 0) {
+        return;
+      }
+      const file = dropped[0];
+      if (file) {
+        setClientDecryptFile(file);
+        clientDecryptor.setSourceFile(file);
+        syncClientDecryptControls();
+        setStatus('已选择密文文件：' + (file.name || '')); // status log to inform user
+      }
+    });
+  };
+
+  let clientDecryptWriter = null;
+
+  const acquireClientDecryptWriter = async (suggestedName) => {
+    if (typeof window.showSaveFilePicker === 'function') {
+      try {
+        const handle = await window.showSaveFilePicker({
+          suggestedName: suggestedName || 'download.bin',
+          types: [{ description: 'Binary file', accept: { 'application/octet-stream': ['.bin'] } }],
+        });
+        const writable = await handle.createWritable({ keepExistingData: false });
+        clientDecryptWriter = { type: 'fs', handle, writable };
+        return clientDecryptWriter;
+      } catch (error) {
+        throw error;
+      }
+    }
+    clientDecryptWriter = { type: 'memory', chunks: [] };
+    return clientDecryptWriter;
+  };
+
+  const writeClientDecryptChunk = async (writer, chunk) => {
+    if (!writer) throw new Error('writer 未初始化');
+    if (writer.type === 'fs') {
+      await writer.writable.write(chunk);
+      return;
+    }
+    writer.chunks.push(chunk);
+  };
+
+  const finalizeClientDecryptWriter = async (writer, fileName) => {
+    if (!writer) return;
+    if (writer.type === 'fs') {
+      await writer.writable.close();
+      clientDecryptWriter = null;
+      return;
+    }
+    const blob = new Blob(writer.chunks, { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = fileName || 'download.bin';
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    clientDecryptWriter = null;
+  };
+
+  const abortClientDecryptWriter = async (writer) => {
+    if (writer && writer.type === 'fs' && writer.writable) {
+      try {
+        await writer.writable.abort();
+      } catch (error) {
+        console.warn('终止文件写入失败', error);
+      }
+    }
+    clientDecryptWriter = null;
+  };
 
   const updateButtonState = () => {
     if (!downloadBtn) return;
@@ -3450,6 +4188,10 @@ const pageScript = String.raw`
 
     state.downloadBtnMode = 'download';
     state.infoReady = false;
+    clientDecryptUiState.ready = false;
+    clientDecryptUiState.running = false;
+    clientDecryptUiState.completed = false;
+    syncClientDecryptControls();
     downloadBtn.textContent = requiresTurnstileReset ? '等待验证' : '获取失败';
     downloadBtn.disabled = true;
 
@@ -3475,7 +4217,11 @@ const pageScript = String.raw`
       webDownloader.reset();
     }
     state.mode = 'legacy';
+    syncBodyModeClasses();
     state.infoReady = false;
+    clientDecryptUiState.ready = false;
+    clientDecryptUiState.running = false;
+    syncClientDecryptControls();
     updateButtonState();
 
     let warmedFromCache = false;
@@ -3489,6 +4235,7 @@ const pageScript = String.raw`
         if (cached) {
           warmedFromCache = true;
           state.mode = 'web';
+          syncBodyModeClasses();
           state.infoReady = true;
           setStatus('已从缓存恢复下载任务，正在刷新最新信息...');
           notifyAutoRedirectForWeb();
@@ -3497,6 +4244,7 @@ const pageScript = String.raw`
         console.warn('从缓存恢复 webDownloader 失败', cacheError);
         webDownloader.reset();
         state.mode = 'legacy';
+        syncBodyModeClasses();
         state.infoReady = false;
       }
     }
@@ -3593,6 +4341,11 @@ const pageScript = String.raw`
       throw new Error('服务器未返回下载信息');
     }
 
+    const downloadURL = infoData.download.url;
+    if (!downloadURL) {
+      throw new Error('服务器未返回下载链接');
+    }
+
     if (infoData.settings?.webDownloader) {
       const shouldAutoStart = false; // webDownloader requires an explicit user gesture
       await webDownloader.refreshFromInfo(infoData, {
@@ -3600,7 +4353,14 @@ const pageScript = String.raw`
         path,
         sign,
       });
+      clientDecryptor.reset();
+      clearClientDecryptFile();
+      resetClientDecryptProgress();
+      clientDecryptUiState.ready = false;
+      clientDecryptUiState.running = false;
+      syncClientDecryptControls();
       state.mode = 'web';
+      syncBodyModeClasses();
       state.infoReady = true;
       notifyAutoRedirectForWeb();
       return;
@@ -3609,13 +4369,44 @@ const pageScript = String.raw`
     if (webDownloader.isEnabled()) {
       webDownloader.reset();
     }
-    state.mode = 'legacy';
-    state.infoReady = false;
 
-    const downloadURL = infoData.download.url;
-    if (!downloadURL) {
-      throw new Error('服务器未返回下载链接');
+    if (infoData.settings?.clientDecrypt) {
+      try {
+        clientDecryptor.prepareFromInfo(infoData, { path, sign });
+      } catch (prepareError) {
+        throw new Error(prepareError && prepareError.message ? prepareError.message : '离线解密初始化失败');
+      }
+      clearClientDecryptFile();
+      syncClientDecryptorSettingsFromInputs();
+      clientDecryptUiState.enabled = true;
+      clientDecryptUiState.ready = true;
+      clientDecryptUiState.completed = false;
+      clientDecryptUiState.fileName = infoData.meta?.fileName || clientDecryptor.getFileName() || '';
+      clientDecryptUiState.fileSize = Number(infoData.meta?.size) || 0;
+      refreshClientDecryptSettingsState();
+      syncClientDecryptFileInfo();
+      syncClientDecryptControls();
+      state.mode = 'client-decrypt';
+      syncBodyModeClasses();
+      state.infoReady = true;
+      state.downloadURL = downloadURL;
+      const autoOpened = triggerClientDecryptDownload(downloadURL, { userGesture: false });
+      state.downloadBtnMode = autoOpened ? 'copy' : 'download';
+      downloadBtn.disabled = false;
+      downloadBtn.textContent = autoOpened ? '复制链接' : '开始下载';
+      retryBtn.disabled = false;
+      clearCacheBtn.disabled = false;
+      setStatus('已获取下载信息，请使用外部下载器完成密文下载后回到此处解密');
+      return;
     }
+
+    state.mode = 'legacy';
+    syncBodyModeClasses();
+    state.infoReady = false;
+    clientDecryptUiState.ready = false;
+    clientDecryptUiState.running = false;
+    clientDecryptUiState.completed = false;
+    syncClientDecryptControls();
 
     state.downloadURL = downloadURL;
     state.infoReady = true;
@@ -3722,11 +4513,102 @@ const pageScript = String.raw`
     }
   };
 
+  const startClientDecryptFlow = async () => {
+    if (!clientDecryptUiState.enabled) {
+      setStatus('当前环境未启用离线解密');
+      return;
+    }
+    if (!clientDecryptUiState.ready) {
+      setStatus('尚未获取解密信息，请先点击重试');
+      return;
+    }
+    if (!clientDecryptUiState.file) {
+      setStatus('请选择已下载的密文文件');
+      return;
+    }
+    clientDecryptor.setSourceFile(clientDecryptUiState.file);
+    if (!window.nacl || !window.nacl.secretbox || !window.nacl.secretbox.open) {
+      setStatus('TweetNaCl 初始化失败，无法解密');
+      return;
+    }
+    if (clientDecryptUiState.running) {
+      return;
+    }
+    clientDecryptUiState.running = true;
+    syncClientDecryptControls();
+    try {
+      resetClientDecryptProgress();
+      setStatus('正在准备离线解密...');
+      const writer = await acquireClientDecryptWriter(clientDecryptor.getFileName() || clientDecryptUiState.file.name);
+      syncClientDecryptorSettingsFromInputs();
+      await clientDecryptor.start({
+        segmentSizeMb: clientDecryptor.getSegmentSizeMb(),
+        parallelism: clientDecryptor.getParallelism(),
+        onReadProgress: (value, total) => {
+          if (state.mode === 'client-decrypt') {
+            updateClientReadProgress(value, total);
+          }
+        },
+        onDecryptProgress: (value, total) => {
+          if (state.mode === 'client-decrypt') {
+            updateClientDecryptProgress(value, total);
+          }
+        },
+        writeChunk: async (chunk) => {
+          await writeClientDecryptChunk(writer, chunk);
+        },
+      });
+      await finalizeClientDecryptWriter(writer, clientDecryptor.getFileName() || clientDecryptUiState.file.name);
+      clientDecryptUiState.completed = true;
+      syncClientDecryptControls();
+      setStatus('解密完成，文件已保存');
+    } catch (error) {
+      const message = error instanceof Error && error.message ? error.message : String(error || '未知错误');
+      if (message.includes('取消')) {
+        setStatus('解密已取消');
+      } else {
+        setStatus('解密失败：' + message);
+        console.error(error);
+      }
+      clientDecryptUiState.completed = false;
+      if (clientDecryptWriter) {
+        await abortClientDecryptWriter(clientDecryptWriter);
+      }
+    } finally {
+      clientDecryptUiState.running = false;
+      syncClientDecryptControls();
+    }
+  };
+
+  const cancelClientDecryptFlow = async () => {
+    if (!clientDecryptUiState.running) return;
+    setStatus('正在取消解密...');
+    clientDecryptor.cancel();
+    if (clientDecryptWriter) {
+      await abortClientDecryptWriter(clientDecryptWriter);
+    }
+  };
+
   downloadBtn.addEventListener('click', () => {
     if (!state.infoReady) return;
 
     if (state.mode === 'web' && webDownloader.isEnabled()) {
       webDownloader.handlePrimaryAction();
+      return;
+    }
+
+    if (state.mode === 'client-decrypt') {
+      if (state.downloadBtnMode === 'download') {
+        const opened = triggerClientDecryptDownload(state.downloadURL, { userGesture: true });
+        if (opened) {
+          state.downloadBtnMode = 'copy';
+          downloadBtn.textContent = '复制链接';
+          return;
+        }
+        copyToClipboard(state.downloadURL, downloadBtn);
+        return;
+      }
+      copyToClipboard(state.downloadURL, downloadBtn);
       return;
     }
 
@@ -3738,6 +4620,39 @@ const pageScript = String.raw`
       redirectToDownload();
     }
   });
+
+  if (clientDecryptSelectBtn && clientDecryptFileInput) {
+    clientDecryptSelectBtn.addEventListener('click', () => {
+      clientDecryptFileInput.click();
+    });
+    clientDecryptFileInput.addEventListener('change', (event) => {
+      const file = event.target.files && event.target.files[0];
+      if (file) {
+        setClientDecryptFile(file);
+        clientDecryptor.setSourceFile(file);
+      } else {
+        clearClientDecryptFile();
+        clientDecryptor.clearSourceFile();
+      }
+      syncClientDecryptControls();
+    });
+  }
+
+  if (clientDecryptStartBtn) {
+    clientDecryptStartBtn.addEventListener('click', () => {
+      startClientDecryptFlow().catch((error) => {
+        console.error('离线解密失败', error);
+      });
+    });
+  }
+
+  if (clientDecryptCancelBtn) {
+    clientDecryptCancelBtn.addEventListener('click', () => {
+      cancelClientDecryptFlow().catch((error) => {
+        console.warn('取消离线解密失败', error);
+      });
+    });
+  }
 
   retryBtn.addEventListener('click', async () => {
     downloadBtn.disabled = true;
@@ -3755,6 +4670,13 @@ const pageScript = String.raw`
   clearCacheBtn.addEventListener('click', async () => {
     if (state.mode === 'web') {
       webDownloader.reset();
+    } else if (state.mode === 'client-decrypt') {
+      clientDecryptor.reset();
+      clearClientDecryptFile();
+      clientDecryptUiState.ready = false;
+      clientDecryptUiState.running = false;
+      syncClientDecryptControls();
+      resetClientDecryptProgress();
     }
     clearCacheBtn.disabled = true;
     downloadBtn.disabled = true;
@@ -3791,6 +4713,14 @@ const pageScript = String.raw`
 
   if (cancelBtn) {
     cancelBtn.addEventListener('click', () => {
+      if (state.mode === 'client-decrypt') {
+        cancelClientDecryptFlow().catch((error) => {
+          if (error) {
+            console.warn('取消离线解密失败', error);
+          }
+        });
+        return;
+      }
       webDownloader.cancelDownload().catch((error) => {
         if (error) {
           console.error('取消下载失败', error);
@@ -3802,9 +4732,20 @@ const pageScript = String.raw`
   if (clearEnvBtn) {
     clearEnvBtn.addEventListener('click', async () => {
       try {
-        await webDownloader.clearStoredTasks();
+        if (state.mode === 'client-decrypt') {
+          clientDecryptor.reset();
+          clearClientDecryptFile();
+          clientDecryptUiState.ready = false;
+          clientDecryptUiState.running = false;
+          clientDecryptUiState.completed = false;
+          syncClientDecryptControls();
+          resetClientDecryptProgress();
+        } else {
+          await webDownloader.clearStoredTasks();
+        }
         state.infoReady = false;
-        state.mode = 'legacy';
+        state.mode = clientDecryptSupported ? 'client-decrypt' : 'legacy';
+        syncBodyModeClasses();
         state.downloadBtnMode = 'download';
         if (downloadBtn) {
           downloadBtn.textContent = '开始下载';
@@ -3833,12 +4774,16 @@ const pageScript = String.raw`
   if (parallelLimitInput) {
     parallelLimitInput.addEventListener('change', (event) => {
       webDownloader.updateParallelLimit(event.target.value);
+      clientDecryptor.updateParallelLimit(event.target.value);
+      refreshClientDecryptSettingsState();
     });
   }
 
   if (segmentSizeInput) {
     segmentSizeInput.addEventListener('change', (event) => {
       webDownloader.updateSegmentSize(event.target.value);
+      clientDecryptor.updateSegmentSize(event.target.value);
+      refreshClientDecryptSettingsState();
     });
   }
 
@@ -3921,6 +4866,10 @@ const pageScript = String.raw`
     advancedPanel.setAttribute('aria-hidden', 'true');
     advancedBackdrop.hidden = true;
   });
+
+  syncClientDecryptFileInfo();
+  syncClientDecryptControls();
+  initClientDecryptDropzone();
 
   const initialise = async () => {
     state.infoReady = false;
@@ -4039,6 +4988,11 @@ const renderLandingPageHtml = (path, options = {}) => {
     enabled: normalizedOptions.webDownloader === true,
     isCryptPath: normalizedOptions.isCryptPath === true,
     config: normalizedWebDownloaderConfig,
+    clientDecrypt: normalizedOptions.clientDecrypt === true,
+    decryptConfig:
+      normalizedOptions.decryptConfig && typeof normalizedOptions.decryptConfig === 'object'
+        ? normalizedOptions.decryptConfig
+        : null,
   };
   const webDownloaderJson = JSON.stringify(webDownloaderPayload).replace(/</g, '\\u003c');
 

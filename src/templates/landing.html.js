@@ -45,6 +45,27 @@ export const htmlTemplate = `<!DOCTYPE html>
         <button id="retryBtn" disabled>重试</button>
         <button id="advancedToggle" class="secondary" type="button">高级选项</button>
       </div>
+      <section class="client-decrypt" id="clientDecryptSection" hidden>
+        <div class="client-decrypt-header">
+          <div>
+            <div class="client-decrypt-title">离线解密</div>
+            <p class="client-decrypt-desc">使用 IDM/aria2 等工具完成密文下载后，将文件导入此处即可完成解密。</p>
+          </div>
+          <div class="client-decrypt-hint">crypt 路径可用</div>
+        </div>
+        <div class="client-decrypt-body">
+          <div class="client-decrypt-file">
+            <div class="client-file-name" id="clientDecryptFileName">尚未选择文件</div>
+            <div class="client-file-size" id="clientDecryptFileSize">--</div>
+          </div>
+          <div class="client-decrypt-actions">
+            <button id="clientDecryptSelect" type="button">选择密文文件</button>
+            <button id="clientDecryptStart" type="button" disabled>开始解密</button>
+            <button id="clientDecryptCancel" type="button" class="secondary" hidden>取消解密</button>
+          </div>
+          <input id="clientDecryptFileInput" type="file" hidden>
+        </div>
+      </section>
       <aside id="advancedPanel" class="advanced-panel" aria-hidden="true">
         <div class="advanced-header">
           <h2>高级选项</h2>
@@ -63,11 +84,6 @@ export const htmlTemplate = `<!DOCTYPE html>
               <span class="retry-hint">范围 1-32，默认 16</span>
             </label>
             <input id="connectionLimitInput" class="retry-input" type="number" inputmode="numeric" autocomplete="off" min="1" max="32" value="16">
-            <label class="retry-label" for="segmentSizeInput">
-              分段大小 (MB)
-              <span class="retry-hint">范围 2-48 MB，默认 32 MB</span>
-            </label>
-            <input id="segmentSizeInput" class="retry-input" type="number" inputmode="numeric" autocomplete="off" min="2" max="48" value="32">
             <label class="retry-label" for="ttfbTimeoutInput">
               TTFB 超时 (秒)
               <span class="retry-hint">等待首字节超时，默认 20 秒</span>
@@ -79,7 +95,15 @@ export const htmlTemplate = `<!DOCTYPE html>
             </label>
             <input id="retryLimitInput" class="retry-input" type="text" inputmode="numeric" autocomplete="off" value="30">
           </div>
-          <div class="config-section web-only">
+          <div class="config-section mode-shared">
+            <div class="config-section-title">分段配置</div>
+            <label class="retry-label" for="segmentSizeInput">
+              分段大小 (MB)
+              <span class="retry-hint">范围 2-48 MB，默认 32 MB</span>
+            </label>
+            <input id="segmentSizeInput" class="retry-input" type="number" inputmode="numeric" autocomplete="off" min="2" max="48" value="32">
+          </div>
+          <div class="config-section client-only">
             <div class="config-section-title">解密配置</div>
             <label class="retry-label" for="parallelLimitInput">
               并行解密线程数
