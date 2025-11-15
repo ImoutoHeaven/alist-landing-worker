@@ -456,13 +456,16 @@ button:disabled {
 
 /* ========== Log Section ========== */
 .log {
-  background: rgba(15,23,42,0.6);
+  background: rgba(15,23,42,0.4);
+  border: 1px solid rgba(148,163,184,0.2);
   border-radius: 0.75rem;
   padding: 1rem;
   max-height: 260px;
   overflow-y: auto;
   font-size: 0.85rem;
   line-height: 1.5;
+  -webkit-backdrop-filter: blur(12px) saturate(130%);
+  backdrop-filter: blur(12px) saturate(130%);
 }
 
 /* ========== Responsive Design ========== */
@@ -509,6 +512,10 @@ button:disabled {
 
   .advanced-panel {
     background: rgba(15,23,42,0.92);
+  }
+
+  .log {
+    background: rgba(15,23,42,0.75);
   }
 }
 `;
