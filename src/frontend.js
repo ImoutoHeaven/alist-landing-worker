@@ -1255,6 +1255,7 @@ const pageScript = String.raw`
       prepared: false,
       running: false,
       cancelling: false,
+      paused: false,
       remote: null,
       meta: null,
       cacheKey: '',
@@ -1270,6 +1271,7 @@ const pageScript = String.raw`
       baseNonce: null,
       segments: [],
       pendingSegments: [],
+      pausedSegments: [],
       failedSegments: new Set(),
       retryTimers: new Map(),
       abortControllers: new Set(),
@@ -1337,6 +1339,8 @@ const pageScript = String.raw`
 
     hydrateStoredSettings();
 
+    const resumeWaiters = [];
+
     const notifyPendingSegmentWaiters = () => {
       if (pendingSegmentWaiters.length === 0) {
         return;
@@ -1354,6 +1358,25 @@ const pageScript = String.raw`
     const waitForPendingSegment = () =>
       new Promise((resolve) => {
         pendingSegmentWaiters.push(resolve);
+      });
+
+    const notifyResumeWaiters = () => {
+      if (resumeWaiters.length === 0) {
+        return;
+      }
+      const resolvers = resumeWaiters.splice(0, resumeWaiters.length);
+      resolvers.forEach((resolve) => {
+        try {
+          resolve();
+        } catch (error) {
+          console.error('resume waiter failed', error);
+        }
+      });
+    };
+
+    const waitForResume = () =>
+      new Promise((resolve) => {
+        resumeWaiters.push(resolve);
       });
 
     const cancelScheduledRetry = (index) => {
@@ -1660,6 +1683,8 @@ const pageScript = String.raw`
       }
       state.segments = segments;
       state.pendingSegments = segments.map((segment) => segment.index);
+      state.pausedSegments = [];
+      state.paused = false;
       state.failedSegments = new Set();
       state.totalEncrypted = encryptedTotal > 0 ? encryptedTotal : fileSize;
       state.downloadedEncrypted = 0;
@@ -1679,6 +1704,8 @@ const pageScript = String.raw`
     };
 
     const restoreSegmentsFromCache = async () => {
+      state.pausedSegments = [];
+      state.paused = false;
       if (!state.cacheKey || state.segments.length === 0) {
         state.pendingSegments = state.segments.map((segment) => segment.index);
         state.failedSegments.clear();
@@ -1737,12 +1764,15 @@ const pageScript = String.raw`
         segment.status = 'pending';
       }
       cancelScheduledRetry(index);
+      const targetQueue = state.paused ? state.pausedSegments : state.pendingSegments;
       if (prioritize) {
-        state.pendingSegments.unshift(index);
+        targetQueue.unshift(index);
       } else {
-        state.pendingSegments.push(index);
+        targetQueue.push(index);
       }
-      notifyPendingSegmentWaiters();
+      if (!state.paused) {
+        notifyPendingSegmentWaiters();
+      }
     };
 
     const takeNextSegmentIndex = () => {
@@ -1853,6 +1883,13 @@ const pageScript = String.raw`
           cancelTtfbTimer();
           if (state.cancelling) {
             throw error instanceof Error ? error : new Error(String(error || 'cancelled'));
+          }
+          if (state.paused) {
+            segment.status = 'pending';
+            segment.error = null;
+            state.failedSegments.delete(segment.index);
+            enqueueSegment(segment.index, true);
+            return;
           }
           const rawMessage = error instanceof Error && error.message ? error.message : String(error || '未知错误');
           const isTtfbTimeout = ttfbTimedOut && controller.signal.aborted;
@@ -2110,6 +2147,10 @@ const pageScript = String.raw`
         if (state.cancelling) {
           throw new Error('cancelled');
         }
+        if (state.paused) {
+          await waitForResume();
+          continue;
+        }
         if (inFlight.size >= connectionLimit) {
           await Promise.race(inFlight);
           continue;
@@ -2141,6 +2182,9 @@ const pageScript = String.raw`
       if (!state.prepared) {
         throw new Error('webDownloader 未准备就绪');
       }
+      state.paused = false;
+      state.pausedSegments.length = 0;
+      notifyResumeWaiters();
       state.workflowPromise = (async () => {
         state.running = true;
         state.cancelling = false;
@@ -2149,8 +2193,8 @@ const pageScript = String.raw`
         state.decryptedBytes = state.decryptedBytes || 0;
         applyProgress();
         if (downloadBtn) {
-          downloadBtn.disabled = true;
-          downloadBtn.textContent = '下载中...';
+          downloadBtn.disabled = false;
+          downloadBtn.textContent = '暂停下载';
         }
         if (cancelBtn) cancelBtn.disabled = false;
         if (clearEnvBtn) clearEnvBtn.disabled = true;
@@ -2213,7 +2257,11 @@ const pageScript = String.raw`
     const cancelDownload = async () => {
       if (!state.running) return;
       state.cancelling = true;
+      state.paused = false;
+      state.pausedSegments.length = 0;
       state.pendingSegments.length = 0;
+      notifyResumeWaiters();
+      notifyPendingSegmentWaiters();
       clearAllRetryTimers();
       state.abortControllers?.forEach((controller) => {
         try {
@@ -2224,6 +2272,43 @@ const pageScript = String.raw`
       });
       state.abortControllers = new Set();
       setStatus('正在取消下载...');
+    };
+
+    const pauseDownload = () => {
+      if (!state.running || state.paused) return;
+      state.paused = true;
+      if (state.pendingSegments.length > 0) {
+        state.pausedSegments = state.pausedSegments.concat(state.pendingSegments);
+        state.pendingSegments.length = 0;
+      }
+      notifyPendingSegmentWaiters();
+      state.abortControllers?.forEach((controller) => {
+        try {
+          controller.abort();
+        } catch (error) {
+          console.warn('暂停下载时中止请求失败', error);
+        }
+      });
+      if (downloadBtn) {
+        downloadBtn.textContent = '恢复下载';
+      }
+      setStatus('下载已暂停，点击恢复下载继续。');
+      if (speedText) speedText.textContent = '--';
+    };
+
+    const resumeDownload = () => {
+      if (!state.running || !state.paused) return;
+      state.paused = false;
+      if (state.pausedSegments.length > 0) {
+        state.pendingSegments = state.pausedSegments.concat(state.pendingSegments);
+        state.pausedSegments.length = 0;
+      }
+      notifyResumeWaiters();
+      notifyPendingSegmentWaiters();
+      if (downloadBtn) {
+        downloadBtn.textContent = '暂停下载';
+      }
+      setStatus('继续下载...');
     };
 
     const normalizeDownloadInfo = (info) => {
@@ -2278,6 +2363,8 @@ const pageScript = String.raw`
       state.prepared = false;
       state.running = false;
       state.cancelling = false;
+      state.paused = false;
+      state.pausedSegments = [];
       state.remote = normalized.remote;
       state.meta = normalized.meta;
       state.fileName = normalized.fileName;
@@ -2438,8 +2525,17 @@ const pageScript = String.raw`
     const handlePrimaryAction = () => {
       if (!state.prepared) return;
       if (state.running) {
+        // 已在运行中：切换暂停/恢复
+        if (state.paused) {
+          // 当前已暂停 → 恢复下载
+          resumeDownload();
+        } else {
+          // 当前未暂停 → 暂停下载
+          pauseDownload();
+        }
         return;
       }
+      // 未运行 → 开始下载
       startWorkflow().catch((error) => {
         console.error(error);
         setStatus('下载失败：' + (error && error.message ? error.message : '未知错误'));
@@ -2450,6 +2546,7 @@ const pageScript = String.raw`
       state.enabled = false;
       state.prepared = false;
       state.running = false;
+      state.paused = false;
       state.remote = null;
       state.meta = null;
       state.dataKey = null;
@@ -2465,6 +2562,7 @@ const pageScript = String.raw`
       state.fileHeaderSize = 0;
       state.segments = [];
       state.pendingSegments = [];
+      state.pausedSegments = [];
       state.failedSegments.clear();
       clearAllRetryTimers();
       state.writer = null;
@@ -2481,6 +2579,7 @@ const pageScript = String.raw`
         clearInterval(state.speedTimer);
         state.speedTimer = null;
       }
+      notifyResumeWaiters();
       resetUi();
     };
 
@@ -2612,6 +2711,8 @@ const pageScript = String.raw`
       refreshFromInfo,
       handlePrimaryAction,
       cancelDownload,
+      pauseDownload,
+      resumeDownload,
       reset,
       updateConnectionLimit,
       updateRetryLimit,
