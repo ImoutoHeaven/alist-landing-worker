@@ -60,14 +60,14 @@ export const htmlTemplate = `<!DOCTYPE html>
             <div class="config-section-title">下载配置</div>
             <label class="retry-label" for="connectionLimitInput">
               最大打开连接数
-              <span class="retry-hint">范围 1-16，默认 6</span>
+              <span class="retry-hint">范围 1-32，默认 16</span>
             </label>
-            <input id="connectionLimitInput" class="retry-input" type="number" inputmode="numeric" autocomplete="off" min="1" max="16" value="6">
+            <input id="connectionLimitInput" class="retry-input" type="number" inputmode="numeric" autocomplete="off" min="1" max="32" value="16">
             <label class="retry-label" for="segmentSizeInput">
               分段大小 (MB)
-              <span class="retry-hint">范围 2-32 MB，默认 12 MB</span>
+              <span class="retry-hint">范围 2-48 MB，默认 32 MB</span>
             </label>
-            <input id="segmentSizeInput" class="retry-input" type="number" inputmode="numeric" autocomplete="off" min="2" max="32" value="12">
+            <input id="segmentSizeInput" class="retry-input" type="number" inputmode="numeric" autocomplete="off" min="2" max="48" value="32">
             <label class="retry-label" for="ttfbTimeoutInput">
               TTFB 超时 (秒)
               <span class="retry-hint">等待首字节超时，默认 20 秒</span>

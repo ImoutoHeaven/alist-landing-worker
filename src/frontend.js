@@ -701,15 +701,15 @@ const pageScript = String.raw`
   const webDownloader = (() => {
     const BYTES_PER_MB = 1024 * 1024;
     const MIN_SEGMENT_SIZE_MB = 2;
-    const MAX_SEGMENT_SIZE_MB = 32;
-    const DEFAULT_SEGMENT_SIZE_MB = 12;
+    const MAX_SEGMENT_SIZE_MB = 48;
+    const DEFAULT_SEGMENT_SIZE_MB = 32;
     const MIN_CONNECTIONS = 1;
-    const MAX_CONNECTIONS = 16;
+    const MAX_CONNECTIONS = 32;
     const DEFAULT_CONNECTIONS = clamp(
-      Number(webDownloaderProps?.config?.maxConnections) || 6,
+      Number(webDownloaderProps?.config?.maxConnections) || 16,
       MIN_CONNECTIONS,
       MAX_CONNECTIONS,
-      6
+      16
     );
     const DEFAULT_RETRY_LIMIT = 5;
     const NONCE_SIZE = 24;

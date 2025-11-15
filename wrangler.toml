@@ -86,8 +86,8 @@ persist = true
 # #   Enable the browser-based downloader (Range fetch, Dexie resume, crypt decrypt).
 # #   When "true", CRYPT_* parameters must describe your crypt volume and CRYPT_DATA_KEY must be set.
 # #
-# # WEB_DOWNLOADER_MAX_CONNECTIONS = "6"
-# #   Max parallel HTTP requests per download (1-16). Default 4. Higher values improve LAN speed
+# # WEB_DOWNLOADER_MAX_CONNECTIONS = "16"
+# #   Max parallel HTTP requests per download (1-32). Default 16. Higher values improve LAN speed
 # #   but stress upstream bandwidth.
 # #
 # # CRYPT_PREFIX = "/Encrypted"
