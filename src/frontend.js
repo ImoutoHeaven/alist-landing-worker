@@ -32,16 +32,30 @@ const pageScript = String.raw`
   let latestMouseY = 0;
 
   // 呼吸动画系统（随机亮度 + 随机周期）
-  let breathePhase = 0;
-  let breatheCycleDuration = 2 + Math.random() * 10; // 随机 2-12 秒一个呼吸周期
-  let breatheMinOpacity = 0.5 + Math.random() * 0.2; // 初始最小亮度 0.5-0.7
-  let breatheMaxOpacity = 1.0 + Math.random() * 0.2; // 初始最大亮度 1.0-1.2
+  const getRandomBreatheMin = () => 0.5 + Math.random() * 0.2; // 0.5-0.7
+  const getRandomBreatheMax = () => 1.0 + Math.random() * 0.2; // 1.0-1.2
+  const getRandomBreatheDuration = () => 2 + Math.random() * 10; // 2-12 秒一个呼吸周期
+  let breathePhase = Math.random();
+  let breatheCycleDuration = getRandomBreatheDuration();
+  let breatheMinOpacity = getRandomBreatheMin();
+  let breatheMaxOpacity = getRandomBreatheMax();
+  let targetBreatheCycleDuration = breatheCycleDuration;
+  let targetBreatheMinOpacity = breatheMinOpacity;
+  let targetBreatheMaxOpacity = breatheMaxOpacity;
+  const BREATHE_SMOOTHING_SPEED = 1.8; // 调整目标亮度/周期的平滑速度（越大越快）
 
   // 页面可见性管理
   let visibilityTimer = null;
   let isRenderingStopped = false;
   let fadeInPhase = 1; // 淡入进度 0-1
   const FADE_IN_DURATION = 2.5; // 2.5秒淡入
+  const syncBreatheOpacity = () => {
+    const body = document.body;
+    if (!body) return;
+    const breatheValue = 0.5 + 0.5 * Math.sin(breathePhase * Math.PI * 2 - Math.PI / 2);
+    const currentOpacity = breatheMinOpacity + (breatheMaxOpacity - breatheMinOpacity) * breatheValue;
+    body.style.setProperty('--breathe-opacity', (currentOpacity * fadeInPhase).toFixed(3));
+  };
 
   // 颜色渐变系统
   const colorTable = [
@@ -54,10 +68,32 @@ const pageScript = String.raw`
     { r: 255, g: 20, b: 147 },   // 玫红 DeepPink
     { r: 72, g: 61, b: 139 },    // 深蓝紫 DarkSlateBlue
   ];
-  let currentColorIndex = 0;
-  let targetColorIndex = 1;
-  let colorTransitionPhase = 0;
-  const COLOR_TRANSITION_DURATION = 45; // 45秒超缓慢渐变
+  const getRandomColorIndex = () => Math.floor(Math.random() * colorTable.length);
+  const getNextColorIndex = (excludeIndex) => {
+    if (colorTable.length <= 1) return excludeIndex;
+    let nextIndex = getRandomColorIndex();
+    while (nextIndex === excludeIndex) {
+      nextIndex = getRandomColorIndex();
+    }
+    return nextIndex;
+  };
+  let currentColorIndex = getRandomColorIndex();
+  let targetColorIndex = getNextColorIndex(currentColorIndex);
+  const getRandomColorTransitionDuration = () => 10 + Math.random() * 35; // 10-45秒渐变
+  let colorTransitionPhase = Math.random();
+  let colorTransitionDuration = getRandomColorTransitionDuration();
+  const applyGlowColor = () => {
+    const body = document.body;
+    if (!body) return;
+    const currentColor = colorTable[currentColorIndex] || colorTable[0];
+    const targetColor = colorTable[targetColorIndex] || currentColor;
+    const r = Math.round(currentColor.r + (targetColor.r - currentColor.r) * colorTransitionPhase);
+    const g = Math.round(currentColor.g + (targetColor.g - currentColor.g) * colorTransitionPhase);
+    const b = Math.round(currentColor.b + (targetColor.b - currentColor.b) * colorTransitionPhase);
+    body.style.setProperty('--glow-r', r);
+    body.style.setProperty('--glow-g', g);
+    body.style.setProperty('--glow-b', b);
+  };
 
   // 速度系统
   const MAX_SPEED = 0.08; // 每秒最多移动 8% 的屏幕宽度（很慢）
@@ -233,6 +269,16 @@ const pageScript = String.raw`
     };
   };
 
+  const initializeGlowState = () => {
+    const initialPosition = getRandomWanderTarget();
+    const wanderTarget = getRandomWanderTarget();
+    currentGlowX = initialPosition.x;
+    currentGlowY = initialPosition.y;
+    targetGlowX = wanderTarget.x;
+    targetGlowY = wanderTarget.y;
+    updateGlowPosition(initialPosition.x * window.innerWidth, initialPosition.y * window.innerHeight);
+  };
+
   const moveTowardsTarget = (currentX, currentY, targetX, targetY, deltaTime, acceleration) => {
     const dx = targetX - currentX;
     const dy = targetY - currentY;
@@ -293,41 +339,39 @@ const pageScript = String.raw`
     }
 
     // 更新颜色渐变
-    colorTransitionPhase += deltaTime / COLOR_TRANSITION_DURATION;
+    colorTransitionPhase += deltaTime / colorTransitionDuration;
     if (colorTransitionPhase >= 1) {
       // 到达目标颜色，选择下一个随机目标
       currentColorIndex = targetColorIndex;
-      do {
-        targetColorIndex = Math.floor(Math.random() * colorTable.length);
-      } while (targetColorIndex === currentColorIndex);
+      targetColorIndex = getNextColorIndex(currentColorIndex);
       colorTransitionPhase = 0;
+      colorTransitionDuration = getRandomColorTransitionDuration();
     }
 
-    // RGB 线性插值
-    const currentColor = colorTable[currentColorIndex];
-    const targetColor = colorTable[targetColorIndex];
-    const r = Math.round(currentColor.r + (targetColor.r - currentColor.r) * colorTransitionPhase);
-    const g = Math.round(currentColor.g + (targetColor.g - currentColor.g) * colorTransitionPhase);
-    const b = Math.round(currentColor.b + (targetColor.b - currentColor.b) * colorTransitionPhase);
-
-    // 设置颜色 CSS 变量
-    document.body.style.setProperty('--glow-r', r);
-    document.body.style.setProperty('--glow-g', g);
-    document.body.style.setProperty('--glow-b', b);
+    applyGlowColor();
 
     // 更新呼吸动画（随机亮度 + 随机周期）
-    breathePhase += deltaTime / breatheCycleDuration;
-    if (breathePhase >= 1) {
-      // 完成一个呼吸周期，重新随机亮度范围和周期时长
-      breathePhase = 0;
-      breatheMinOpacity = 0.5 + Math.random() * 0.2; // 0.5-0.7
-      breatheMaxOpacity = 1.0 + Math.random() * 0.2; // 1.0-1.2
-      breatheCycleDuration = 2 + Math.random() * 10; // 重新随机下一个周期 2-12 秒
+    const breatheSmoothing =
+      deltaTime > 0 ? 1 - Math.exp(-BREATHE_SMOOTHING_SPEED * deltaTime) : 0;
+    if (breatheSmoothing > 0) {
+      breatheMinOpacity += (targetBreatheMinOpacity - breatheMinOpacity) * breatheSmoothing;
+      breatheMaxOpacity += (targetBreatheMaxOpacity - breatheMaxOpacity) * breatheSmoothing;
+      breatheCycleDuration +=
+        (targetBreatheCycleDuration - breatheCycleDuration) * breatheSmoothing;
     }
+
+    const safeCycleDuration = Math.max(0.5, breatheCycleDuration);
+    breathePhase += deltaTime / safeCycleDuration;
+    if (breathePhase >= 1) {
+      // 完成一个呼吸周期，重新随机亮度范围和周期时长（平滑过渡）
+      breathePhase %= 1;
+      targetBreatheMinOpacity = getRandomBreatheMin();
+      targetBreatheMaxOpacity = getRandomBreatheMax();
+      targetBreatheCycleDuration = getRandomBreatheDuration();
+    }
+
     // 正弦波呼吸效果 × 淡入系数
-    const breatheValue = 0.5 + 0.5 * Math.sin(breathePhase * Math.PI * 2 - Math.PI / 2);
-    const currentOpacity = breatheMinOpacity + (breatheMaxOpacity - breatheMinOpacity) * breatheValue;
-    document.body.style.setProperty('--breathe-opacity', (currentOpacity * fadeInPhase).toFixed(3));
+    syncBreatheOpacity();
 
     if (isAutoGlow) {
       // 自动游走模式
@@ -442,6 +486,9 @@ const pageScript = String.raw`
     }
   });
 
+  initializeGlowState();
+  applyGlowColor();
+  syncBreatheOpacity();
   animateGlow();
 
   /**
