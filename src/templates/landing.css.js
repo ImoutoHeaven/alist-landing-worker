@@ -162,6 +162,7 @@ button {
   font-weight: 600;
   background: rgba(56,189,248,0.18);
   color: #e0f2fe;
+  text-align: center;
   transition: background 0.2s ease, transform 0.2s ease;
 }
 

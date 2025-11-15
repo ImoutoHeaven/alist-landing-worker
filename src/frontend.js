@@ -188,12 +188,14 @@ const pageScript = String.raw`
     0xa7, 0xca, 0xb8, 0x3e, 0x58, 0x1f, 0x86, 0xb1,
   ]);
 
-  const state = {
-    downloadURL: '',
-    infoReady: false,
-    downloadBtnMode: 'download', // 'download' or 'copy'
-    awaitingRetryUnlock: false,
-    mode: 'legacy',
+    const pendingSegmentWaiters = [];
+
+    const state = {
+      downloadURL: '',
+      infoReady: false,
+      downloadBtnMode: 'download', // 'download' or 'copy'
+      awaitingRetryUnlock: false,
+      mode: 'legacy',
     webTask: null,
     security: {
       underAttack: false,
@@ -792,6 +794,7 @@ const pageScript = String.raw`
       segments: [],
       pendingSegments: [],
       failedSegments: new Set(),
+      retryTimers: new Map(),
       abortControllers: new Set(),
       writer: null,
       writerHandle: null,
@@ -856,6 +859,63 @@ const pageScript = String.raw`
     };
 
     hydrateStoredSettings();
+
+    const notifyPendingSegmentWaiters = () => {
+      if (pendingSegmentWaiters.length === 0) {
+        return;
+      }
+      const resolvers = pendingSegmentWaiters.splice(0, pendingSegmentWaiters.length);
+      resolvers.forEach((resolve) => {
+        try {
+          resolve();
+        } catch (error) {
+          console.error('pending segment waiter failed', error);
+        }
+      });
+    };
+
+    const waitForPendingSegment = () =>
+      new Promise((resolve) => {
+        pendingSegmentWaiters.push(resolve);
+      });
+
+    const cancelScheduledRetry = (index) => {
+      if (!Number.isInteger(index)) return;
+      const timerId = state.retryTimers.get(index);
+      if (timerId) {
+        clearTimeout(timerId);
+        state.retryTimers.delete(index);
+      }
+    };
+
+    const clearAllRetryTimers = () => {
+      state.retryTimers.forEach((timerId) => {
+        clearTimeout(timerId);
+      });
+      state.retryTimers.clear();
+      notifyPendingSegmentWaiters();
+    };
+
+    const scheduleSegmentRetry = (segment, delayMs, { prioritize = false, errorMessage = null } = {}) => {
+      if (!segment) return;
+      const normalizedDelay =
+        Number.isFinite(delayMs) && delayMs > 0 ? Math.floor(delayMs) : 0;
+      cancelScheduledRetry(segment.index);
+      segment.status = 'waiting-retry';
+      if (typeof errorMessage === 'string' && errorMessage.length > 0) {
+        segment.error = errorMessage;
+      }
+      const timerId = setTimeout(() => {
+        state.retryTimers.delete(segment.index);
+        if (state.cancelling) {
+          notifyPendingSegmentWaiters();
+          return;
+        }
+        segment.status = 'pending';
+        enqueueSegment(segment.index, prioritize);
+      }, normalizedDelay);
+      state.retryTimers.set(segment.index, timerId);
+    };
 
     const resetUi = () => {
       if (downloadBar) downloadBar.style.width = '0%';
@@ -1130,6 +1190,7 @@ const pageScript = String.raw`
       state.decryptedBytes = 0;
       state.resumedSegments = 0;
       syncFailedSegmentsUi();
+      notifyPendingSegmentWaiters();
     };
 
     const syncFailedSegmentsUi = () => {
@@ -1187,6 +1248,7 @@ const pageScript = String.raw`
       syncFailedSegmentsUi();
       state.resumedSegments = reused;
       applyProgress();
+      notifyPendingSegmentWaiters();
       return reused;
     };
 
@@ -1197,11 +1259,13 @@ const pageScript = String.raw`
       if (segment.status !== 'pending') {
         segment.status = 'pending';
       }
+      cancelScheduledRetry(index);
       if (prioritize) {
         state.pendingSegments.unshift(index);
       } else {
         state.pendingSegments.push(index);
       }
+      notifyPendingSegmentWaiters();
     };
 
     const takeNextSegmentIndex = () => {
@@ -1285,6 +1349,7 @@ const pageScript = String.raw`
           );
           state.bytesSinceSpeedCheck += buffer.length;
           applyProgress();
+          cancelScheduledRetry(segment.index);
           let payload = buffer;
           if (state.encryptionMode === 'plain' && buffer.length > segment.length) {
             const excess = buffer.length - segment.length;
@@ -1321,9 +1386,9 @@ const pageScript = String.raw`
           const shouldRetry = Number.isFinite(retryLimit) ? attempt <= retryLimit : true;
           if (shouldRetry) {
             if (isTtfbTimeout) {
-              enqueueSegment(segment.index, true);
               segment.error = message;
               state.failedSegments.delete(segment.index);
+              scheduleSegmentRetry(segment, 0, { prioritize: true, errorMessage: message });
               log(
                 '分段 #' +
                   (segment.index + 1) +
@@ -1361,8 +1426,10 @@ const pageScript = String.raw`
                   ' 次）'
               );
             }
-            await sleep(retryDelayMs);
-            continue;
+            segment.error = message;
+            state.failedSegments.delete(segment.index);
+            scheduleSegmentRetry(segment, retryDelayMs, { errorMessage: message });
+            return;
           }
           recordSegmentFailure(segment, message);
           throw error instanceof Error ? error : new Error(message);
@@ -1573,7 +1640,11 @@ const pageScript = String.raw`
         const nextIndex = takeNextSegmentIndex();
         if (nextIndex === undefined) {
           if (inFlight.size === 0) {
-            break;
+            if (state.retryTimers.size === 0) {
+              break;
+            }
+            await waitForPendingSegment();
+            continue;
           }
           await Promise.race(inFlight);
           continue;
@@ -1666,6 +1737,7 @@ const pageScript = String.raw`
       if (!state.running) return;
       state.cancelling = true;
       state.pendingSegments.length = 0;
+      clearAllRetryTimers();
       state.abortControllers?.forEach((controller) => {
         try {
           controller.abort();
@@ -1917,6 +1989,7 @@ const pageScript = String.raw`
       state.segments = [];
       state.pendingSegments = [];
       state.failedSegments.clear();
+      clearAllRetryTimers();
       state.writer = null;
       state.writerHandle = null;
       state.writerKey = '';
