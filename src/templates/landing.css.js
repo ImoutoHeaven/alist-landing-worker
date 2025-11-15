@@ -205,6 +205,7 @@ body.web-downloader-active .controls .web-only {
 }
 
 button {
+  position: relative;
   cursor: pointer;
   border: 1px solid rgba(255,255,255,0.1);
   border-radius: 0.5rem;
@@ -217,6 +218,44 @@ button {
   -webkit-backdrop-filter: blur(8px) saturate(140%);
   backdrop-filter: blur(8px) saturate(140%);
   transition: background 0.2s ease, transform 0.2s ease, border-color 0.2s ease;
+  overflow: hidden;
+}
+
+/* 按钮边缘辉光效果 - 只照亮边缘线条，不向外扩散 */
+button::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background:
+    /* 顶部边缘 - 扁平椭圆，紧贴边缘 */
+    radial-gradient(ellipse var(--elem-glow-h-width-top, 15%) 1px at var(--elem-glow-x, 50%) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), var(--elem-reflect-top, 0)) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), calc(var(--elem-reflect-top, 0) * 0.3)) 50%,
+      transparent 100%
+    ) top / 100% 1px no-repeat,
+    /* 底部边缘 */
+    radial-gradient(ellipse var(--elem-glow-h-width-bottom, 15%) 1px at var(--elem-glow-x, 50%) 100%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), var(--elem-reflect-bottom, 0)) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), calc(var(--elem-reflect-bottom, 0) * 0.3)) 50%,
+      transparent 100%
+    ) bottom / 100% 1px no-repeat,
+    /* 左边缘 */
+    radial-gradient(ellipse 1px var(--elem-glow-v-height-left, 15%) at 0% var(--elem-glow-y, 50%),
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), var(--elem-reflect-left, 0)) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), calc(var(--elem-reflect-left, 0) * 0.3)) 50%,
+      transparent 100%
+    ) left / 1px 100% no-repeat,
+    /* 右边缘 */
+    radial-gradient(ellipse 1px var(--elem-glow-v-height-right, 15%) at 100% var(--elem-glow-y, 50%),
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), var(--elem-reflect-right, 0)) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), calc(var(--elem-reflect-right, 0) * 0.3)) 50%,
+      transparent 100%
+    ) right / 1px 100% no-repeat;
 }
 
 button:hover:not(:disabled) {
@@ -456,6 +495,7 @@ button:disabled {
 
 /* ========== Log Section ========== */
 .log {
+  position: relative;
   background: rgba(15,23,42,0.4);
   border: 1px solid rgba(148,163,184,0.2);
   border-radius: 0.75rem;
@@ -466,6 +506,43 @@ button:disabled {
   line-height: 1.5;
   -webkit-backdrop-filter: blur(12px) saturate(130%);
   backdrop-filter: blur(12px) saturate(130%);
+}
+
+/* 事件日志边缘辉光效果 - 只照亮边缘线条，不向外扩散 */
+.log::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background:
+    /* 顶部边缘 - 扁平椭圆，紧贴边缘 */
+    radial-gradient(ellipse var(--elem-glow-h-width-top, 15%) 1px at var(--elem-glow-x, 50%) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), var(--elem-reflect-top, 0)) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), calc(var(--elem-reflect-top, 0) * 0.3)) 50%,
+      transparent 100%
+    ) top / 100% 1px no-repeat,
+    /* 底部边缘 */
+    radial-gradient(ellipse var(--elem-glow-h-width-bottom, 15%) 1px at var(--elem-glow-x, 50%) 100%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), var(--elem-reflect-bottom, 0)) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), calc(var(--elem-reflect-bottom, 0) * 0.3)) 50%,
+      transparent 100%
+    ) bottom / 100% 1px no-repeat,
+    /* 左边缘 */
+    radial-gradient(ellipse 1px var(--elem-glow-v-height-left, 15%) at 0% var(--elem-glow-y, 50%),
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), var(--elem-reflect-left, 0)) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), calc(var(--elem-reflect-left, 0) * 0.3)) 50%,
+      transparent 100%
+    ) left / 1px 100% no-repeat,
+    /* 右边缘 */
+    radial-gradient(ellipse 1px var(--elem-glow-v-height-right, 15%) at 100% var(--elem-glow-y, 50%),
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), var(--elem-reflect-right, 0)) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), calc(var(--elem-reflect-right, 0) * 0.3)) 50%,
+      transparent 100%
+    ) right / 1px 100% no-repeat;
 }
 
 /* ========== Responsive Design ========== */

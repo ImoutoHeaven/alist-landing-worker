@@ -27,13 +27,13 @@ const pageScript = String.raw`
 
   // 鼠标采样系统
   let lastMouseSampleTime = 0;
-  const MOUSE_SAMPLE_INTERVAL = 3000; // 每3秒采样一次鼠标位置
+  const MOUSE_SAMPLE_INTERVAL = 1000; // 每1秒采样一次鼠标位置
   let latestMouseX = 0;
   let latestMouseY = 0;
 
-  // 呼吸动画系统（随机亮度）
+  // 呼吸动画系统（随机亮度 + 随机周期）
   let breathePhase = 0;
-  const BREATHE_CYCLE = 4; // 4秒一个呼吸周期
+  let breatheCycleDuration = 2 + Math.random() * 10; // 随机 2-12 秒一个呼吸周期
   let breatheMinOpacity = 0.5 + Math.random() * 0.2; // 初始最小亮度 0.5-0.7
   let breatheMaxOpacity = 1.0 + Math.random() * 0.2; // 初始最大亮度 1.0-1.2
 
@@ -64,10 +64,92 @@ const pageScript = String.raw`
   const WANDER_ACCELERATION = 0.12; // 自动游走的加速度系数
   const MOUSE_ACCELERATION = 0.04; // 鼠标跟随的加速度系数（更慢更柔和）
   const WANDER_REACHED_THRESHOLD = 0.01; // 到达目标的阈值（1%）
-  const REST_DURATION = 3000; // 到达目标后休息 3 秒
+  let currentRestDuration = Math.random() * 8000; // 随机 0-8 秒休息时间
 
   let currentSpeedX = 0; // 当前X方向速度
   let currentSpeedY = 0; // 当前Y方向速度
+
+  // 更新UI元素（按钮和事件日志）的边缘辉光
+  const updateElementsEdgeGlow = (glowX, glowY) => {
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+
+    // 获取所有需要边缘辉光的元素
+    const elements = document.querySelectorAll('button, .log');
+
+    elements.forEach(element => {
+      const rect = element.getBoundingClientRect();
+
+      // 计算光斑相对于元素的位置（百分比）
+      const relativeX = ((glowX - rect.left) / rect.width) * 100;
+      const relativeY = ((glowY - rect.top) / rect.height) * 100;
+
+      // 计算光斑到元素中心的距离
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      const dx = glowX - centerX;
+      const dy = glowY - centerY;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+
+      // 归一化距离（以屏幕对角线的一半为基准）
+      const maxDistance = Math.sqrt(w * w + h * h) * 0.5;
+      const normalizedDistance = distance / maxDistance;
+
+      // 光照衰减参数
+      const ELEMENT_GLOW_RADIUS = 0.4; // 40% 屏幕距离内有效
+      const ELEMENT_MAX_INTENSITY = 0.2; // 最大20%强度
+      const ELEMENT_REFLECTION_COEFFICIENT = 0.7; // 70% 反射系数
+
+      // 基础光照强度（距离衰减）
+      const baseIntensity = Math.max(0, 1 - normalizedDistance / ELEMENT_GLOW_RADIUS) * ELEMENT_MAX_INTENSITY;
+
+      // 计算光斑到元素4个边缘的距离（归一化到元素尺寸）
+      const distToTop = Math.abs(glowY - rect.top) / rect.height;
+      const distToBottom = Math.abs(glowY - rect.bottom) / rect.height;
+      const distToLeft = Math.abs(glowX - rect.left) / rect.width;
+      const distToRight = Math.abs(glowX - rect.right) / rect.width;
+
+      // 边缘接近度（越接近边缘，接近度越高）
+      const edgeThreshold = 2.0; // 在2倍元素尺寸内才有反射
+      const proximityTop = distToTop < edgeThreshold ? Math.pow(1 - distToTop / edgeThreshold, 1.5) : 0;
+      const proximityBottom = distToBottom < edgeThreshold ? Math.pow(1 - distToBottom / edgeThreshold, 1.5) : 0;
+      const proximityLeft = distToLeft < edgeThreshold ? Math.pow(1 - distToLeft / edgeThreshold, 1.5) : 0;
+      const proximityRight = distToRight < edgeThreshold ? Math.pow(1 - distToRight / edgeThreshold, 1.5) : 0;
+
+      // 反射强度 = 基础强度 × 反射系数 × 接近度
+      const reflectTop = baseIntensity * ELEMENT_REFLECTION_COEFFICIENT * proximityTop;
+      const reflectBottom = baseIntensity * ELEMENT_REFLECTION_COEFFICIENT * proximityBottom;
+      const reflectLeft = baseIntensity * ELEMENT_REFLECTION_COEFFICIENT * proximityLeft;
+      const reflectRight = baseIntensity * ELEMENT_REFLECTION_COEFFICIENT * proximityRight;
+
+      // 设置元素的辉光位置
+      element.style.setProperty('--elem-glow-x', relativeX.toFixed(2) + '%');
+      element.style.setProperty('--elem-glow-y', relativeY.toFixed(2) + '%');
+
+      // 设置反射强度
+      element.style.setProperty('--elem-reflect-top', reflectTop.toFixed(3));
+      element.style.setProperty('--elem-reflect-bottom', reflectBottom.toFixed(3));
+      element.style.setProperty('--elem-reflect-left', reflectLeft.toFixed(3));
+      element.style.setProperty('--elem-reflect-right', reflectRight.toFixed(3));
+
+      // 计算辉光宽度（只在水平/垂直方向扩散，椭圆的另一维度固定为1px）
+      // 上下边缘：水平方向宽度动态变化
+      const baseWidth = 10; // 基础宽度 10%
+      const maxWidth = 30; // 最大宽度 30%
+
+      const glowHWidthTop = baseWidth + reflectTop * (maxWidth - baseWidth);
+      const glowHWidthBottom = baseWidth + reflectBottom * (maxWidth - baseWidth);
+
+      // 左右边缘：垂直方向高度动态变化
+      const glowVHeightLeft = baseWidth + reflectLeft * (maxWidth - baseWidth);
+      const glowVHeightRight = baseWidth + reflectRight * (maxWidth - baseWidth);
+
+      element.style.setProperty('--elem-glow-h-width-top', glowHWidthTop + '%');
+      element.style.setProperty('--elem-glow-h-width-bottom', glowHWidthBottom + '%');
+      element.style.setProperty('--elem-glow-v-height-left', glowVHeightLeft + '%');
+      element.style.setProperty('--elem-glow-v-height-right', glowVHeightRight + '%');
+    });
+  };
 
   const updateGlowPosition = (x, y) => {
     const xPercent = (x / window.innerWidth * 100).toFixed(1);
@@ -137,6 +219,9 @@ const pageScript = String.raw`
     document.body.style.setProperty('--glow-v-height-left', glowVHeightLeft + '%');
     document.body.style.setProperty('--glow-h-width-right', glowHWidthRight + 'px');
     document.body.style.setProperty('--glow-v-height-right', glowVHeightRight + '%');
+
+    // 更新 UI 元素（按钮和事件日志）的边缘辉光
+    updateElementsEdgeGlow(x, y);
   };
 
   const getRandomWanderTarget = () => {
@@ -230,13 +315,14 @@ const pageScript = String.raw`
     document.body.style.setProperty('--glow-g', g);
     document.body.style.setProperty('--glow-b', b);
 
-    // 更新呼吸动画（随机亮度）
-    breathePhase += deltaTime / BREATHE_CYCLE;
+    // 更新呼吸动画（随机亮度 + 随机周期）
+    breathePhase += deltaTime / breatheCycleDuration;
     if (breathePhase >= 1) {
-      // 完成一个呼吸周期，重新随机亮度范围
+      // 完成一个呼吸周期，重新随机亮度范围和周期时长
       breathePhase = 0;
       breatheMinOpacity = 0.5 + Math.random() * 0.2; // 0.5-0.7
       breatheMaxOpacity = 1.0 + Math.random() * 0.2; // 1.0-1.2
+      breatheCycleDuration = 2 + Math.random() * 10; // 重新随机下一个周期 2-12 秒
     }
     // 正弦波呼吸效果 × 淡入系数
     const breatheValue = 0.5 + 0.5 * Math.sin(breathePhase * Math.PI * 2 - Math.PI / 2);
@@ -247,7 +333,7 @@ const pageScript = String.raw`
       // 自动游走模式
       if (isResting) {
         // 休息中，检查是否休息完毕
-        if (now - restStartTime >= REST_DURATION) {
+        if (now - restStartTime >= currentRestDuration) {
           isResting = false;
           // 选择新的随机目标
           const newTarget = getRandomWanderTarget();
@@ -266,6 +352,7 @@ const pageScript = String.raw`
           // 到达目标，开始休息
           isResting = true;
           restStartTime = now;
+          currentRestDuration = Math.random() * 8000; // 重新随机下一次休息时间 0-8 秒
         }
 
         updateGlowPosition(result.x * w, result.y * h);
