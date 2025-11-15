@@ -206,19 +206,22 @@ body.web-downloader-active .controls .web-only {
 
 button {
   cursor: pointer;
-  border: none;
+  border: 1px solid rgba(255,255,255,0.1);
   border-radius: 0.5rem;
   padding: 0.65rem 1.25rem;
   font-size: 0.95rem;
   font-weight: 600;
-  background: rgba(56,189,248,0.18);
+  background: rgba(56,189,248,0.12);
   color: #e0f2fe;
   text-align: center;
-  transition: background 0.2s ease, transform 0.2s ease;
+  -webkit-backdrop-filter: blur(8px) saturate(140%);
+  backdrop-filter: blur(8px) saturate(140%);
+  transition: background 0.2s ease, transform 0.2s ease, border-color 0.2s ease;
 }
 
 button:hover:not(:disabled) {
-  background: rgba(56,189,248,0.28);
+  background: rgba(56,189,248,0.22);
+  border-color: rgba(255,255,255,0.2);
   transform: translateY(-1px);
 }
 
@@ -228,12 +231,12 @@ button:disabled {
 }
 
 .controls button.secondary {
-  background: rgba(148,163,184,0.16);
+  background: rgba(148,163,184,0.10);
   color: #e2e8f0;
 }
 
 .controls button.secondary:hover:not(:disabled) {
-  background: rgba(148,163,184,0.28);
+  background: rgba(148,163,184,0.20);
 }
 
 /* ========== Advanced Panel ========== */
@@ -246,10 +249,11 @@ button:disabled {
   max-width: 90vw;
   height: 100%;
   z-index: 30;
-  background: rgba(15,23,42,0.95);
-  border-left: 1px solid rgba(148,163,184,0.16);
+  background: rgba(15,23,42,0.75);
+  border-left: 1px solid rgba(148,163,184,0.3);
   box-shadow: -16px 0 32px rgba(15,23,42,0.5);
-  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  backdrop-filter: blur(16px) saturate(150%);
   transition: transform 0.3s ease;
   display: flex;
   flex-direction: column;
@@ -268,7 +272,8 @@ button:disabled {
   position: fixed;
   inset: 0;
   background: rgba(15,23,42,0.55);
-  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
   z-index: 20;
 }
 
@@ -481,6 +486,29 @@ button:disabled {
   .advanced-panel {
     width: 100%;
     padding: 1.25rem;
+  }
+}
+
+/* ========== Fallback for browsers without backdrop-filter ========== */
+@supports not (backdrop-filter: blur(8px)) {
+  button {
+    background: rgba(56,189,248,0.25);
+  }
+
+  button:hover:not(:disabled) {
+    background: rgba(56,189,248,0.35);
+  }
+
+  .controls button.secondary {
+    background: rgba(148,163,184,0.22);
+  }
+
+  .controls button.secondary:hover:not(:disabled) {
+    background: rgba(148,163,184,0.32);
+  }
+
+  .advanced-panel {
+    background: rgba(15,23,42,0.92);
   }
 }
 `;
