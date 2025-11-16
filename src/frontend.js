@@ -866,14 +866,15 @@ const pageScript = String.raw`
         ready: false,
         running: false,
         completed: false,
+        downloadInitiated: false,
         file: null,
         fileName: '',
         fileSize: 0,
         decryptParallelism: DEFAULT_PARALLEL_THREADS,
         decryptParallelRaw: String(DEFAULT_PARALLEL_THREADS),
         segmentSizeMb: DEFAULT_SEGMENT_SIZE_MB,
-      segmentSizeRaw: String(DEFAULT_SEGMENT_SIZE_MB),
-    },
+        segmentSizeRaw: String(DEFAULT_SEGMENT_SIZE_MB),
+      },
   };
 
   window.__landingState = state;
@@ -3514,6 +3515,7 @@ const pageScript = String.raw`
   const clearClientDecryptFile = () => {
     clientDecryptUiState.file = null;
     clientDecryptUiState.completed = false;
+    clientDecryptUiState.downloadInitiated = false;
     syncClientDecryptFileInfo();
     if (clientDecryptFileInput) {
       clientDecryptFileInput.value = '';
@@ -4383,6 +4385,7 @@ const pageScript = String.raw`
       clientDecryptUiState.enabled = true;
       clientDecryptUiState.ready = true;
       clientDecryptUiState.completed = false;
+      clientDecryptUiState.downloadInitiated = false;
       clientDecryptUiState.fileName = infoData.meta?.fileName || clientDecryptor.getFileName() || '';
       clientDecryptUiState.fileSize = Number(infoData.meta?.size) || 0;
       refreshClientDecryptSettingsState();
@@ -4407,6 +4410,7 @@ const pageScript = String.raw`
     clientDecryptUiState.ready = false;
     clientDecryptUiState.running = false;
     clientDecryptUiState.completed = false;
+    clientDecryptUiState.downloadInitiated = false;
     syncClientDecryptControls();
 
     state.downloadURL = downloadURL;
@@ -4604,11 +4608,13 @@ const pageScript = String.raw`
         if (opened) {
           state.downloadBtnMode = 'copy';
           downloadBtn.textContent = '复制链接';
+          clientDecryptUiState.downloadInitiated = true;
           return;
         }
         state.downloadBtnMode = 'copy';
         downloadBtn.textContent = '复制链接';
         copyToClipboard(state.downloadURL, downloadBtn);
+        clientDecryptUiState.downloadInitiated = true;
         return;
       }
       copyToClipboard(state.downloadURL, downloadBtn);
@@ -4890,7 +4896,10 @@ const pageScript = String.raw`
 
   window.addEventListener('beforeunload', (event) => {
     const warnClientDecrypt =
-      state.mode === 'client-decrypt' && clientDecryptUiState.ready && !clientDecryptUiState.completed;
+      state.mode === 'client-decrypt' &&
+      clientDecryptUiState.ready &&
+      clientDecryptUiState.downloadInitiated &&
+      !clientDecryptUiState.completed;
     if (warnClientDecrypt) {
       event.preventDefault();
       event.returnValue = '离线解密尚未完成，关闭页面会丢失进度';
