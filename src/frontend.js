@@ -872,9 +872,11 @@ const pageScript = String.raw`
         decryptParallelism: DEFAULT_PARALLEL_THREADS,
         decryptParallelRaw: String(DEFAULT_PARALLEL_THREADS),
         segmentSizeMb: DEFAULT_SEGMENT_SIZE_MB,
-        segmentSizeRaw: String(DEFAULT_SEGMENT_SIZE_MB),
-      },
+      segmentSizeRaw: String(DEFAULT_SEGMENT_SIZE_MB),
+    },
   };
+
+  window.__landingState = state;
 
   const syncBodyModeClasses = () => {
     if (!document || !document.body) return;
@@ -4885,6 +4887,15 @@ const pageScript = String.raw`
       handleInfoError(error, 'init');
     }
   };
+
+  window.addEventListener('beforeunload', (event) => {
+    const warnClientDecrypt =
+      state.mode === 'client-decrypt' && clientDecryptUiState.ready && !clientDecryptUiState.completed;
+    if (warnClientDecrypt) {
+      event.preventDefault();
+      event.returnValue = '离线解密尚未完成，关闭页面会丢失进度';
+    }
+  });
 
   initialise();
 })();
