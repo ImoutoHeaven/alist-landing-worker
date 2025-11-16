@@ -4390,10 +4390,9 @@ const pageScript = String.raw`
       syncBodyModeClasses();
       state.infoReady = true;
       state.downloadURL = downloadURL;
-      const autoOpened = triggerClientDecryptDownload(downloadURL, { userGesture: false });
-      state.downloadBtnMode = autoOpened ? 'copy' : 'download';
+      state.downloadBtnMode = 'download';
       downloadBtn.disabled = false;
-      downloadBtn.textContent = autoOpened ? '复制链接' : '开始下载';
+      downloadBtn.textContent = '开始下载';
       retryBtn.disabled = false;
       clearCacheBtn.disabled = false;
       setStatus('已获取下载信息，请使用外部下载器完成密文下载后回到此处解密');
@@ -4605,6 +4604,8 @@ const pageScript = String.raw`
           downloadBtn.textContent = '复制链接';
           return;
         }
+        state.downloadBtnMode = 'copy';
+        downloadBtn.textContent = '复制链接';
         copyToClipboard(state.downloadURL, downloadBtn);
         return;
       }
