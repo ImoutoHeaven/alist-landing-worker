@@ -867,6 +867,7 @@ const pageScript = String.raw`
         ready: false,
         running: false,
         completed: false,
+        failed: false,
         downloadInitiated: false,
         isCrypt: false,
         file: null,
@@ -3517,12 +3518,14 @@ const pageScript = String.raw`
     clientDecryptUiState.fileName = file ? file.name : clientDecryptUiState.fileName;
     clientDecryptUiState.fileSize = file ? file.size : clientDecryptUiState.fileSize;
     clientDecryptUiState.completed = false;
+    clientDecryptUiState.failed = false;
     syncClientDecryptFileInfo();
   };
 
   const clearClientDecryptFile = () => {
     clientDecryptUiState.file = null;
     clientDecryptUiState.completed = false;
+    clientDecryptUiState.failed = false;
     clientDecryptUiState.downloadInitiated = false;
     syncClientDecryptFileInfo();
     if (clientDecryptFileInput) {
@@ -3539,13 +3542,18 @@ const pageScript = String.raw`
         !clientDecryptUiState.file ||
         clientDecryptUiState.running;
       let label = '开始解密';
+      let loading = false;
       if (clientDecryptUiState.running) {
-        label = '解密中...';
+        label = '解密中';
+        loading = true;
+      } else if (clientDecryptUiState.failed) {
+        label = '✗ 解密失败';
+        disabled = false;
       } else if (clientDecryptUiState.completed) {
-        label = '解密完成';
+        label = '✓ 解密完成';
         disabled = true;
       }
-      clientDecryptStartBtn.textContent = label;
+      setButtonText(clientDecryptStartBtn, label, loading);
       clientDecryptStartBtn.disabled = disabled;
     }
     if (clientDecryptCancelBtn) {
@@ -4550,6 +4558,8 @@ const pageScript = String.raw`
       return;
     }
     clientDecryptUiState.running = true;
+    clientDecryptUiState.completed = false;
+    clientDecryptUiState.failed = false;
     syncClientDecryptControls();
     try {
       resetClientDecryptProgress();
@@ -4575,15 +4585,18 @@ const pageScript = String.raw`
       });
       await finalizeClientDecryptWriter(writer, clientDecryptor.getFileName() || clientDecryptUiState.file.name);
       clientDecryptUiState.completed = true;
+      clientDecryptUiState.failed = false;
       syncClientDecryptControls();
       setStatus('解密完成，文件已保存');
     } catch (error) {
       const message = error instanceof Error && error.message ? error.message : String(error || '未知错误');
       if (message.includes('取消')) {
         setStatus('解密已取消');
+        clientDecryptUiState.failed = false;
       } else {
         setStatus('解密失败：' + message);
         console.error(error);
+        clientDecryptUiState.failed = true;
       }
       clientDecryptUiState.completed = false;
       if (clientDecryptWriter) {
