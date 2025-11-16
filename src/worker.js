@@ -1929,7 +1929,7 @@ const createAdditionalParams = async (config, request, decodedPath, clientIP, si
 const createDownloadURL = async (
   config,
   request,
-  { encodedPath, decodedPath, sign, clientIP, sizeBytes, expireTime, fileInfo },
+  { encodedPath, decodedPath, sign, clientIP, sizeBytes, expireTime, fileInfo, isCrypt = false },
   ctx = null
 ) => {
   const workerBaseURL = selectRandomWorker(config.workerAddresses);
@@ -1975,7 +1975,7 @@ const createDownloadURL = async (
       sizeBytes,
       expireTime,
       fileInfo,
-      isCrypted: isCrypt,
+      isCrypted: Boolean(isCrypt),
     });
     if (additionalParams) {
       downloadURLObj.searchParams.set('additionalInfo', additionalParams.additionalInfo);
@@ -3217,6 +3217,7 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
     sizeBytes,
     expireTime,
     fileInfo,
+    isCrypt,
   }, ctx);
 
   const needWebDownloader =
@@ -4094,6 +4095,7 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
       sizeBytes,
       expireTime,
       fileInfo,
+      isCrypt,
     }, ctx);
 
     // Return 302 redirect
