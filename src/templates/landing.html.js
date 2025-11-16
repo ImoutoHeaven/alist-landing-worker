@@ -111,7 +111,7 @@ export const htmlTemplate = `<!DOCTYPE html>
             </label>
             <input id="parallelLimitInput" class="retry-input" type="number" inputmode="numeric" autocomplete="off" min="1" max="32" value="6">
           </div>
-          <div class="keygen-panel web-only">
+          <div class="keygen-panel mode-shared">
             <h3>crypt keygen</h3>
             <label>
               password1
