@@ -48,10 +48,13 @@ export const htmlTemplate = `<!DOCTYPE html>
       <section class="client-decrypt" id="clientDecryptSection" hidden>
         <div class="client-decrypt-header">
           <div>
-            <div class="client-decrypt-title">离线解密</div>
+            <div class="client-decrypt-title">本地解密</div>
             <p class="client-decrypt-desc">使用 IDM/aria2 等工具完成密文下载后，将文件导入此处即可完成解密。</p>
           </div>
-          <div class="client-decrypt-hint">crypt 路径可用</div>
+          <div class="client-decrypt-hints">
+            <div class="client-decrypt-hint hint-success">解密密钥已获取</div>
+            <div class="client-decrypt-hint hint-warning" id="clientDecryptStatusHint">需要本地解密</div>
+          </div>
         </div>
         <div class="client-decrypt-body">
           <div class="client-decrypt-file">

@@ -378,16 +378,81 @@ button:disabled {
   font-size: 0.85rem;
 }
 
+.client-decrypt-hints {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  align-items: flex-end;
+}
+
 .client-decrypt-hint {
   font-size: 0.8rem;
-  color: #38bdf8;
-  background: rgba(56,189,248,0.12);
-  border: 1px solid rgba(56,189,248,0.3);
   border-radius: 999px;
   padding: 0.3rem 0.75rem;
   white-space: nowrap;
+  border: 1px solid;
   -webkit-backdrop-filter: blur(8px) saturate(140%);
   backdrop-filter: blur(8px) saturate(140%);
+}
+
+.client-decrypt-hint.hint-success {
+  color: #38bdf8;
+  background: rgba(56,189,248,0.12);
+  border-color: rgba(56,189,248,0.3);
+}
+
+.client-decrypt-hint.hint-warning {
+  color: #fbbf24;
+  background: rgba(251,191,36,0.12);
+  border-color: rgba(251,191,36,0.3);
+  animation: warning-breathe 2.5s ease-in-out infinite;
+}
+
+.client-decrypt-hint.hint-success-complete {
+  color: #34d399;
+  background: rgba(52,211,153,0.12);
+  border-color: rgba(52,211,153,0.3);
+  animation: success-breathe 2.5s ease-in-out infinite;
+}
+
+.client-decrypt-hint.hint-error {
+  color: #f87171;
+  background: rgba(248,113,113,0.12);
+  border-color: rgba(248,113,113,0.3);
+  animation: error-breathe 2.5s ease-in-out infinite;
+}
+
+@keyframes warning-breathe {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(251,191,36,0);
+    border-color: rgba(251,191,36,0.3);
+  }
+  50% {
+    box-shadow: 0 0 12px 2px rgba(251,191,36,0.4);
+    border-color: rgba(251,191,36,0.6);
+  }
+}
+
+@keyframes success-breathe {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(52,211,153,0);
+    border-color: rgba(52,211,153,0.3);
+  }
+  50% {
+    box-shadow: 0 0 12px 2px rgba(52,211,153,0.4);
+    border-color: rgba(52,211,153,0.6);
+  }
+}
+
+@keyframes error-breathe {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(248,113,113,0);
+    border-color: rgba(248,113,113,0.3);
+  }
+  50% {
+    box-shadow: 0 0 12px 2px rgba(248,113,113,0.4);
+    border-color: rgba(248,113,113,0.6);
+  }
 }
 
 .client-decrypt-body {
@@ -813,8 +878,8 @@ button:disabled {
     gap: 0.75rem;
   }
 
-  .client-decrypt-hint {
-    align-self: flex-start;
+  .client-decrypt-hints {
+    align-items: flex-start;
   }
 }
 

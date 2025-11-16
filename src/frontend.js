@@ -541,6 +541,7 @@ const pageScript = String.raw`
   const clientDecryptCancelBtn = $('clientDecryptCancel');
   const clientDecryptFileNameEl = $('clientDecryptFileName');
   const clientDecryptFileSizeEl = $('clientDecryptFileSize');
+  const clientDecryptStatusHint = $('clientDecryptStatusHint');
   const autoRedirectEnabled = window.__AUTO_REDIRECT__ === true;
   const webDownloaderProps = window.__WEB_DOWNLOADER_PROPS__ || {};
   const clientDecryptSupported = webDownloaderProps?.clientDecrypt === true;
@@ -567,9 +568,8 @@ const pageScript = String.raw`
     log(text);
   };
 
-  if (clientDecryptSection && clientDecryptSupported) {
-    clientDecryptSection.hidden = false;
-  }
+  // clientDecryptSection 的显示逻辑移至获取 /info 成功后
+  // 不在页面加载时就显示，避免在验证前误导用户
 
   const formatBytes = (bytes) => {
     if (!Number.isFinite(bytes) || bytes < 0) return '0 B';
@@ -3496,6 +3496,23 @@ const pageScript = String.raw`
     return name.toLowerCase().endsWith('.enc') ? name : name + '.enc';
   };
 
+  const updateClientDecryptStatusHint = (status) => {
+    if (!clientDecryptStatusHint) return;
+    // 移除所有状态类
+    clientDecryptStatusHint.classList.remove('hint-warning', 'hint-success-complete', 'hint-error');
+    // 根据状态设置类和文本
+    if (status === 'pending') {
+      clientDecryptStatusHint.classList.add('hint-warning');
+      clientDecryptStatusHint.textContent = '需要本地解密';
+    } else if (status === 'success') {
+      clientDecryptStatusHint.classList.add('hint-success-complete');
+      clientDecryptStatusHint.textContent = '本地解密已完成';
+    } else if (status === 'error') {
+      clientDecryptStatusHint.classList.add('hint-error');
+      clientDecryptStatusHint.textContent = '本地解密失败';
+    }
+  };
+
   const syncClientDecryptFileInfo = () => {
     if (!clientDecryptFileNameEl || !clientDecryptFileSizeEl) return;
     if (clientDecryptUiState.file) {
@@ -4408,6 +4425,10 @@ const pageScript = String.raw`
       refreshClientDecryptSettingsState();
       syncClientDecryptFileInfo();
       syncClientDecryptControls();
+      // 只有在成功获取到解密配置后才显示本地解密框
+      if (clientDecryptSection) {
+        clientDecryptSection.hidden = false;
+      }
       state.mode = 'client-decrypt';
       syncBodyModeClasses();
       state.infoReady = true;
@@ -4417,6 +4438,7 @@ const pageScript = String.raw`
       downloadBtn.textContent = '开始下载';
       retryBtn.disabled = false;
       clearCacheBtn.disabled = false;
+      log('加密路径匹配，需要本地解密');
       setStatus('已获取下载信息，请使用外部下载器完成密文下载后回到此处解密');
       return;
     }
@@ -4587,16 +4609,19 @@ const pageScript = String.raw`
       clientDecryptUiState.completed = true;
       clientDecryptUiState.failed = false;
       syncClientDecryptControls();
+      updateClientDecryptStatusHint('success');
       setStatus('解密完成，文件已保存');
     } catch (error) {
       const message = error instanceof Error && error.message ? error.message : String(error || '未知错误');
       if (message.includes('取消')) {
         setStatus('解密已取消');
         clientDecryptUiState.failed = false;
+        updateClientDecryptStatusHint('pending');
       } else {
         setStatus('解密失败：' + message);
         console.error(error);
         clientDecryptUiState.failed = true;
+        updateClientDecryptStatusHint('error');
       }
       clientDecryptUiState.completed = false;
       if (clientDecryptWriter) {
@@ -4662,6 +4687,7 @@ const pageScript = String.raw`
       if (file) {
         setClientDecryptFile(file);
         clientDecryptor.setSourceFile(file);
+        updateClientDecryptStatusHint('pending');
       } else {
         clearClientDecryptFile();
         clientDecryptor.clearSourceFile();
@@ -4707,6 +4733,7 @@ const pageScript = String.raw`
       clearClientDecryptFile();
       clientDecryptUiState.ready = false;
       clientDecryptUiState.running = false;
+      updateClientDecryptStatusHint('pending');
       syncClientDecryptControls();
       resetClientDecryptProgress();
     }
@@ -4770,6 +4797,7 @@ const pageScript = String.raw`
           clientDecryptUiState.ready = false;
           clientDecryptUiState.running = false;
           clientDecryptUiState.completed = false;
+          updateClientDecryptStatusHint('pending');
           syncClientDecryptControls();
           resetClientDecryptProgress();
         } else {
