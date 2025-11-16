@@ -1856,7 +1856,7 @@ const createAdditionalParams = async (config, request, decodedPath, clientIP, si
   if (!request) {
     throw new Error('request missing for additional info');
   }
-  let { sizeBytes, expireTime, fileInfo } = options;
+  let { sizeBytes, expireTime, fileInfo, isCrypted } = options;
   const safeIdleTimeoutSeconds =
     Number.isFinite(idleTimeoutSeconds) && idleTimeoutSeconds >= 0
       ? Math.floor(idleTimeoutSeconds)
@@ -1918,6 +1918,7 @@ const createAdditionalParams = async (config, request, decodedPath, clientIP, si
     expireTime,
     idle_timeout: safeIdleTimeoutSeconds,
     encrypt,
+    isCrypted: isCrypted === true,
   });
   const rawAdditionalInfo = encodeTextToBase64(payload);
   const additionalInfo = rawAdditionalInfo.replace(/=+$/, '');
@@ -1974,6 +1975,7 @@ const createDownloadURL = async (
       sizeBytes,
       expireTime,
       fileInfo,
+      isCrypted: isCrypt,
     });
     if (additionalParams) {
       downloadURLObj.searchParams.set('additionalInfo', additionalParams.additionalInfo);
