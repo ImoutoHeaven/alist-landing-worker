@@ -867,6 +867,7 @@ const pageScript = String.raw`
         running: false,
         completed: false,
         downloadInitiated: false,
+        isCrypt: false,
         file: null,
         fileName: '',
         fileSize: 0,
@@ -3488,13 +3489,19 @@ const pageScript = String.raw`
     }
   };
 
+  const getEncryptedDisplayName = (name) => {
+    if (!clientDecryptUiState.isCrypt || !name) return name;
+    return name.toLowerCase().endsWith('.enc') ? name : name + '.enc';
+  };
+
   const syncClientDecryptFileInfo = () => {
     if (!clientDecryptFileNameEl || !clientDecryptFileSizeEl) return;
     if (clientDecryptUiState.file) {
       clientDecryptFileNameEl.textContent = clientDecryptUiState.file.name || clientDecryptUiState.fileName || '密文文件';
       clientDecryptFileSizeEl.textContent = formatBytes(clientDecryptUiState.file.size);
     } else if (clientDecryptUiState.fileName) {
-      clientDecryptFileNameEl.textContent = clientDecryptUiState.fileName;
+      const displayName = getEncryptedDisplayName(clientDecryptUiState.fileName);
+      clientDecryptFileNameEl.textContent = displayName;
       clientDecryptFileSizeEl.textContent = clientDecryptUiState.fileSize > 0
         ? formatBytes(clientDecryptUiState.fileSize)
         : '--';
@@ -4386,6 +4393,7 @@ const pageScript = String.raw`
       clientDecryptUiState.ready = true;
       clientDecryptUiState.completed = false;
       clientDecryptUiState.downloadInitiated = false;
+      clientDecryptUiState.isCrypt = infoData.meta?.isCrypt === true;
       clientDecryptUiState.fileName = infoData.meta?.fileName || clientDecryptor.getFileName() || '';
       clientDecryptUiState.fileSize = Number(infoData.meta?.size) || 0;
       refreshClientDecryptSettingsState();
@@ -4411,6 +4419,7 @@ const pageScript = String.raw`
     clientDecryptUiState.running = false;
     clientDecryptUiState.completed = false;
     clientDecryptUiState.downloadInitiated = false;
+    clientDecryptUiState.isCrypt = false;
     syncClientDecryptControls();
 
     state.downloadURL = downloadURL;
