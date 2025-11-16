@@ -530,6 +530,7 @@ const pageScript = String.raw`
   const keygenCopyBtn = $('keygenCopy');
   const keygenStatusEl = $('keygenStatus');
   const keygenOutputEl = $('keygenOutput');
+  const keygenLoadingEl = $('keygenLoading');
   const logEl = $('log');
   const turnstileContainer = $('turnstileContainer');
   const turnstileMessage = $('turnstileMessage');
@@ -4825,7 +4826,13 @@ const pageScript = String.raw`
       return;
     }
     if (keygenRunBtn) keygenRunBtn.disabled = true;
-    keygenStatusEl.textContent = '计算中...';
+    keygenStatusEl.textContent = '';
+
+    // 显示转圈动画
+    if (keygenLoadingEl) {
+      keygenLoadingEl.hidden = false;
+    }
+
     try {
       const { scrypt } = await ensureScryptModule();
       const saltRaw = keygenSaltInput?.value || '';
@@ -4838,7 +4845,7 @@ const pageScript = String.raw`
         'CRYPT_DATA_KEY=' + bytesToHex(dataKey),
         'CRYPT_NAME_KEY=' + bytesToHex(nameKey),
         'CRYPT_NAME_TWEAK=' + bytesToHex(nameTweak),
-      ].join('\\n');
+      ].join('\n');
       keygenOutputEl.textContent = output;
       keygenStatusEl.textContent = '完成';
     } catch (error) {
@@ -4846,6 +4853,10 @@ const pageScript = String.raw`
       keygenStatusEl.textContent = '生成失败';
     } finally {
       if (keygenRunBtn) keygenRunBtn.disabled = false;
+      // 隐藏转圈动画
+      if (keygenLoadingEl) {
+        keygenLoadingEl.hidden = true;
+      }
     }
   };
 

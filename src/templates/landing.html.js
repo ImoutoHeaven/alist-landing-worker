@@ -113,6 +113,7 @@ export const htmlTemplate = `<!DOCTYPE html>
           </div>
           <div class="keygen-panel mode-shared">
             <h3>crypt keygen</h3>
+            <p class="keygen-hint">仅供开发者使用 :)</p>
             <label>
               password1
               <input id="keygenPassword" type="password" autocomplete="off" />
@@ -122,6 +123,10 @@ export const htmlTemplate = `<!DOCTYPE html>
               <input id="keygenSalt" type="text" autocomplete="off" />
             </label>
             <button id="keygenRun" type="button">生成密钥</button>
+            <div class="keygen-loading" id="keygenLoading" hidden>
+              <span class="spinner"></span>
+              <span>计算中...</span>
+            </div>
             <span id="keygenStatus" class="keygen-status"></span>
             <div class="keygen-output-group">
               <pre id="keygenOutput"></pre>

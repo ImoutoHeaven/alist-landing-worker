@@ -635,10 +635,17 @@ button:disabled {
 }
 
 .keygen-panel h3 {
-  margin: 0 0 0.75rem;
+  margin: 0 0 0.35rem;
   font-size: 0.95rem;
   font-weight: 600;
   color: #f8fafc;
+}
+
+.keygen-hint {
+  margin: 0 0 0.75rem;
+  font-size: 0.75rem;
+  color: #94a3b8;
+  font-style: italic;
 }
 
 .keygen-panel label {
@@ -668,7 +675,21 @@ button:disabled {
 .keygen-panel > button {
   width: 100%;
   margin-top: 0.5rem;
-  margin-bottom: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.keygen-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  font-size: 0.85rem;
+  color: #38bdf8;
+}
+
+.keygen-loading[hidden] {
+  display: none;
 }
 
 .keygen-status {
