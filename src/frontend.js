@@ -707,7 +707,10 @@ const pageScript = String.raw`
 
         const cipher = new Uint8Array(buffer);
         if (state.encryptionMode !== 'crypt') {
-          return cipher.subarray(0, Math.min(length, cipher.length));
+          if (cipher.length < length) {
+            throw new Error('密文长度不足');
+          }
+          return cipher.subarray(0, length);
         }
         if (!state.dataKey || !state.baseNonce) {
           throw new Error('缺少解密密钥');
@@ -796,12 +799,16 @@ const pageScript = String.raw`
         const data = event && event.data;
         if (!data || typeof data !== 'object') return;
         if (data.type === 'init') {
+          const mode = typeof data.encryptionMode === 'string' ? data.encryptionMode.toLowerCase() : '';
+          if (mode !== 'crypt' && mode !== 'plain') {
+            throw new Error('未知加密模式: ' + mode);
+          }
           state = {
             dataKey: data.dataKey ? new Uint8Array(data.dataKey) : null,
             baseNonce: data.baseNonce ? new Uint8Array(data.baseNonce) : null,
             blockHeaderSize: Number(data.blockHeaderSize) || 0,
             blockDataSize: Number(data.blockDataSize) || 0,
-            encryptionMode: data.encryptionMode === 'crypt' ? 'crypt' : 'plain',
+            encryptionMode: mode,
           };
           return;
         }
@@ -2672,7 +2679,7 @@ const pageScript = String.raw`
         blockDataSize: state.blockDataSize,
         encryptionMode: state.encryptionMode,
       };
-      let nextToWrite = 0;
+      let writtenSegments = 0;
 
       await runSegmentDecryptionTask({
         mode: 'webDownloader',
@@ -2701,12 +2708,12 @@ const pageScript = String.raw`
           if (finishedSegment) {
             finishedSegment.encrypted = null;
           }
-          nextToWrite = index + 1;
+          writtenSegments = index + 1;
           applyProgress();
           await new Promise((resolve) => setTimeout(resolve, 0));
         },
       });
-      if (nextToWrite !== totalSegments) {
+      if (writtenSegments !== totalSegments) {
         throw new Error('仍有分段未完成解密');
       }
     };
