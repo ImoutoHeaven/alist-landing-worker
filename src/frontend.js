@@ -837,6 +837,8 @@ const pageScript = String.raw`
   const state = {
     downloadURL: '',
     infoReady: false,
+    fetchingInfo: false,
+    infoError: false,
     downloadBtnMode: 'download', // 'download' or 'copy'
     awaitingRetryUnlock: false,
       mode: 'legacy',
@@ -3726,6 +3728,21 @@ const pageScript = String.raw`
       turnstileReady,
     } = state.verification;
     const canCallInfo = (!needAltcha || altchaReady) && (!needTurnstile || turnstileReady);
+
+    // 如果 /info 接口获取失败，显示获取失败状态
+    if (state.infoError) {
+      downloadBtn.disabled = true;
+      setButtonText(downloadBtn, '获取失败', false);
+      return;
+    }
+
+    // 如果正在获取 /info，显示获取信息中状态
+    if (state.fetchingInfo) {
+      downloadBtn.disabled = true;
+      setButtonText(downloadBtn, '获取信息中', true);
+      return;
+    }
+
     if (canCallInfo) {
       downloadBtn.disabled = false;
       setButtonText(downloadBtn, '开始下载', false);
@@ -4225,20 +4242,29 @@ const pageScript = String.raw`
 
     state.downloadBtnMode = 'download';
     state.infoReady = false;
+    state.fetchingInfo = false;
+    state.infoError = true;
     clientDecryptUiState.ready = false;
     clientDecryptUiState.running = false;
     clientDecryptUiState.completed = false;
     syncClientDecryptControls();
-    downloadBtn.textContent = requiresTurnstileReset ? '等待验证' : '获取失败';
-    downloadBtn.disabled = true;
 
-    retryBtn.disabled = requiresTurnstileReset;
-    clearCacheBtn.disabled = false;
-    if (normalizedMessage.includes('binding')) {
+    // 使用 updateButtonState 来更新按钮状态
+    // 但对于特殊情况（Turnstile 重置和 binding 过期）需要覆盖文本
+    if (requiresTurnstileReset) {
+      downloadBtn.textContent = '等待验证';
+      downloadBtn.disabled = true;
+    } else if (normalizedMessage.includes('binding')) {
       downloadBtn.textContent = '验证已过期';
+      downloadBtn.disabled = true;
       retryBtn.disabled = true;
       state.awaitingRetryUnlock = true;
+    } else {
+      updateButtonState();
     }
+
+    retryBtn.disabled = requiresTurnstileReset || normalizedMessage.includes('binding');
+    clearCacheBtn.disabled = false;
   };
 
   const fetchInfo = async ({ forceRefresh = false } = {}) => {
@@ -4256,6 +4282,7 @@ const pageScript = String.raw`
     state.mode = 'legacy';
     syncBodyModeClasses();
     state.infoReady = false;
+    state.infoError = false;
     clientDecryptUiState.ready = false;
     clientDecryptUiState.running = false;
     syncClientDecryptControls();
@@ -4334,6 +4361,10 @@ const pageScript = String.raw`
       }
     }
 
+    // 验证完成后，设置 fetchingInfo 标记，表示开始获取 /info 接口数据
+    state.fetchingInfo = true;
+    updateButtonState();
+
     const infoURL = new URL('/info', window.location.origin);
     infoURL.searchParams.set('path', path);
     infoURL.searchParams.set('sign', sign);
@@ -4399,6 +4430,7 @@ const pageScript = String.raw`
       state.mode = 'web';
       syncBodyModeClasses();
       state.infoReady = true;
+      state.fetchingInfo = false;
       notifyAutoRedirectForWeb();
       return;
     }
@@ -4432,6 +4464,7 @@ const pageScript = String.raw`
       state.mode = 'client-decrypt';
       syncBodyModeClasses();
       state.infoReady = true;
+      state.fetchingInfo = false;
       state.downloadURL = downloadURL;
       state.downloadBtnMode = 'download';
       downloadBtn.disabled = false;
@@ -4455,6 +4488,7 @@ const pageScript = String.raw`
 
     state.downloadURL = downloadURL;
     state.infoReady = true;
+    state.fetchingInfo = false;
 
     // Update page title to filename after verification
     try {
@@ -4520,6 +4554,7 @@ const pageScript = String.raw`
         }
       }
       state.infoReady = false;
+      state.infoError = false;
       state.downloadURL = '';
       state.downloadBtnMode = 'download';
       updateButtonState();
@@ -4713,6 +4748,7 @@ const pageScript = String.raw`
   }
 
   retryBtn.addEventListener('click', async () => {
+    state.infoError = false;
     downloadBtn.disabled = true;
     setButtonText(downloadBtn, '身份验证中', true);
     retryBtn.disabled = true;
@@ -4742,6 +4778,7 @@ const pageScript = String.raw`
     retryBtn.disabled = true;
     setStatus('正在清理缓存...');
     state.infoReady = false;
+    state.infoError = false;
     updateButtonState();
     let fetchAttempted = false;
     try {
