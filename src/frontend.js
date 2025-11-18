@@ -657,7 +657,7 @@ const pageScript = `
   };
 
   // 解密 Worker 脚本（通过 Blob URL 注入）
-  const decryptWorkerScript = `
+  const decryptWorkerScript = \`
     /* eslint-disable no-restricted-globals */
     (() => {
       'use strict';
@@ -817,7 +817,7 @@ const pageScript = `
         }
       };
     })();
-  `;
+  \`;
 
   const getDecryptWorkerUrl = (() => {
     let url = null;
