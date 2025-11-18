@@ -922,6 +922,7 @@ const pageScript = buildRawString`
     }
     const workerCount = Math.max(1, Math.min(parallelism, segments.length));
     const workers = new Array(workerCount).fill(null).map(() => createDecryptWorker(commonParams));
+    console.info('[landing] 启动 Web Worker 解密池，数量:', workerCount);
     let nextToAssign = 0;
     let nextToWrite = 0;
     const pendingResults = new Map();
