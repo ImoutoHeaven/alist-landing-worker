@@ -3836,7 +3836,7 @@ const pageScript = buildRawString`
         loading = true;
       } else if (clientDecryptUiState.failed) {
         label = '✗ 解密失败';
-        disabled = false;
+        disabled = true;
       } else if (clientDecryptUiState.completed) {
         label = '✓ 解密完成';
         disabled = true;
