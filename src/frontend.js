@@ -669,167 +669,167 @@ const pageScript = buildRawString`
   };
 
   // 解密 Worker 脚本（通过 Blob URL 注入）
-  const decryptWorkerScript = buildRawString\`
-    /* eslint-disable no-restricted-globals */
-    (() => {
-      'use strict';
-      let state = {
-        dataKey: null,
-        baseNonce: null,
-        blockHeaderSize: 0,
-        blockDataSize: 0,
-        encryptionMode: 'plain',
-      };
-
-      const cloneUint8 = (input) => {
-        if (!input) return new Uint8Array(0);
-        return input.slice ? input.slice() : new Uint8Array(input);
-      };
-
-      const incrementNonce = (baseNonce, increment) => {
-        const output = cloneUint8(baseNonce);
-        let carry = BigInt(increment);
-        let index = 0;
-        while (carry > 0n && index < output.length) {
-          const sum = BigInt(output[index]) + (carry & 0xffn);
-          output[index] = Number(sum & 0xffn);
-          carry = (carry >> 8n) + (sum >> 8n);
-          index += 1;
-        }
-        return output;
-      };
-
-      const decryptBlock = (cipherBlock, dataKey, baseNonce, blockIndex) => {
-        const nonce = incrementNonce(baseNonce, blockIndex);
-        const opened = self.nacl?.secretbox?.open(cipherBlock, nonce, dataKey);
-        if (!opened) return null;
-        return new Uint8Array(opened);
-      };
-
-      const decryptSegmentPayload = (payload) => {
-        const {
-          buffer,
-          length,
-          mapping,
-        } = payload || {};
-
-        if (!buffer || !Number.isFinite(length) || length <= 0) {
-          throw new Error('缺少分段数据');
-        }
-
-        const cipher = new Uint8Array(buffer);
-        if (state.encryptionMode !== 'crypt') {
-          if (cipher.length < length) {
-            throw new Error('密文长度不足');
-          }
-          return cipher.subarray(0, length);
-        }
-        if (!state.dataKey || !state.baseNonce) {
-          throw new Error('缺少解密密钥');
-        }
-        if (!mapping || !Number.isFinite(state.blockHeaderSize) || !Number.isFinite(state.blockDataSize)) {
-          throw new Error('缺少分段映射或块尺寸');
-        }
-
-        const output = new Uint8Array(length);
-        let produced = 0;
-        let offset = 0;
-        let discard = mapping.discard || 0;
-        let blockIndex = mapping.blocks || 0;
-
-        while (offset < cipher.length && produced < length) {
-          if (offset + state.blockHeaderSize > cipher.length) {
-            break;
-          }
-          let end = offset + state.blockHeaderSize + state.blockDataSize;
-          if (end > cipher.length) {
-            end = cipher.length;
-          }
-          const cipherBlock = cipher.subarray(offset, end);
-          offset = end;
-          const plainBlock = decryptBlock(cipherBlock, state.dataKey, state.baseNonce, blockIndex);
-          if (!plainBlock) {
-            throw new Error('解密失败，请重试');
-          }
-          let chunk = plainBlock;
-          if (blockIndex === mapping.blocks && discard > 0) {
-            if (chunk.length <= discard) {
-              discard -= chunk.length;
-              blockIndex += 1;
-              continue;
-            }
-            chunk = chunk.subarray(discard);
-            discard = 0;
-          }
-          const remaining = length - produced;
-          if (chunk.length > remaining) {
-            output.set(chunk.subarray(0, remaining), produced);
-            produced += remaining;
-            break;
-          }
-          output.set(chunk, produced);
-          produced += chunk.length;
-          blockIndex += 1;
-        }
-
-        if (produced !== length) {
-          throw new Error('解密输出长度不匹配');
-        }
-        return output;
-      };
-
-      const sendError = (jobId, index, message) => {
-        self.postMessage({
-          type: 'segment-error',
-          jobId,
-          index,
-          message: message || 'decrypt failed',
-        });
-      };
-
-      const handleDecrypt = (data) => {
-        const { jobId, index, buffer, length, mapping } = data || {};
-        if (!jobId) return;
-        try {
-          const plain = decryptSegmentPayload({ buffer, length, mapping });
-          self.postMessage(
-            {
-              type: 'segment-done',
-              jobId,
-              index,
-              buffer: plain.buffer,
-            },
-            [plain.buffer],
-          );
-        } catch (error) {
-          const message = error && error.message ? error.message : 'decrypt error';
-          sendError(jobId, index, message);
-        }
-      };
-
-      self.onmessage = (event) => {
-        const data = event && event.data;
-        if (!data || typeof data !== 'object') return;
-        if (data.type === 'init') {
-          const mode = typeof data.encryptionMode === 'string' ? data.encryptionMode.toLowerCase() : '';
-          if (mode !== 'crypt' && mode !== 'plain') {
-            throw new Error('未知加密模式: ' + mode);
-          }
-          state = {
-            dataKey: data.dataKey ? new Uint8Array(data.dataKey) : null,
-            baseNonce: data.baseNonce ? new Uint8Array(data.baseNonce) : null,
-            blockHeaderSize: Number(data.blockHeaderSize) || 0,
-            blockDataSize: Number(data.blockDataSize) || 0,
-            encryptionMode: mode,
-          };
-          return;
-        }
-        if (data.type === 'decrypt-segment') {
-          handleDecrypt(data);
-        }
-      };
-    })();
-  \`;
+  const decryptWorkerScript = [
+    '/* eslint-disable no-restricted-globals */',
+    '(() => {',
+    "  'use strict';",
+    '  let state = {',
+    '    dataKey: null,',
+    '    baseNonce: null,',
+    '    blockHeaderSize: 0,',
+    '    blockDataSize: 0,',
+    "    encryptionMode: 'plain',",
+    '  };',
+    '',
+    '  const cloneUint8 = (input) => {',
+    '    if (!input) return new Uint8Array(0);',
+    '    return input.slice ? input.slice() : new Uint8Array(input);',
+    '  };',
+    '',
+    '  const incrementNonce = (baseNonce, increment) => {',
+    '    const output = cloneUint8(baseNonce);',
+    '    let carry = BigInt(increment);',
+    '    let index = 0;',
+    '    while (carry > 0n && index < output.length) {',
+    '      const sum = BigInt(output[index]) + (carry & 0xffn);',
+    '      output[index] = Number(sum & 0xffn);',
+    '      carry = (carry >> 8n) + (sum >> 8n);',
+    '      index += 1;',
+    '    }',
+    '    return output;',
+    '  };',
+    '',
+    '  const decryptBlock = (cipherBlock, dataKey, baseNonce, blockIndex) => {',
+    '    const nonce = incrementNonce(baseNonce, blockIndex);',
+    '    const opened = self.nacl?.secretbox?.open(cipherBlock, nonce, dataKey);',
+    '    if (!opened) return null;',
+    '    return new Uint8Array(opened);',
+    '  };',
+    '',
+    '  const decryptSegmentPayload = (payload) => {',
+    '    const {',
+    '      buffer,',
+    '      length,',
+    '      mapping,',
+    '    } = payload || {};',
+    '',
+    '    if (!buffer || !Number.isFinite(length) || length <= 0) {',
+    "      throw new Error('缺少分段数据');",
+    '    }',
+    '',
+    '    const cipher = new Uint8Array(buffer);',
+    "    if (state.encryptionMode !== 'crypt') {",
+    '      if (cipher.length < length) {',
+    "        throw new Error('密文长度不足');",
+    '      }',
+    '      return cipher.subarray(0, length);',
+    '    }',
+    '    if (!state.dataKey || !state.baseNonce) {',
+    "      throw new Error('缺少解密密钥');",
+    '    }',
+    '    if (!mapping || !Number.isFinite(state.blockHeaderSize) || !Number.isFinite(state.blockDataSize)) {',
+    "      throw new Error('缺少分段映射或块尺寸');",
+    '    }',
+    '',
+    '    const output = new Uint8Array(length);',
+    '    let produced = 0;',
+    '    let offset = 0;',
+    '    let discard = mapping.discard || 0;',
+    '    let blockIndex = mapping.blocks || 0;',
+    '',
+    '    while (offset < cipher.length && produced < length) {',
+    '      if (offset + state.blockHeaderSize > cipher.length) {',
+    '        break;',
+    '      }',
+    '      let end = offset + state.blockHeaderSize + state.blockDataSize;',
+    '      if (end > cipher.length) {',
+    '        end = cipher.length;',
+    '      }',
+    '      const cipherBlock = cipher.subarray(offset, end);',
+    '      offset = end;',
+    '      const plainBlock = decryptBlock(cipherBlock, state.dataKey, state.baseNonce, blockIndex);',
+    '      if (!plainBlock) {',
+    "        throw new Error('解密失败，请重试');",
+    '      }',
+    '      let chunk = plainBlock;',
+    '      if (blockIndex === mapping.blocks && discard > 0) {',
+    '        if (chunk.length <= discard) {',
+    '          discard -= chunk.length;',
+    '          blockIndex += 1;',
+    '          continue;',
+    '        }',
+    '        chunk = chunk.subarray(discard);',
+    '        discard = 0;',
+    '      }',
+    '      const remaining = length - produced;',
+    '      if (chunk.length > remaining) {',
+    '        output.set(chunk.subarray(0, remaining), produced);',
+    '        produced += remaining;',
+    '        break;',
+    '      }',
+    '      output.set(chunk, produced);',
+    '      produced += chunk.length;',
+    '      blockIndex += 1;',
+    '    }',
+    '',
+    '    if (produced !== length) {',
+    "      throw new Error('解密输出长度不匹配');",
+    '    }',
+    '    return output;',
+    '  };',
+    '',
+    '  const sendError = (jobId, index, message) => {',
+    '    self.postMessage({',
+    "      type: 'segment-error',",
+    '      jobId,',
+    '      index,',
+    "      message: message || 'decrypt failed',",
+    '    });',
+    '  };',
+    '',
+    '  const handleDecrypt = (data) => {',
+    '    const { jobId, index, buffer, length, mapping } = data || {};',
+    '    if (!jobId) return;',
+    '    try {',
+    '      const plain = decryptSegmentPayload({ buffer, length, mapping });',
+    '      self.postMessage(',
+    '        {',
+    "          type: 'segment-done',",
+    '          jobId,',
+    '          index,',
+    '          buffer: plain.buffer,',
+    '        },',
+    '        [plain.buffer],',
+    '      );',
+    '    } catch (error) {',
+    '      const message = error && error.message ? error.message : "decrypt error";',
+    '      sendError(jobId, index, message);',
+    '    }',
+    '  };',
+    '',
+    '  self.onmessage = (event) => {',
+    '    const data = event && event.data;',
+    '    if (!data || typeof data !== "object") return;',
+    "    if (data.type === 'init') {",
+    '      const mode = typeof data.encryptionMode === "string" ? data.encryptionMode.toLowerCase() : "";',
+    "      if (mode !== 'crypt' && mode !== 'plain') {",
+    "        throw new Error('未知加密模式: ' + mode);",
+    '      }',
+    '      state = {',
+    '        dataKey: data.dataKey ? new Uint8Array(data.dataKey) : null,',
+    '        baseNonce: data.baseNonce ? new Uint8Array(data.baseNonce) : null,',
+    '        blockHeaderSize: Number(data.blockHeaderSize) || 0,',
+    '        blockDataSize: Number(data.blockDataSize) || 0,',
+    '        encryptionMode: mode,',
+    '      };',
+    '      return;',
+    '    }',
+    "    if (data.type === 'decrypt-segment') {",
+    '      handleDecrypt(data);',
+    '    }',
+    '  };',
+    '})();',
+  ].join('\\n');
 
   const getDecryptWorkerUrl = (() => {
     let url = null;
