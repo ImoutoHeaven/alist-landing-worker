@@ -973,11 +973,17 @@ const pageScript = buildRawString`
         nextToAssign += 1;
         const payload = typeof getPayload === 'function' ? await getPayload(currentIndex) : null;
         if (!payload || !payload.encrypted) {
-          throw new Error('缺少分段数据');
+          flushError = new Error('缺少分段数据');
+          throw flushError;
         }
-        const { plain } = await worker.runJob(currentIndex, payload);
-        pendingResults.set(currentIndex, plain);
-        scheduleFlush();
+        try {
+          const { plain } = await worker.runJob(currentIndex, payload);
+          pendingResults.set(currentIndex, plain);
+          scheduleFlush();
+        } catch (error) {
+          flushError = error instanceof Error ? error : new Error(String(error));
+          throw flushError;
+        }
       }
     };
 
