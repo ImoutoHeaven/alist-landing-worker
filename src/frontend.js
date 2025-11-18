@@ -656,6 +656,321 @@ const pageScript = String.raw`
     return new Uint8Array(opened);
   };
 
+  // 解密 Worker 脚本（通过 Blob URL 注入）
+  const decryptWorkerScript = String.raw`
+    /* eslint-disable no-restricted-globals */
+    (() => {
+      'use strict';
+      let state = {
+        dataKey: null,
+        baseNonce: null,
+        blockHeaderSize: 0,
+        blockDataSize: 0,
+        encryptionMode: 'plain',
+      };
+
+      const cloneUint8 = (input) => {
+        if (!input) return new Uint8Array(0);
+        return input.slice ? input.slice() : new Uint8Array(input);
+      };
+
+      const incrementNonce = (baseNonce, increment) => {
+        const output = cloneUint8(baseNonce);
+        let carry = BigInt(increment);
+        let index = 0;
+        while (carry > 0n && index < output.length) {
+          const sum = BigInt(output[index]) + (carry & 0xffn);
+          output[index] = Number(sum & 0xffn);
+          carry = (carry >> 8n) + (sum >> 8n);
+          index += 1;
+        }
+        return output;
+      };
+
+      const decryptBlock = (cipherBlock, dataKey, baseNonce, blockIndex) => {
+        const nonce = incrementNonce(baseNonce, blockIndex);
+        const opened = self.nacl?.secretbox?.open(cipherBlock, nonce, dataKey);
+        if (!opened) return null;
+        return new Uint8Array(opened);
+      };
+
+      const decryptSegmentPayload = (payload) => {
+        const {
+          buffer,
+          length,
+          mapping,
+        } = payload || {};
+
+        if (!buffer || !Number.isFinite(length) || length <= 0) {
+          throw new Error('缺少分段数据');
+        }
+
+        const cipher = new Uint8Array(buffer);
+        if (state.encryptionMode !== 'crypt') {
+          return cipher.subarray(0, Math.min(length, cipher.length));
+        }
+        if (!state.dataKey || !state.baseNonce) {
+          throw new Error('缺少解密密钥');
+        }
+        if (!mapping || !Number.isFinite(state.blockHeaderSize) || !Number.isFinite(state.blockDataSize)) {
+          throw new Error('缺少分段映射或块尺寸');
+        }
+
+        const output = new Uint8Array(length);
+        let produced = 0;
+        let offset = 0;
+        let discard = mapping.discard || 0;
+        let blockIndex = mapping.blocks || 0;
+
+        while (offset < cipher.length && produced < length) {
+          if (offset + state.blockHeaderSize > cipher.length) {
+            break;
+          }
+          let end = offset + state.blockHeaderSize + state.blockDataSize;
+          if (end > cipher.length) {
+            end = cipher.length;
+          }
+          const cipherBlock = cipher.subarray(offset, end);
+          offset = end;
+          const plainBlock = decryptBlock(cipherBlock, state.dataKey, state.baseNonce, blockIndex);
+          if (!plainBlock) {
+            throw new Error('解密失败，请重试');
+          }
+          let chunk = plainBlock;
+          if (blockIndex === mapping.blocks && discard > 0) {
+            if (chunk.length <= discard) {
+              discard -= chunk.length;
+              blockIndex += 1;
+              continue;
+            }
+            chunk = chunk.subarray(discard);
+            discard = 0;
+          }
+          const remaining = length - produced;
+          if (chunk.length > remaining) {
+            output.set(chunk.subarray(0, remaining), produced);
+            produced += remaining;
+            break;
+          }
+          output.set(chunk, produced);
+          produced += chunk.length;
+          blockIndex += 1;
+        }
+
+        if (produced !== length) {
+          throw new Error('解密输出长度不匹配');
+        }
+        return output;
+      };
+
+      const sendError = (jobId, index, message) => {
+        self.postMessage({
+          type: 'segment-error',
+          jobId,
+          index,
+          message: message || 'decrypt failed',
+        });
+      };
+
+      const handleDecrypt = (data) => {
+        const { jobId, index, buffer, length, mapping } = data || {};
+        if (!jobId) return;
+        try {
+          const plain = decryptSegmentPayload({ buffer, length, mapping });
+          self.postMessage(
+            {
+              type: 'segment-done',
+              jobId,
+              index,
+              buffer: plain.buffer,
+            },
+            [plain.buffer],
+          );
+        } catch (error) {
+          const message = error && error.message ? error.message : 'decrypt error';
+          sendError(jobId, index, message);
+        }
+      };
+
+      self.onmessage = (event) => {
+        const data = event && event.data;
+        if (!data || typeof data !== 'object') return;
+        if (data.type === 'init') {
+          state = {
+            dataKey: data.dataKey ? new Uint8Array(data.dataKey) : null,
+            baseNonce: data.baseNonce ? new Uint8Array(data.baseNonce) : null,
+            blockHeaderSize: Number(data.blockHeaderSize) || 0,
+            blockDataSize: Number(data.blockDataSize) || 0,
+            encryptionMode: data.encryptionMode === 'crypt' ? 'crypt' : 'plain',
+          };
+          return;
+        }
+        if (data.type === 'decrypt-segment') {
+          handleDecrypt(data);
+        }
+      };
+    })();
+  `;
+
+  const getDecryptWorkerUrl = (() => {
+    let url = null;
+    return () => {
+      if (url) return url;
+      const prefix = "importScripts('https://cdn.jsdelivr.net/npm/tweetnacl@1.0.3/nacl-fast.min.js');\n";
+      const blob = new Blob([prefix + decryptWorkerScript], { type: 'application/javascript' });
+      url = URL.createObjectURL(blob);
+      return url;
+    };
+  })();
+
+  const createDecryptWorker = (commonParams) => {
+    const worker = new Worker(getDecryptWorkerUrl());
+    let jobId = 1;
+    const pending = new Map();
+
+    worker.addEventListener('message', (event) => {
+      const data = event && event.data;
+      if (!data || typeof data !== 'object') return;
+      if (data.type === 'segment-done') {
+        const record = pending.get(data.jobId);
+        if (record) {
+          pending.delete(data.jobId);
+          record.resolve({ index: data.index, plain: new Uint8Array(data.buffer || []) });
+        }
+      } else if (data.type === 'segment-error') {
+        const record = pending.get(data.jobId);
+        if (record) {
+          pending.delete(data.jobId);
+          const message = data.message || '解密失败';
+          record.reject(new Error(message));
+        }
+      }
+    });
+
+    worker.postMessage({
+      type: 'init',
+      dataKey: commonParams?.dataKey,
+      baseNonce: commonParams?.baseNonce,
+      blockHeaderSize: commonParams?.blockHeaderSize,
+      blockDataSize: commonParams?.blockDataSize,
+      encryptionMode: commonParams?.encryptionMode,
+    });
+
+    const runJob = (index, payload) =>
+      new Promise((resolve, reject) => {
+        const jobKey = jobId;
+        jobId += 1;
+        pending.set(jobKey, { resolve, reject });
+        const transferable = [];
+        if (payload && payload.encrypted && payload.encrypted.buffer) {
+          transferable.push(payload.encrypted.buffer);
+        }
+        worker.postMessage(
+          {
+            type: 'decrypt-segment',
+            jobId: jobKey,
+            index,
+            length: payload.length,
+            mapping: payload.mapping,
+            buffer: payload.encrypted ? payload.encrypted.buffer : null,
+          },
+          transferable,
+        );
+      });
+
+    const terminate = () => {
+      try {
+        worker.terminate();
+      } catch (error) {
+        // ignore
+      }
+    };
+
+    return { runJob, terminate };
+  };
+
+  const runSegmentDecryptionTask = async ({
+    mode = 'webDownloader',
+    segments = [],
+    parallelism = 1,
+    commonParams = {},
+    getPayload,
+    writeOrderedChunk,
+    isCancelled,
+  } = {}) => {
+    if (!Array.isArray(segments) || segments.length === 0) {
+      return;
+    }
+    const workerCount = Math.max(1, Math.min(parallelism, segments.length));
+    const workers = new Array(workerCount).fill(null).map(() => createDecryptWorker(commonParams));
+    let nextToAssign = 0;
+    let nextToWrite = 0;
+    const pendingResults = new Map();
+    let flushError = null;
+    let flushChain = Promise.resolve();
+
+    const scheduleFlush = () => {
+      flushChain = flushChain
+        .then(async () => {
+          while (pendingResults.has(nextToWrite)) {
+            const chunk = pendingResults.get(nextToWrite);
+            pendingResults.delete(nextToWrite);
+            if (typeof writeOrderedChunk === 'function') {
+              await writeOrderedChunk(nextToWrite, chunk);
+            }
+            nextToWrite += 1;
+          }
+        })
+        .catch((error) => {
+          flushError = error instanceof Error ? error : new Error(String(error));
+          throw flushError;
+        });
+    };
+
+    const shouldCancel = () => {
+      if (typeof isCancelled === 'function') {
+        return isCancelled();
+      }
+      return false;
+    };
+
+    const workerLoop = async (worker) => {
+      while (true) {
+        if (flushError) {
+          throw flushError;
+        }
+        if (shouldCancel()) {
+          throw new Error('cancelled');
+        }
+        const currentIndex = nextToAssign;
+        if (currentIndex >= segments.length) {
+          break;
+        }
+        nextToAssign += 1;
+        const payload = typeof getPayload === 'function' ? await getPayload(currentIndex) : null;
+        if (!payload || !payload.encrypted) {
+          throw new Error('缺少分段数据');
+        }
+        const { plain } = await worker.runJob(currentIndex, payload);
+        pendingResults.set(currentIndex, plain);
+        scheduleFlush();
+      }
+    };
+
+    try {
+      await Promise.all(workers.map((worker) => workerLoop(worker)));
+      await flushChain;
+      if (flushError) {
+        throw flushError;
+      }
+      if (nextToWrite !== segments.length) {
+        throw new Error('仍有分段未完成解密');
+      }
+    } finally {
+      workers.forEach((worker) => worker.terminate());
+    }
+  };
+
   const calculateUnderlying = (offset, limit, meta) => {
     const fallbackLimit = limit >= 0 ? limit : -1;
     if (
@@ -2350,67 +2665,47 @@ const pageScript = String.raw`
       setStatus('下载完成，准备解密');
       const totalSegments = state.segments.length;
       const parallelism = Math.min(resolveParallelism(), totalSegments);
-      let nextToAssign = 0;
-      let nextToWrite = 0;
-      const pendingResults = new Map();
-      let flushError = null;
-      let flushChain = Promise.resolve();
-
-      const scheduleFlush = () => {
-        flushChain = flushChain
-          .then(async () => {
-            while (pendingResults.has(nextToWrite)) {
-              const chunk = pendingResults.get(nextToWrite);
-              pendingResults.delete(nextToWrite);
-              if (state.cancelling) {
-                throw new Error('cancelled');
-              }
-              await writeChunk(chunk);
-              state.decryptedBytes = Math.min(state.totalSize, state.decryptedBytes + chunk.length);
-              const finishedSegment = state.segments[nextToWrite];
-              if (finishedSegment) {
-                finishedSegment.encrypted = null;
-              }
-              nextToWrite += 1;
-              applyProgress();
-              await new Promise((resolve) => setTimeout(resolve, 0));
-            }
-          })
-          .catch((error) => {
-            flushError = error instanceof Error ? error : new Error(String(error));
-            throw flushError;
-          });
+      const commonParams = {
+        dataKey: state.dataKey,
+        baseNonce: state.baseNonce,
+        blockHeaderSize: state.blockHeaderSize,
+        blockDataSize: state.blockDataSize,
+        encryptionMode: state.encryptionMode,
       };
+      let nextToWrite = 0;
 
-      const worker = async () => {
-        while (true) {
-          if (flushError) {
-            throw flushError;
+      await runSegmentDecryptionTask({
+        mode: 'webDownloader',
+        segments: state.segments,
+        parallelism,
+        commonParams,
+        isCancelled: () => state.cancelling,
+        getPayload: async (index) => {
+          const segment = state.segments[index];
+          if (!segment || !segment.encrypted) {
+            throw new Error('缺少分段数据');
           }
+          return {
+            length: segment.length,
+            mapping: segment.mapping,
+            encrypted: segment.encrypted,
+          };
+        },
+        writeOrderedChunk: async (index, chunk) => {
           if (state.cancelling) {
             throw new Error('cancelled');
           }
-          const currentIndex = nextToAssign;
-          if (currentIndex >= totalSegments) {
-            break;
+          await writeChunk(chunk);
+          state.decryptedBytes = Math.min(state.totalSize, state.decryptedBytes + chunk.length);
+          const finishedSegment = state.segments[index];
+          if (finishedSegment) {
+            finishedSegment.encrypted = null;
           }
-          nextToAssign += 1;
-          const segment = state.segments[currentIndex];
-          const plain = await decryptSegmentData(segment);
-          pendingResults.set(currentIndex, plain);
-          scheduleFlush();
-        }
-      };
-
-      const workers = [];
-      for (let i = 0; i < parallelism; i += 1) {
-        workers.push(worker());
-      }
-      await Promise.all(workers);
-      await flushChain;
-      if (flushError) {
-        throw flushError;
-      }
+          nextToWrite = index + 1;
+          applyProgress();
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        },
+      });
       if (nextToWrite !== totalSegments) {
         throw new Error('仍有分段未完成解密');
       }
@@ -3231,58 +3526,6 @@ const pageScript = String.raw`
       state.baseNonce = extractCryptNonce(headerBuffer);
     };
 
-    const decryptSegmentPayload = (segment, buffer) => {
-      if (state.encryptionMode === 'plain') {
-        if (buffer.length < segment.length) {
-          throw new Error('密文长度不足');
-        }
-        return buffer.subarray(0, segment.length);
-      }
-      const output = new Uint8Array(segment.length);
-      let produced = 0;
-      let offset = 0;
-      let discard = segment.mapping.discard;
-      let blockIndex = segment.mapping.blocks;
-      while (offset < buffer.length && produced < segment.length) {
-        if (offset + state.blockHeaderSize > buffer.length) {
-          break;
-        }
-        let end = offset + state.blockHeaderSize + state.blockDataSize;
-        if (end > buffer.length) {
-          end = buffer.length;
-        }
-        const cipherBlock = buffer.subarray(offset, end);
-        offset = end;
-        const plainBlock = decryptBlock(cipherBlock, state.dataKey, state.baseNonce, blockIndex);
-        if (!plainBlock) {
-          throw new Error('解密失败，请确认密钥');
-        }
-        let chunk = plainBlock;
-        if (blockIndex === segment.mapping.blocks && discard > 0) {
-          if (chunk.length <= discard) {
-            discard -= chunk.length;
-            blockIndex += 1;
-            continue;
-          }
-          chunk = chunk.subarray(discard);
-          discard = 0;
-        }
-        const remaining = segment.length - produced;
-        if (chunk.length > remaining) {
-          output.set(chunk.subarray(0, remaining), produced);
-          produced += remaining;
-          break;
-        }
-        output.set(chunk, produced);
-        produced += chunk.length;
-        blockIndex += 1;
-      }
-      if (produced !== segment.length) {
-        throw new Error('解密输出长度不匹配');
-      }
-      return output;
-    };
-
     const start = async (options = {}) => {
       if (!state.prepared) {
         throw new Error('clientDecryptor 未准备就绪');
@@ -3325,73 +3568,45 @@ const pageScript = String.raw`
         Math.max(1, resolveParallelism(effectiveParallel)),
         totalSegments || 1,
       );
-      let nextToAssign = 0;
-      let nextToWrite = 0;
-      const pendingResults = new Map();
-      let flushError = null;
-      let flushChain = Promise.resolve();
-
-      const scheduleFlush = () => {
-        flushChain = flushChain
-          .then(async () => {
-            while (pendingResults.has(nextToWrite)) {
-              const chunk = pendingResults.get(nextToWrite);
-              pendingResults.delete(nextToWrite);
-              if (state.cancelRequested) {
-                throw new Error('解密已取消');
-              }
-              await writeChunk(chunk);
-              decryptedBytes = Math.min(state.totalSize, decryptedBytes + chunk.length);
-              if (typeof onDecryptProgress === 'function') {
-                onDecryptProgress(decryptedBytes, state.totalSize);
-              }
-              nextToWrite += 1;
-              await new Promise((resolve) => setTimeout(resolve, 0));
-            }
-          })
-          .catch((error) => {
-            flushError = error instanceof Error ? error : new Error(String(error));
-            throw flushError;
-          });
-      };
-
-      const worker = async () => {
-        while (true) {
-          if (flushError) {
-            throw flushError;
-          }
-          if (state.cancelRequested) {
-            throw new Error('解密已取消');
-          }
-          const currentIndex = nextToAssign;
-          if (currentIndex >= totalSegments) {
-            break;
-          }
-          nextToAssign += 1;
-          const segment = segments[currentIndex];
-          const encrypted = await readEncryptedSegment(segment);
-          readBytes = Math.min(state.totalEncrypted, readBytes + encrypted.length);
-          if (typeof onReadProgress === 'function') {
-            onReadProgress(readBytes, state.totalEncrypted);
-          }
-          const plain = decryptSegmentPayload(segment, encrypted);
-          pendingResults.set(currentIndex, plain);
-          scheduleFlush();
-        }
+      const commonParams = {
+        dataKey: state.dataKey,
+        baseNonce: state.baseNonce,
+        blockHeaderSize: state.blockHeaderSize,
+        blockDataSize: state.blockDataSize,
+        encryptionMode: state.encryptionMode,
       };
       try {
-        const workerTasks = [];
-        for (let i = 0; i < parallelWorkers; i += 1) {
-          workerTasks.push(worker());
-        }
-        await Promise.all(workerTasks);
-        await flushChain;
-        if (flushError) {
-          throw flushError;
-        }
-        if (nextToWrite !== totalSegments) {
-          throw new Error('仍有分段未完成解密');
-        }
+        await runSegmentDecryptionTask({
+          mode: 'clientDecrypt',
+          segments,
+          parallelism: parallelWorkers,
+          commonParams,
+          isCancelled: () => state.cancelRequested,
+          getPayload: async (index) => {
+            const segment = segments[index];
+            const encrypted = await readEncryptedSegment(segment);
+            readBytes = Math.min(state.totalEncrypted, readBytes + encrypted.length);
+            if (typeof onReadProgress === 'function') {
+              onReadProgress(readBytes, state.totalEncrypted);
+            }
+            return {
+              length: segment.length,
+              mapping: segment.mapping,
+              encrypted,
+            };
+          },
+          writeOrderedChunk: async (_index, chunk) => {
+            if (state.cancelRequested) {
+              throw new Error('解密已取消');
+            }
+            await writeChunk(chunk);
+            decryptedBytes = Math.min(state.totalSize, decryptedBytes + chunk.length);
+            if (typeof onDecryptProgress === 'function') {
+              onDecryptProgress(decryptedBytes, state.totalSize);
+            }
+            await new Promise((resolve) => setTimeout(resolve, 0));
+          },
+        });
       } finally {
         state.running = false;
         state.cancelRequested = false;
