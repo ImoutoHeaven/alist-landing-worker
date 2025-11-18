@@ -466,7 +466,8 @@ button:disabled {
   display: flex;
   flex-wrap: wrap;
   justify-content: space-between;
-  gap: 0.5rem;
+  align-items: baseline;
+  gap: 0.5rem 1rem;
   padding: 0.75rem 0.85rem;
   border-radius: 0.75rem;
   background: rgba(15,23,42,0.7);
@@ -536,6 +537,7 @@ button:disabled {
   font-size: 0.95rem;
   color: #e2e8f0;
   word-break: break-all;
+  flex: 1;
 }
 
 .client-file-size {
@@ -543,8 +545,19 @@ button:disabled {
   z-index: 1;
   font-size: 0.8rem;
   color: #94a3b8;
-  min-width: 80px;
-  text-align: right;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.client-save-path {
+  position: relative;
+  z-index: 1;
+  flex-basis: 100%;
+  font-size: 0.75rem;
+  color: #94a3b8;
+  line-height: 1.5;
+  word-break: break-all;
+  white-space: pre-line;
 }
 
 .client-decrypt-actions {

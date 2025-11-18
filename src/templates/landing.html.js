@@ -60,6 +60,7 @@ export const htmlTemplate = `<!DOCTYPE html>
           <div class="client-decrypt-file">
             <div class="client-file-name" id="clientDecryptFileName">尚未选择文件</div>
             <div class="client-file-size" id="clientDecryptFileSize">--</div>
+            <div class="client-save-path" id="clientDecryptSavePath"></div>
           </div>
           <div class="client-decrypt-actions">
             <button id="clientDecryptSelect" type="button">选择密文文件</button>

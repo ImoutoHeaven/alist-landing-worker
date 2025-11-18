@@ -553,6 +553,7 @@ const pageScript = buildRawString`
   const clientDecryptCancelBtn = $('clientDecryptCancel');
   const clientDecryptFileNameEl = $('clientDecryptFileName');
   const clientDecryptFileSizeEl = $('clientDecryptFileSize');
+  const clientDecryptSavePathEl = $('clientDecryptSavePath');
   const clientDecryptStatusHint = $('clientDecryptStatusHint');
   const autoRedirectEnabled = window.__AUTO_REDIRECT__ === true;
   const webDownloaderProps = window.__WEB_DOWNLOADER_PROPS__ || {};
@@ -1220,6 +1221,9 @@ const pageScript = buildRawString`
         file: null,
         fileName: '',
         fileSize: 0,
+        saveFileName: '',
+        savePath: '',
+        writerType: '', // 'fs' or 'memory'
         decryptParallelism: DEFAULT_PARALLEL_THREADS,
         decryptParallelRaw: String(DEFAULT_PARALLEL_THREADS),
         segmentSizeMb: DEFAULT_SEGMENT_SIZE_MB,
@@ -3777,6 +3781,22 @@ const pageScript = buildRawString`
     }
   };
 
+  const syncClientDecryptSavePath = () => {
+    if (!clientDecryptSavePathEl) return;
+
+    // 如果没有保存路径信息，清空显示
+    if (!clientDecryptUiState.saveFileName || !clientDecryptUiState.writerType) {
+      clientDecryptSavePathEl.textContent = '';
+      return;
+    }
+
+    const fileName = clientDecryptUiState.saveFileName;
+    const writerType = clientDecryptUiState.writerType;
+
+    // 两行显示：第一行模式，第二行保存文件名
+    clientDecryptSavePathEl.textContent = '\u6a21\u5f0f: ' + writerType + '\n\u4fdd\u5b58\u4e3a: ' + fileName;
+  };
+
     const setClientDecryptFile = (file) => {
     clientDecryptUiState.file = file || null;
     clientDecryptUiState.fileName = file ? file.name : clientDecryptUiState.fileName;
@@ -3791,7 +3811,11 @@ const pageScript = buildRawString`
     clientDecryptUiState.completed = false;
     clientDecryptUiState.failed = false;
     clientDecryptUiState.downloadInitiated = false;
+    clientDecryptUiState.writerType = '';
+    clientDecryptUiState.saveFileName = '';
+    clientDecryptUiState.savePath = '';
     syncClientDecryptFileInfo();
+    syncClientDecryptSavePath();
     if (clientDecryptFileInput) {
       clientDecryptFileInput.value = '';
     }
@@ -3905,12 +3929,26 @@ const pageScript = buildRawString`
         });
         const writable = await handle.createWritable({ keepExistingData: false });
         clientDecryptWriter = { type: 'fs', handle, writable };
+
+        // 保存文件信息（FileSystem API 无法获取绝对路径，只能获取文件名）
+        clientDecryptUiState.writerType = 'fs';
+        clientDecryptUiState.saveFileName = handle.name || suggestedName || 'download.bin';
+        clientDecryptUiState.savePath = ''; // FileSystem API 无法获取路径
+        syncClientDecryptSavePath();
+
         return clientDecryptWriter;
       } catch (error) {
         throw error;
       }
     }
     clientDecryptWriter = { type: 'memory', chunks: [] };
+
+    // 保存内存模式信息
+    clientDecryptUiState.writerType = 'memory';
+    clientDecryptUiState.saveFileName = suggestedName || 'download.bin';
+    clientDecryptUiState.savePath = '';
+    syncClientDecryptSavePath();
+
     return clientDecryptWriter;
   };
 
@@ -4889,6 +4927,7 @@ const pageScript = buildRawString`
       clientDecryptUiState.completed = true;
       clientDecryptUiState.failed = false;
       syncClientDecryptControls();
+      syncClientDecryptSavePath();
       updateClientDecryptStatusHint('success');
       setStatus('解密完成，文件已保存');
     } catch (error) {
@@ -4897,10 +4936,16 @@ const pageScript = buildRawString`
         setStatus('解密已取消');
         clientDecryptUiState.failed = false;
         updateClientDecryptStatusHint('pending');
+        // 取消时清空保存路径显示
+        clientDecryptUiState.writerType = '';
+        clientDecryptUiState.saveFileName = '';
+        clientDecryptUiState.savePath = '';
+        syncClientDecryptSavePath();
       } else {
         setStatus('解密失败：' + message);
         console.error(error);
         clientDecryptUiState.failed = true;
+        syncClientDecryptSavePath();
         updateClientDecryptStatusHint('error');
       }
       clientDecryptUiState.completed = false;
