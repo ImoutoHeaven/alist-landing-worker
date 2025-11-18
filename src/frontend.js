@@ -9,7 +9,19 @@ const escapeHtml = (value = '') =>
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 
-const pageScript = `
+const buildRawString = (strings, ...values) => {
+  const parts = strings && strings.raw ? strings.raw : strings;
+  let output = '';
+  for (let i = 0; i < parts.length; i += 1) {
+    output += parts[i];
+    if (i < values.length) {
+      output += values[i];
+    }
+  }
+  return output;
+};
+
+const pageScript = buildRawString`
 (() => {
   'use strict';
 
@@ -657,7 +669,7 @@ const pageScript = `
   };
 
   // 解密 Worker 脚本（通过 Blob URL 注入）
-  const decryptWorkerScript = \`
+  const decryptWorkerScript = buildRawString\`
     /* eslint-disable no-restricted-globals */
     (() => {
       'use strict';
