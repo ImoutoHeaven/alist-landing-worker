@@ -9,7 +9,7 @@ const escapeHtml = (value = '') =>
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 
-const pageScript = String.raw`
+const pageScript = `
 (() => {
   'use strict';
 
