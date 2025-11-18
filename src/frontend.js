@@ -829,7 +829,7 @@ const pageScript = buildRawString`
     '    }',
     '  };',
     '})();',
-  ].join('\\n');
+  ].join('\n');
 
   const getDecryptWorkerUrl = (() => {
     let url = null;
