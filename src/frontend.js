@@ -3614,6 +3614,43 @@ const pageScript = buildRawString`
       state.baseNonce = extractCryptNonce(headerBuffer);
     };
 
+    const computeExpectedEncryptedSize = () => {
+      const totalPlainSize = Number(state.totalSize);
+      if (state.encryptionMode !== 'crypt') {
+        return Number.isFinite(totalPlainSize) && totalPlainSize >= 0 ? totalPlainSize : 0;
+      }
+      const fileHeaderSize = Number(state.fileHeaderSize);
+      const blockHeaderSize = Number(state.blockHeaderSize);
+      const blockDataSize = Number(state.blockDataSize);
+      if (
+        !Number.isFinite(totalPlainSize) ||
+        totalPlainSize < 0 ||
+        !Number.isFinite(fileHeaderSize) ||
+        fileHeaderSize < 0 ||
+        !Number.isFinite(blockHeaderSize) ||
+        blockHeaderSize < 0 ||
+        !Number.isFinite(blockDataSize) ||
+        blockDataSize <= 0
+      ) {
+        return 0;
+      }
+      const fullBlocks = Math.floor(totalPlainSize / blockDataSize);
+      const remainder = totalPlainSize % blockDataSize;
+      let payloadSize = fullBlocks * (blockDataSize + blockHeaderSize);
+      if (remainder > 0) {
+        payloadSize += remainder + blockHeaderSize;
+      }
+      return fileHeaderSize + payloadSize;
+    };
+
+    const isFileSizeMatching = (size) => {
+      const expected = computeExpectedEncryptedSize();
+      if (!Number.isFinite(size) || size < 0 || expected <= 0) {
+        return true;
+      }
+      return size === expected;
+    };
+
     const start = async (options = {}) => {
       if (!state.prepared) {
         throw new Error('clientDecryptor 未准备就绪');
@@ -3643,34 +3680,6 @@ const pageScript = buildRawString`
       );
       const segments = buildSegments(effectiveSegmentSize);
       await ensureBaseNonceFromFile();
-      const computeExpectedEncryptedSize = () => {
-        const totalPlainSize = Number(state.totalSize);
-        if (state.encryptionMode !== 'crypt') {
-          return Number.isFinite(totalPlainSize) && totalPlainSize >= 0 ? totalPlainSize : 0;
-        }
-        const fileHeaderSize = Number(state.fileHeaderSize);
-        const blockHeaderSize = Number(state.blockHeaderSize);
-        const blockDataSize = Number(state.blockDataSize);
-        if (
-          !Number.isFinite(totalPlainSize) ||
-          totalPlainSize < 0 ||
-          !Number.isFinite(fileHeaderSize) ||
-          fileHeaderSize < 0 ||
-          !Number.isFinite(blockHeaderSize) ||
-          blockHeaderSize < 0 ||
-          !Number.isFinite(blockDataSize) ||
-          blockDataSize <= 0
-        ) {
-          return 0;
-        }
-        const fullBlocks = Math.floor(totalPlainSize / blockDataSize);
-        const remainder = totalPlainSize % blockDataSize;
-        let payloadSize = fullBlocks * (blockDataSize + blockHeaderSize);
-        if (remainder > 0) {
-          payloadSize += remainder + blockHeaderSize;
-        }
-        return fileHeaderSize + payloadSize;
-      };
       const expectedEncryptedSize = computeExpectedEncryptedSize();
       if (expectedEncryptedSize > 0 && state.sourceFile.size !== expectedEncryptedSize) {
         throw new Error('密文文件大小与预期不匹配，无法解密');
@@ -3750,6 +3759,8 @@ const pageScript = buildRawString`
       getFileName: () => state.fileName,
       getTotalSize: () => state.totalSize,
       getEncryptedSize: () => state.totalEncrypted,
+      getExpectedEncryptedSize: () => computeExpectedEncryptedSize(),
+      isFileSizeMatching: (size) => isFileSizeMatching(size),
       updateParallelLimit,
       updateSegmentSize,
       getParallelism: () => state.decryptParallelism,
@@ -3901,6 +3912,14 @@ const pageScript = buildRawString`
     clientDecryptUiState.writerType = '';
     clientDecryptUiState.saveFileName = '';
     clientDecryptUiState.savePath = '';
+    const expectedName = clientDecryptor.getFileName();
+    if (expectedName) {
+      clientDecryptUiState.fileName = expectedName;
+    }
+    const expectedSize = clientDecryptor.getTotalSize();
+    if (Number.isFinite(expectedSize) && expectedSize > 0) {
+      clientDecryptUiState.fileSize = expectedSize;
+    }
     syncClientDecryptFileInfo();
     syncClientDecryptSavePath();
     if (clientDecryptFileInput) {
@@ -5097,6 +5116,22 @@ const pageScript = buildRawString`
     clientDecryptFileInput.addEventListener('change', (event) => {
       const file = event.target.files && event.target.files[0];
       if (file) {
+        const expectedEncryptedSize = clientDecryptor.getExpectedEncryptedSize();
+        if (!clientDecryptor.isFileSizeMatching(file.size)) {
+          const expectedText =
+            expectedEncryptedSize > 0 ? formatBytes(expectedEncryptedSize) : '未知大小';
+          log(
+            '密文文件大小与预期不匹配（实际：' +
+              formatBytes(file.size) +
+              '，预期：' +
+              expectedText +
+              '）',
+          );
+          clearClientDecryptFile();
+          updateClientDecryptStatusHint('pending');
+          syncClientDecryptControls();
+          return;
+        }
         setClientDecryptFile(file);
         clientDecryptor.setSourceFile(file);
         updateClientDecryptStatusHint('pending');
