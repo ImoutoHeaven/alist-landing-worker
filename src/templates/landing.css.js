@@ -924,7 +924,9 @@ button:hover:not(:disabled) {
 
 /* ========== Advanced Panel ========== */
 .advanced-backdrop {
-  background: rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), 0.55);
+  background:
+    linear-gradient(rgba(0, 0, 0, 0.75), rgba(0, 0, 0, 0.75)),
+    rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), 0.15);
   -webkit-backdrop-filter: blur(6px);
   backdrop-filter: blur(6px);
 }
