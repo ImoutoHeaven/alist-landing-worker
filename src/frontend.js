@@ -204,8 +204,9 @@ const pageScript = buildRawString`
       this.currentGlowX = x / window.innerWidth;
       this.currentGlowY = y / window.innerHeight;
 
-      const normalizedX = this.currentGlowX;
-      const normalizedY = this.currentGlowY;
+      // 防护：限制 normalized 值在 [0, 1] 范围内，防止光斑超出窗口时计算爆炸
+      const normalizedX = Math.max(0, Math.min(1, this.currentGlowX));
+      const normalizedY = Math.max(0, Math.min(1, this.currentGlowY));
 
       const GLOW_MAX_INTENSITY = 0.35;
       const GLOW_RADIUS = 0.55;
@@ -227,10 +228,12 @@ const pageScript = buildRawString`
       const proximityLeft = normalizedX < edgeThreshold ? Math.pow(1 - normalizedX / edgeThreshold, 2) : 0;
       const proximityRight = normalizedX > (1 - edgeThreshold) ? Math.pow((normalizedX - (1 - edgeThreshold)) / edgeThreshold, 2) : 0;
 
-      const reflectTop = glowIntensityAtTop * REFLECTION_COEFFICIENT * proximityTop;
-      const reflectBottom = glowIntensityAtBottom * REFLECTION_COEFFICIENT * proximityBottom;
-      const reflectLeft = glowIntensityAtLeft * REFLECTION_COEFFICIENT * proximityLeft;
-      const reflectRight = glowIntensityAtRight * REFLECTION_COEFFICIENT * proximityRight;
+      // 防护：限制边缘辉光强度的最大值，避免异常情况下辉光过亮/过大
+      const MAX_REFLECT_INTENSITY = 0.5;
+      const reflectTop = Math.min(MAX_REFLECT_INTENSITY, glowIntensityAtTop * REFLECTION_COEFFICIENT * proximityTop);
+      const reflectBottom = Math.min(MAX_REFLECT_INTENSITY, glowIntensityAtBottom * REFLECTION_COEFFICIENT * proximityBottom);
+      const reflectLeft = Math.min(MAX_REFLECT_INTENSITY, glowIntensityAtLeft * REFLECTION_COEFFICIENT * proximityLeft);
+      const reflectRight = Math.min(MAX_REFLECT_INTENSITY, glowIntensityAtRight * REFLECTION_COEFFICIENT * proximityRight);
 
       document.body.style.setProperty('--reflect-top', reflectTop.toFixed(3));
       document.body.style.setProperty('--reflect-bottom', reflectBottom.toFixed(3));
@@ -287,8 +290,9 @@ const pageScript = buildRawString`
 
       const moveX = this.currentSpeedX * deltaTime;
       const moveY = this.currentSpeedY * deltaTime;
-      const newX = currentX + moveX;
-      const newY = currentY + moveY;
+      // 防护：限制光斑位置在 [0, 1] 范围内，防止越界
+      const newX = Math.max(0, Math.min(1, currentX + moveX));
+      const newY = Math.max(0, Math.min(1, currentY + moveY));
 
       const newDx = targetX - newX;
       const newDy = targetY - newY;
@@ -307,7 +311,9 @@ const pageScript = buildRawString`
       if (this.isRenderingStopped) return;
 
       const now = Date.now();
-      const deltaTime = (now - this.lastFrameTime) / 1000;
+      const rawDeltaTime = (now - this.lastFrameTime) / 1000;
+      // 防护：限制 deltaTime 上限为 0.1s（10fps），防止页面挂起后恢复时光斑瞬移
+      const deltaTime = Math.min(0.1, rawDeltaTime);
       this.lastFrameTime = now;
 
       const w = window.innerWidth;
@@ -394,19 +400,30 @@ const pageScript = buildRawString`
     handleMouseMove = (e) => {
       if (document.hidden) return;
 
-      this.latestMouseX = e.clientX;
-      this.latestMouseY = e.clientY;
+      // 防护：检查鼠标是否在窗口范围内
+      const isInBounds = e.clientX >= 0 && e.clientX <= window.innerWidth &&
+                         e.clientY >= 0 && e.clientY <= window.innerHeight;
 
-      if (this.isAutoGlow) {
-        this.isAutoGlow = false;
-        this.lastMouseSampleTime = Date.now();
-        this.setMouseTarget(this.latestMouseX, this.latestMouseY);
-      }
+      if (isInBounds) {
+        // 鼠标在窗口内，正常跟随
+        this.latestMouseX = e.clientX;
+        this.latestMouseY = e.clientY;
 
-      clearTimeout(this.mouseIdleTimer);
-      this.mouseIdleTimer = setTimeout(() => {
+        if (this.isAutoGlow) {
+          this.isAutoGlow = false;
+          this.lastMouseSampleTime = Date.now();
+          this.setMouseTarget(this.latestMouseX, this.latestMouseY);
+        }
+
+        clearTimeout(this.mouseIdleTimer);
+        this.mouseIdleTimer = setTimeout(() => {
+          this.enableAutoGlow();
+        }, 6000);
+      } else {
+        // 鼠标移出窗口，立即切换到自动漫游
+        clearTimeout(this.mouseIdleTimer);
         this.enableAutoGlow();
-      }, 6000);
+      }
     };
 
     handleVisibilityChange = () => {
