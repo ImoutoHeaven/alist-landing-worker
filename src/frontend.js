@@ -3643,7 +3643,35 @@ const pageScript = buildRawString`
       );
       const segments = buildSegments(effectiveSegmentSize);
       await ensureBaseNonceFromFile();
-      const expectedEncryptedSize = state.totalEncrypted + (Number(state.fileHeaderSize) || 0);
+      const computeExpectedEncryptedSize = () => {
+        const totalPlainSize = Number(state.totalSize);
+        if (state.encryptionMode !== 'crypt') {
+          return Number.isFinite(totalPlainSize) && totalPlainSize >= 0 ? totalPlainSize : 0;
+        }
+        const fileHeaderSize = Number(state.fileHeaderSize);
+        const blockHeaderSize = Number(state.blockHeaderSize);
+        const blockDataSize = Number(state.blockDataSize);
+        if (
+          !Number.isFinite(totalPlainSize) ||
+          totalPlainSize < 0 ||
+          !Number.isFinite(fileHeaderSize) ||
+          fileHeaderSize < 0 ||
+          !Number.isFinite(blockHeaderSize) ||
+          blockHeaderSize < 0 ||
+          !Number.isFinite(blockDataSize) ||
+          blockDataSize <= 0
+        ) {
+          return 0;
+        }
+        const fullBlocks = Math.floor(totalPlainSize / blockDataSize);
+        const remainder = totalPlainSize % blockDataSize;
+        let payloadSize = fullBlocks * (blockDataSize + blockHeaderSize);
+        if (remainder > 0) {
+          payloadSize += remainder + blockHeaderSize;
+        }
+        return fileHeaderSize + payloadSize;
+      };
+      const expectedEncryptedSize = computeExpectedEncryptedSize();
       if (expectedEncryptedSize > 0 && state.sourceFile.size !== expectedEncryptedSize) {
         throw new Error('密文文件大小与预期不匹配，无法解密');
       }
