@@ -1,5 +1,5 @@
 import { htmlTemplate } from './templates/landing.html.js';
-import { cssStyles } from './templates/landing.css.js';
+import { themeCSS, cssStyles } from './templates/landing.css.js';
 
 const escapeHtml = (value = '') =>
   value
@@ -25,483 +25,533 @@ const pageScript = buildRawString`
 (() => {
   'use strict';
 
-  // Glow effect: mouse tracking + auto wandering
-  let mouseIdleTimer = null;
-  let isAutoGlow = true;
-  let glowAnimationFrame = null;
-  let currentGlowX = 0.5;
-  let currentGlowY = 0;
-  let targetGlowX = 0.5;
-  let targetGlowY = 0;
-  let lastFrameTime = Date.now();
-  let isResting = false;
-  let restStartTime = 0;
+  // ===== Theme Manager & Adapter =====
+  class MinimalThemeAdapter {
+    constructor() {
+      // Glow effect state
+      this.mouseIdleTimer = null;
+      this.isAutoGlow = true;
+      this.glowAnimationFrame = null;
+      this.currentGlowX = 0.5;
+      this.currentGlowY = 0;
+      this.targetGlowX = 0.5;
+      this.targetGlowY = 0;
+      this.lastFrameTime = Date.now();
+      this.isResting = false;
+      this.restStartTime = 0;
 
-  // 鼠标采样系统
-  let lastMouseSampleTime = 0;
-  const MOUSE_SAMPLE_INTERVAL = 1000; // 每1秒采样一次鼠标位置
-  let latestMouseX = 0;
-  let latestMouseY = 0;
+      // Mouse sampling system
+      this.lastMouseSampleTime = 0;
+      this.MOUSE_SAMPLE_INTERVAL = 1000;
+      this.latestMouseX = 0;
+      this.latestMouseY = 0;
 
-  // 呼吸动画系统（随机亮度 + 随机周期）
-  const getRandomBreatheMin = () => 0.5 + Math.random() * 0.2; // 0.5-0.7
-  const getRandomBreatheMax = () => 1.0 + Math.random() * 0.2; // 1.0-1.2
-  const getRandomBreatheDuration = () => 2 + Math.random() * 10; // 2-12 秒一个呼吸周期
-  let breathePhase = Math.random();
-  let breatheCycleDuration = getRandomBreatheDuration();
-  let breatheMinOpacity = getRandomBreatheMin();
-  let breatheMaxOpacity = getRandomBreatheMax();
-  let targetBreatheCycleDuration = breatheCycleDuration;
-  let targetBreatheMinOpacity = breatheMinOpacity;
-  let targetBreatheMaxOpacity = breatheMaxOpacity;
-  const BREATHE_SMOOTHING_SPEED = 1.8; // 调整目标亮度/周期的平滑速度（越大越快）
+      // Breathing animation
+      this.breathePhase = Math.random();
+      this.breatheCycleDuration = this.getRandomBreatheDuration();
+      this.breatheMinOpacity = this.getRandomBreatheMin();
+      this.breatheMaxOpacity = this.getRandomBreatheMax();
+      this.targetBreatheCycleDuration = this.breatheCycleDuration;
+      this.targetBreatheMinOpacity = this.breatheMinOpacity;
+      this.targetBreatheMaxOpacity = this.breatheMaxOpacity;
+      this.BREATHE_SMOOTHING_SPEED = 1.8;
 
-  // 页面可见性管理
-  let visibilityTimer = null;
-  let isRenderingStopped = false;
-  let fadeInPhase = 1; // 淡入进度 0-1
-  const FADE_IN_DURATION = 2.5; // 2.5秒淡入
-  const syncBreatheOpacity = () => {
-    const body = document.body;
-    if (!body) return;
-    const breatheValue = 0.5 + 0.5 * Math.sin(breathePhase * Math.PI * 2 - Math.PI / 2);
-    const currentOpacity = breatheMinOpacity + (breatheMaxOpacity - breatheMinOpacity) * breatheValue;
-    body.style.setProperty('--breathe-opacity', (currentOpacity * fadeInPhase).toFixed(3));
-  };
+      // Visibility management
+      this.visibilityTimer = null;
+      this.isRenderingStopped = false;
+      this.fadeInPhase = 1;
+      this.FADE_IN_DURATION = 2.5;
 
-  // 颜色渐变系统
-  const colorTable = [
-    { r: 62, g: 110, b: 255 },   // 当前蓝色
-    { r: 0, g: 191, b: 255 },    // 深天蓝 DeepSkyBlue
-    { r: 64, g: 224, b: 208 },   // 青绿 Turquoise
-    { r: 138, g: 43, b: 226 },   // 蓝紫 BlueViolet
-    { r: 147, g: 51, b: 234 },   // 紫色 Purple
-    { r: 199, g: 21, b: 133 },   // 深粉 MediumVioletRed
-    { r: 255, g: 20, b: 147 },   // 玫红 DeepPink
-    { r: 72, g: 61, b: 139 },    // 深蓝紫 DarkSlateBlue
-  ];
-  const getRandomColorIndex = () => Math.floor(Math.random() * colorTable.length);
-  const getNextColorIndex = (excludeIndex) => {
-    if (colorTable.length <= 1) return excludeIndex;
-    let nextIndex = getRandomColorIndex();
-    while (nextIndex === excludeIndex) {
-      nextIndex = getRandomColorIndex();
+      // Color system
+      this.colorTable = [
+        { r: 62, g: 110, b: 255 },
+        { r: 0, g: 191, b: 255 },
+        { r: 64, g: 224, b: 208 },
+        { r: 138, g: 43, b: 226 },
+        { r: 147, g: 51, b: 234 },
+        { r: 199, g: 21, b: 133 },
+        { r: 255, g: 20, b: 147 },
+        { r: 72, g: 61, b: 139 },
+      ];
+      this.currentColorIndex = this.getRandomColorIndex();
+      this.targetColorIndex = this.getNextColorIndex(this.currentColorIndex);
+      this.colorTransitionPhase = Math.random();
+      this.colorTransitionDuration = this.getRandomColorTransitionDuration();
+
+      // Speed system
+      this.MAX_SPEED = 0.08;
+      this.WANDER_ACCELERATION = 0.12;
+      this.MOUSE_ACCELERATION = 0.04;
+      this.WANDER_REACHED_THRESHOLD = 0.01;
+      this.currentRestDuration = Math.random() * 8000;
+      this.currentSpeedX = 0;
+      this.currentSpeedY = 0;
+
+      // DOM references
+      this.downloadBar = null;
+      this.decryptBar = null;
+      this.statusEl = null;
     }
-    return nextIndex;
-  };
-  let currentColorIndex = getRandomColorIndex();
-  let targetColorIndex = getNextColorIndex(currentColorIndex);
-  const getRandomColorTransitionDuration = () => 10 + Math.random() * 35; // 10-45秒渐变
-  let colorTransitionPhase = Math.random();
-  let colorTransitionDuration = getRandomColorTransitionDuration();
-  const applyGlowColor = () => {
-    const body = document.body;
-    if (!body) return;
-    const currentColor = colorTable[currentColorIndex] || colorTable[0];
-    const targetColor = colorTable[targetColorIndex] || currentColor;
-    const r = Math.round(currentColor.r + (targetColor.r - currentColor.r) * colorTransitionPhase);
-    const g = Math.round(currentColor.g + (targetColor.g - currentColor.g) * colorTransitionPhase);
-    const b = Math.round(currentColor.b + (targetColor.b - currentColor.b) * colorTransitionPhase);
-    body.style.setProperty('--glow-r', r);
-    body.style.setProperty('--glow-g', g);
-    body.style.setProperty('--glow-b', b);
-  };
 
-  // 速度系统
-  const MAX_SPEED = 0.08; // 每秒最多移动 8% 的屏幕宽度（很慢）
-  const WANDER_ACCELERATION = 0.12; // 自动游走的加速度系数
-  const MOUSE_ACCELERATION = 0.04; // 鼠标跟随的加速度系数（更慢更柔和）
-  const WANDER_REACHED_THRESHOLD = 0.01; // 到达目标的阈值（1%）
-  let currentRestDuration = Math.random() * 8000; // 随机 0-8 秒休息时间
+    getRandomBreatheMin() { return 0.5 + Math.random() * 0.2; }
+    getRandomBreatheMax() { return 1.0 + Math.random() * 0.2; }
+    getRandomBreatheDuration() { return 2 + Math.random() * 10; }
+    getRandomColorIndex() { return Math.floor(Math.random() * this.colorTable.length); }
+    getNextColorIndex(excludeIndex) {
+      if (this.colorTable.length <= 1) return excludeIndex;
+      let nextIndex = this.getRandomColorIndex();
+      while (nextIndex === excludeIndex) {
+        nextIndex = this.getRandomColorIndex();
+      }
+      return nextIndex;
+    }
+    getRandomColorTransitionDuration() { return 10 + Math.random() * 35; }
+    getRandomWanderTarget() {
+      return {
+        x: 0.1 + Math.random() * 0.8,
+        y: 0.05 + Math.random() * 0.2
+      };
+    }
 
-  let currentSpeedX = 0; // 当前X方向速度
-  let currentSpeedY = 0; // 当前Y方向速度
+    syncBreatheOpacity() {
+      const body = document.body;
+      if (!body) return;
+      const breatheValue = 0.5 + 0.5 * Math.sin(this.breathePhase * Math.PI * 2 - Math.PI / 2);
+      const currentOpacity = this.breatheMinOpacity + (this.breatheMaxOpacity - this.breatheMinOpacity) * breatheValue;
+      body.style.setProperty('--breathe-opacity', (currentOpacity * this.fadeInPhase).toFixed(3));
+    }
 
-  // 更新UI元素（按钮和事件日志）的边缘辉光
-  const updateElementsEdgeGlow = (glowX, glowY) => {
-    const w = window.innerWidth;
-    const h = window.innerHeight;
+    applyGlowColor() {
+      const body = document.body;
+      if (!body) return;
+      const currentColor = this.colorTable[this.currentColorIndex] || this.colorTable[0];
+      const targetColor = this.colorTable[this.targetColorIndex] || currentColor;
+      const r = Math.round(currentColor.r + (targetColor.r - currentColor.r) * this.colorTransitionPhase);
+      const g = Math.round(currentColor.g + (targetColor.g - currentColor.g) * this.colorTransitionPhase);
+      const b = Math.round(currentColor.b + (targetColor.b - currentColor.b) * this.colorTransitionPhase);
+      body.style.setProperty('--glow-r', r);
+      body.style.setProperty('--glow-g', g);
+      body.style.setProperty('--glow-b', b);
+    }
 
-    // 获取所有需要边缘辉光的元素
-    const elements = document.querySelectorAll('button, .log');
+    updateElementsEdgeGlow(glowX, glowY) {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      const elements = document.querySelectorAll('button, .log, .client-decrypt, .client-decrypt-file');
 
-    elements.forEach(element => {
-      const rect = element.getBoundingClientRect();
+      elements.forEach(element => {
+        const rect = element.getBoundingClientRect();
+        const relativeX = ((glowX - rect.left) / rect.width) * 100;
+        const relativeY = ((glowY - rect.top) / rect.height) * 100;
 
-      // 计算光斑相对于元素的位置（百分比）
-      const relativeX = ((glowX - rect.left) / rect.width) * 100;
-      const relativeY = ((glowY - rect.top) / rect.height) * 100;
+        const centerX = rect.left + rect.width / 2;
+        const centerY = rect.top + rect.height / 2;
+        const dx = glowX - centerX;
+        const dy = glowY - centerY;
+        const distance = Math.sqrt(dx * dx + dy * dy);
 
-      // 计算光斑到元素中心的距离
-      const centerX = rect.left + rect.width / 2;
-      const centerY = rect.top + rect.height / 2;
-      const dx = glowX - centerX;
-      const dy = glowY - centerY;
+        const maxDistance = Math.sqrt(w * w + h * h) * 0.5;
+        const normalizedDistance = distance / maxDistance;
+
+        const ELEMENT_GLOW_RADIUS = 0.4;
+        const ELEMENT_MAX_INTENSITY = 0.2;
+        const ELEMENT_REFLECTION_COEFFICIENT = 0.7;
+
+        const baseIntensity = Math.max(0, 1 - normalizedDistance / ELEMENT_GLOW_RADIUS) * ELEMENT_MAX_INTENSITY;
+
+        const distToTop = Math.abs(glowY - rect.top) / rect.height;
+        const distToBottom = Math.abs(glowY - rect.bottom) / rect.height;
+        const distToLeft = Math.abs(glowX - rect.left) / rect.width;
+        const distToRight = Math.abs(glowX - rect.right) / rect.width;
+
+        const edgeThreshold = 2.0;
+        const proximityTop = distToTop < edgeThreshold ? Math.pow(1 - distToTop / edgeThreshold, 1.5) : 0;
+        const proximityBottom = distToBottom < edgeThreshold ? Math.pow(1 - distToBottom / edgeThreshold, 1.5) : 0;
+        const proximityLeft = distToLeft < edgeThreshold ? Math.pow(1 - distToLeft / edgeThreshold, 1.5) : 0;
+        const proximityRight = distToRight < edgeThreshold ? Math.pow(1 - distToRight / edgeThreshold, 1.5) : 0;
+
+        const reflectTop = baseIntensity * ELEMENT_REFLECTION_COEFFICIENT * proximityTop;
+        const reflectBottom = baseIntensity * ELEMENT_REFLECTION_COEFFICIENT * proximityBottom;
+        const reflectLeft = baseIntensity * ELEMENT_REFLECTION_COEFFICIENT * proximityLeft;
+        const reflectRight = baseIntensity * ELEMENT_REFLECTION_COEFFICIENT * proximityRight;
+
+        element.style.setProperty('--elem-glow-x', relativeX.toFixed(2) + '%');
+        element.style.setProperty('--elem-glow-y', relativeY.toFixed(2) + '%');
+        element.style.setProperty('--elem-reflect-top', reflectTop.toFixed(3));
+        element.style.setProperty('--elem-reflect-bottom', reflectBottom.toFixed(3));
+        element.style.setProperty('--elem-reflect-left', reflectLeft.toFixed(3));
+        element.style.setProperty('--elem-reflect-right', reflectRight.toFixed(3));
+
+        const baseWidth = 10;
+        const maxWidth = 30;
+        const glowHWidthTop = baseWidth + reflectTop * (maxWidth - baseWidth);
+        const glowHWidthBottom = baseWidth + reflectBottom * (maxWidth - baseWidth);
+        const glowVHeightLeft = baseWidth + reflectLeft * (maxWidth - baseWidth);
+        const glowVHeightRight = baseWidth + reflectRight * (maxWidth - baseWidth);
+
+        element.style.setProperty('--elem-glow-h-width-top', glowHWidthTop + '%');
+        element.style.setProperty('--elem-glow-h-width-bottom', glowHWidthBottom + '%');
+        element.style.setProperty('--elem-glow-v-height-left', glowVHeightLeft + '%');
+        element.style.setProperty('--elem-glow-v-height-right', glowVHeightRight + '%');
+      });
+    }
+
+    updateGlowPosition(x, y) {
+      const xPercent = (x / window.innerWidth * 100).toFixed(1);
+      const yPercent = (y / window.innerHeight * 100).toFixed(1);
+      document.body.style.setProperty('--glow-x', xPercent + '%');
+      document.body.style.setProperty('--glow-y', yPercent + '%');
+      this.currentGlowX = x / window.innerWidth;
+      this.currentGlowY = y / window.innerHeight;
+
+      const normalizedX = this.currentGlowX;
+      const normalizedY = this.currentGlowY;
+
+      const GLOW_MAX_INTENSITY = 0.35;
+      const GLOW_RADIUS = 0.55;
+      const REFLECTION_COEFFICIENT = 0.6;
+
+      const distanceToTop = normalizedY;
+      const distanceToBottom = 1 - normalizedY;
+      const distanceToLeft = normalizedX;
+      const distanceToRight = 1 - normalizedX;
+
+      const glowIntensityAtTop = GLOW_MAX_INTENSITY * Math.max(0, 1 - distanceToTop / GLOW_RADIUS);
+      const glowIntensityAtBottom = GLOW_MAX_INTENSITY * Math.max(0, 1 - distanceToBottom / GLOW_RADIUS);
+      const glowIntensityAtLeft = GLOW_MAX_INTENSITY * Math.max(0, 1 - distanceToLeft / GLOW_RADIUS);
+      const glowIntensityAtRight = GLOW_MAX_INTENSITY * Math.max(0, 1 - distanceToRight / GLOW_RADIUS);
+
+      const edgeThreshold = 0.3;
+      const proximityTop = normalizedY < edgeThreshold ? Math.pow(1 - normalizedY / edgeThreshold, 2) : 0;
+      const proximityBottom = normalizedY > (1 - edgeThreshold) ? Math.pow((normalizedY - (1 - edgeThreshold)) / edgeThreshold, 2) : 0;
+      const proximityLeft = normalizedX < edgeThreshold ? Math.pow(1 - normalizedX / edgeThreshold, 2) : 0;
+      const proximityRight = normalizedX > (1 - edgeThreshold) ? Math.pow((normalizedX - (1 - edgeThreshold)) / edgeThreshold, 2) : 0;
+
+      const reflectTop = glowIntensityAtTop * REFLECTION_COEFFICIENT * proximityTop;
+      const reflectBottom = glowIntensityAtBottom * REFLECTION_COEFFICIENT * proximityBottom;
+      const reflectLeft = glowIntensityAtLeft * REFLECTION_COEFFICIENT * proximityLeft;
+      const reflectRight = glowIntensityAtRight * REFLECTION_COEFFICIENT * proximityRight;
+
+      document.body.style.setProperty('--reflect-top', reflectTop.toFixed(3));
+      document.body.style.setProperty('--reflect-bottom', reflectBottom.toFixed(3));
+      document.body.style.setProperty('--reflect-left', reflectLeft.toFixed(3));
+      document.body.style.setProperty('--reflect-right', reflectRight.toFixed(3));
+
+      const glowHWidthTop = 6.75 + reflectTop * 11.25;
+      const glowVHeightTop = 18 + reflectTop * 54;
+      const glowHWidthBottom = 6.75 + reflectBottom * 11.25;
+      const glowVHeightBottom = 18 + reflectBottom * 54;
+      const glowHWidthLeft = 18 + reflectLeft * 54;
+      const glowVHeightLeft = 6.75 + reflectLeft * 11.25;
+      const glowHWidthRight = 18 + reflectRight * 54;
+      const glowVHeightRight = 6.75 + reflectRight * 11.25;
+
+      document.body.style.setProperty('--glow-h-width-top', glowHWidthTop + '%');
+      document.body.style.setProperty('--glow-v-height-top', glowVHeightTop + 'px');
+      document.body.style.setProperty('--glow-h-width-bottom', glowHWidthBottom + '%');
+      document.body.style.setProperty('--glow-v-height-bottom', glowVHeightBottom + 'px');
+      document.body.style.setProperty('--glow-h-width-left', glowHWidthLeft + 'px');
+      document.body.style.setProperty('--glow-v-height-left', glowVHeightLeft + '%');
+      document.body.style.setProperty('--glow-h-width-right', glowHWidthRight + 'px');
+      document.body.style.setProperty('--glow-v-height-right', glowVHeightRight + '%');
+
+      this.updateElementsEdgeGlow(x, y);
+    }
+
+    initializeGlowState() {
+      const initialPosition = this.getRandomWanderTarget();
+      const wanderTarget = this.getRandomWanderTarget();
+      this.currentGlowX = initialPosition.x;
+      this.currentGlowY = initialPosition.y;
+      this.targetGlowX = wanderTarget.x;
+      this.targetGlowY = wanderTarget.y;
+      this.updateGlowPosition(initialPosition.x * window.innerWidth, initialPosition.y * window.innerHeight);
+    }
+
+    moveTowardsTarget(currentX, currentY, targetX, targetY, deltaTime, acceleration) {
+      const dx = targetX - currentX;
+      const dy = targetY - currentY;
       const distance = Math.sqrt(dx * dx + dy * dy);
 
-      // 归一化距离（以屏幕对角线的一半为基准）
-      const maxDistance = Math.sqrt(w * w + h * h) * 0.5;
-      const normalizedDistance = distance / maxDistance;
+      if (distance < this.WANDER_REACHED_THRESHOLD) {
+        this.currentSpeedX = 0;
+        this.currentSpeedY = 0;
+        return { x: targetX, y: targetY, reached: true };
+      }
 
-      // 光照衰减参数
-      const ELEMENT_GLOW_RADIUS = 0.4; // 40% 屏幕距离内有效
-      const ELEMENT_MAX_INTENSITY = 0.2; // 最大20%强度
-      const ELEMENT_REFLECTION_COEFFICIENT = 0.7; // 70% 反射系数
+      const targetSpeedX = (dx / distance) * this.MAX_SPEED;
+      const targetSpeedY = (dy / distance) * this.MAX_SPEED;
 
-      // 基础光照强度（距离衰减）
-      const baseIntensity = Math.max(0, 1 - normalizedDistance / ELEMENT_GLOW_RADIUS) * ELEMENT_MAX_INTENSITY;
+      this.currentSpeedX += (targetSpeedX - this.currentSpeedX) * acceleration;
+      this.currentSpeedY += (targetSpeedY - this.currentSpeedY) * acceleration;
 
-      // 计算光斑到元素4个边缘的距离（归一化到元素尺寸）
-      const distToTop = Math.abs(glowY - rect.top) / rect.height;
-      const distToBottom = Math.abs(glowY - rect.bottom) / rect.height;
-      const distToLeft = Math.abs(glowX - rect.left) / rect.width;
-      const distToRight = Math.abs(glowX - rect.right) / rect.width;
+      const moveX = this.currentSpeedX * deltaTime;
+      const moveY = this.currentSpeedY * deltaTime;
+      const newX = currentX + moveX;
+      const newY = currentY + moveY;
 
-      // 边缘接近度（越接近边缘，接近度越高）
-      const edgeThreshold = 2.0; // 在2倍元素尺寸内才有反射
-      const proximityTop = distToTop < edgeThreshold ? Math.pow(1 - distToTop / edgeThreshold, 1.5) : 0;
-      const proximityBottom = distToBottom < edgeThreshold ? Math.pow(1 - distToBottom / edgeThreshold, 1.5) : 0;
-      const proximityLeft = distToLeft < edgeThreshold ? Math.pow(1 - distToLeft / edgeThreshold, 1.5) : 0;
-      const proximityRight = distToRight < edgeThreshold ? Math.pow(1 - distToRight / edgeThreshold, 1.5) : 0;
+      const newDx = targetX - newX;
+      const newDy = targetY - newY;
+      const newDistance = Math.sqrt(newDx * newDx + newDy * newDy);
 
-      // 反射强度 = 基础强度 × 反射系数 × 接近度
-      const reflectTop = baseIntensity * ELEMENT_REFLECTION_COEFFICIENT * proximityTop;
-      const reflectBottom = baseIntensity * ELEMENT_REFLECTION_COEFFICIENT * proximityBottom;
-      const reflectLeft = baseIntensity * ELEMENT_REFLECTION_COEFFICIENT * proximityLeft;
-      const reflectRight = baseIntensity * ELEMENT_REFLECTION_COEFFICIENT * proximityRight;
+      if (newDistance < this.WANDER_REACHED_THRESHOLD) {
+        this.currentSpeedX = 0;
+        this.currentSpeedY = 0;
+        return { x: targetX, y: targetY, reached: true };
+      }
 
-      // 设置元素的辉光位置
-      element.style.setProperty('--elem-glow-x', relativeX.toFixed(2) + '%');
-      element.style.setProperty('--elem-glow-y', relativeY.toFixed(2) + '%');
-
-      // 设置反射强度
-      element.style.setProperty('--elem-reflect-top', reflectTop.toFixed(3));
-      element.style.setProperty('--elem-reflect-bottom', reflectBottom.toFixed(3));
-      element.style.setProperty('--elem-reflect-left', reflectLeft.toFixed(3));
-      element.style.setProperty('--elem-reflect-right', reflectRight.toFixed(3));
-
-      // 计算辉光宽度（只在水平/垂直方向扩散，椭圆的另一维度固定为1px）
-      // 上下边缘：水平方向宽度动态变化
-      const baseWidth = 10; // 基础宽度 10%
-      const maxWidth = 30; // 最大宽度 30%
-
-      const glowHWidthTop = baseWidth + reflectTop * (maxWidth - baseWidth);
-      const glowHWidthBottom = baseWidth + reflectBottom * (maxWidth - baseWidth);
-
-      // 左右边缘：垂直方向高度动态变化
-      const glowVHeightLeft = baseWidth + reflectLeft * (maxWidth - baseWidth);
-      const glowVHeightRight = baseWidth + reflectRight * (maxWidth - baseWidth);
-
-      element.style.setProperty('--elem-glow-h-width-top', glowHWidthTop + '%');
-      element.style.setProperty('--elem-glow-h-width-bottom', glowHWidthBottom + '%');
-      element.style.setProperty('--elem-glow-v-height-left', glowVHeightLeft + '%');
-      element.style.setProperty('--elem-glow-v-height-right', glowVHeightRight + '%');
-    });
-  };
-
-  const updateGlowPosition = (x, y) => {
-    const xPercent = (x / window.innerWidth * 100).toFixed(1);
-    const yPercent = (y / window.innerHeight * 100).toFixed(1);
-    document.body.style.setProperty('--glow-x', xPercent + '%');
-    document.body.style.setProperty('--glow-y', yPercent + '%');
-    currentGlowX = x / window.innerWidth;
-    currentGlowY = y / window.innerHeight;
-
-    // 计算边缘反射强度（符合物理规律：反射不能超过入射光强度）
-    const normalizedX = currentGlowX;
-    const normalizedY = currentGlowY;
-
-    // 光晕参数（对应 body::before 中的主光晕）
-    const GLOW_MAX_INTENSITY = 0.35; // 主光晕的最大强度
-    const GLOW_RADIUS = 0.55; // 光晕半径（对应 transparent 55%）
-    const REFLECTION_COEFFICIENT = 0.6; // 反射系数（60% 的光被反射，40% 被吸收）
-
-    // 计算光晕中心到各边缘的距离
-    const distanceToTop = normalizedY;
-    const distanceToBottom = 1 - normalizedY;
-    const distanceToLeft = normalizedX;
-    const distanceToRight = 1 - normalizedX;
-
-    // 计算光晕在各边缘的实际强度（径向衰减）
-    const glowIntensityAtTop = GLOW_MAX_INTENSITY * Math.max(0, 1 - distanceToTop / GLOW_RADIUS);
-    const glowIntensityAtBottom = GLOW_MAX_INTENSITY * Math.max(0, 1 - distanceToBottom / GLOW_RADIUS);
-    const glowIntensityAtLeft = GLOW_MAX_INTENSITY * Math.max(0, 1 - distanceToLeft / GLOW_RADIUS);
-    const glowIntensityAtRight = GLOW_MAX_INTENSITY * Math.max(0, 1 - distanceToRight / GLOW_RADIUS);
-
-    // 计算边缘接近度（在边缘附近才有反射）
-    const edgeThreshold = 0.3; // 在30%范围内才有反射
-    const proximityTop = normalizedY < edgeThreshold ? Math.pow(1 - normalizedY / edgeThreshold, 2) : 0;
-    const proximityBottom = normalizedY > (1 - edgeThreshold) ? Math.pow((normalizedY - (1 - edgeThreshold)) / edgeThreshold, 2) : 0;
-    const proximityLeft = normalizedX < edgeThreshold ? Math.pow(1 - normalizedX / edgeThreshold, 2) : 0;
-    const proximityRight = normalizedX > (1 - edgeThreshold) ? Math.pow((normalizedX - (1 - edgeThreshold)) / edgeThreshold, 2) : 0;
-
-    // 反射强度 = 光晕实际强度 × 反射系数 × 接近度
-    const reflectTop = glowIntensityAtTop * REFLECTION_COEFFICIENT * proximityTop;
-    const reflectBottom = glowIntensityAtBottom * REFLECTION_COEFFICIENT * proximityBottom;
-    const reflectLeft = glowIntensityAtLeft * REFLECTION_COEFFICIENT * proximityLeft;
-    const reflectRight = glowIntensityAtRight * REFLECTION_COEFFICIENT * proximityRight;
-
-    document.body.style.setProperty('--reflect-top', reflectTop.toFixed(3));
-    document.body.style.setProperty('--reflect-bottom', reflectBottom.toFixed(3));
-    document.body.style.setProperty('--reflect-left', reflectLeft.toFixed(3));
-    document.body.style.setProperty('--reflect-right', reflectRight.toFixed(3));
-
-    // 计算光晕宽度：强度越高，扩散越宽（缩小到 45%）
-    // 上下边缘的光晕尺寸
-    const glowHWidthTop = 6.75 + reflectTop * 11.25; // 水平宽度：6.75%-18%
-    const glowVHeightTop = 18 + reflectTop * 54; // 垂直扩散：18px-72px
-    const glowHWidthBottom = 6.75 + reflectBottom * 11.25;
-    const glowVHeightBottom = 18 + reflectBottom * 54;
-
-    // 左右边缘的光晕尺寸
-    const glowHWidthLeft = 18 + reflectLeft * 54; // 水平扩散：18px-72px
-    const glowVHeightLeft = 6.75 + reflectLeft * 11.25; // 垂直宽度：6.75%-18%
-    const glowHWidthRight = 18 + reflectRight * 54;
-    const glowVHeightRight = 6.75 + reflectRight * 11.25;
-
-    document.body.style.setProperty('--glow-h-width-top', glowHWidthTop + '%');
-    document.body.style.setProperty('--glow-v-height-top', glowVHeightTop + 'px');
-    document.body.style.setProperty('--glow-h-width-bottom', glowHWidthBottom + '%');
-    document.body.style.setProperty('--glow-v-height-bottom', glowVHeightBottom + 'px');
-    document.body.style.setProperty('--glow-h-width-left', glowHWidthLeft + 'px');
-    document.body.style.setProperty('--glow-v-height-left', glowVHeightLeft + '%');
-    document.body.style.setProperty('--glow-h-width-right', glowHWidthRight + 'px');
-    document.body.style.setProperty('--glow-v-height-right', glowVHeightRight + '%');
-
-    // 更新 UI 元素（按钮和事件日志）的边缘辉光
-    updateElementsEdgeGlow(x, y);
-  };
-
-  const getRandomWanderTarget = () => {
-    // 在屏幕范围内随机选择一个点
-    // 限制在 10%-90% 的范围内，避免太靠边
-    return {
-      x: 0.1 + Math.random() * 0.8,
-      y: 0.05 + Math.random() * 0.2
-    };
-  };
-
-  const initializeGlowState = () => {
-    const initialPosition = getRandomWanderTarget();
-    const wanderTarget = getRandomWanderTarget();
-    currentGlowX = initialPosition.x;
-    currentGlowY = initialPosition.y;
-    targetGlowX = wanderTarget.x;
-    targetGlowY = wanderTarget.y;
-    updateGlowPosition(initialPosition.x * window.innerWidth, initialPosition.y * window.innerHeight);
-  };
-
-  const moveTowardsTarget = (currentX, currentY, targetX, targetY, deltaTime, acceleration) => {
-    const dx = targetX - currentX;
-    const dy = targetY - currentY;
-    const distance = Math.sqrt(dx * dx + dy * dy);
-
-    if (distance < WANDER_REACHED_THRESHOLD) {
-      // 到达目标，速度归零
-      currentSpeedX = 0;
-      currentSpeedY = 0;
-      return { x: targetX, y: targetY, reached: true };
+      return { x: newX, y: newY, reached: false };
     }
 
-    // 计算目标速度方向（单位向量 × 最大速度）
-    const targetSpeedX = (dx / distance) * MAX_SPEED;
-    const targetSpeedY = (dy / distance) * MAX_SPEED;
+    animateGlow = () => {
+      if (this.isRenderingStopped) return;
 
-    // 平滑过渡到目标速度（使用传入的加速度系数）
-    currentSpeedX += (targetSpeedX - currentSpeedX) * acceleration;
-    currentSpeedY += (targetSpeedY - currentSpeedY) * acceleration;
+      const now = Date.now();
+      const deltaTime = (now - this.lastFrameTime) / 1000;
+      this.lastFrameTime = now;
 
-    // 应用速度移动
-    const moveX = currentSpeedX * deltaTime;
-    const moveY = currentSpeedY * deltaTime;
-    const newX = currentX + moveX;
-    const newY = currentY + moveY;
+      const w = window.innerWidth;
+      const h = window.innerHeight;
 
-    // 检查是否会越过目标
-    const newDx = targetX - newX;
-    const newDy = targetY - newY;
-    const newDistance = Math.sqrt(newDx * newDx + newDy * newDy);
+      if (this.fadeInPhase < 1) {
+        this.fadeInPhase += deltaTime / this.FADE_IN_DURATION;
+        this.fadeInPhase = Math.min(this.fadeInPhase, 1);
+      }
 
-    if (newDistance < WANDER_REACHED_THRESHOLD) {
-      // 即将到达，直接到达并归零速度
-      currentSpeedX = 0;
-      currentSpeedY = 0;
-      return { x: targetX, y: targetY, reached: true };
-    }
+      this.colorTransitionPhase += deltaTime / this.colorTransitionDuration;
+      if (this.colorTransitionPhase >= 1) {
+        this.currentColorIndex = this.targetColorIndex;
+        this.targetColorIndex = this.getNextColorIndex(this.currentColorIndex);
+        this.colorTransitionPhase = 0;
+        this.colorTransitionDuration = this.getRandomColorTransitionDuration();
+      }
 
-    return {
-      x: newX,
-      y: newY,
-      reached: false
-    };
-  };
+      this.applyGlowColor();
 
-  const animateGlow = () => {
-    const now = Date.now();
-    const deltaTime = (now - lastFrameTime) / 1000;
-    lastFrameTime = now;
+      const breatheSmoothing = deltaTime > 0 ? 1 - Math.exp(-this.BREATHE_SMOOTHING_SPEED * deltaTime) : 0;
+      if (breatheSmoothing > 0) {
+        this.breatheMinOpacity += (this.targetBreatheMinOpacity - this.breatheMinOpacity) * breatheSmoothing;
+        this.breatheMaxOpacity += (this.targetBreatheMaxOpacity - this.breatheMaxOpacity) * breatheSmoothing;
+        this.breatheCycleDuration += (this.targetBreatheCycleDuration - this.breatheCycleDuration) * breatheSmoothing;
+      }
 
-    const w = window.innerWidth;
-    const h = window.innerHeight;
+      const safeCycleDuration = Math.max(0.5, this.breatheCycleDuration);
+      this.breathePhase += deltaTime / safeCycleDuration;
+      if (this.breathePhase >= 1) {
+        this.breathePhase %= 1;
+        this.targetBreatheMinOpacity = this.getRandomBreatheMin();
+        this.targetBreatheMaxOpacity = this.getRandomBreatheMax();
+        this.targetBreatheCycleDuration = this.getRandomBreatheDuration();
+      }
 
-    // 更新淡入效果
-    if (fadeInPhase < 1) {
-      fadeInPhase += deltaTime / FADE_IN_DURATION;
-      fadeInPhase = Math.min(fadeInPhase, 1);
-    }
+      this.syncBreatheOpacity();
 
-    // 更新颜色渐变
-    colorTransitionPhase += deltaTime / colorTransitionDuration;
-    if (colorTransitionPhase >= 1) {
-      // 到达目标颜色，选择下一个随机目标
-      currentColorIndex = targetColorIndex;
-      targetColorIndex = getNextColorIndex(currentColorIndex);
-      colorTransitionPhase = 0;
-      colorTransitionDuration = getRandomColorTransitionDuration();
-    }
-
-    applyGlowColor();
-
-    // 更新呼吸动画（随机亮度 + 随机周期）
-    const breatheSmoothing =
-      deltaTime > 0 ? 1 - Math.exp(-BREATHE_SMOOTHING_SPEED * deltaTime) : 0;
-    if (breatheSmoothing > 0) {
-      breatheMinOpacity += (targetBreatheMinOpacity - breatheMinOpacity) * breatheSmoothing;
-      breatheMaxOpacity += (targetBreatheMaxOpacity - breatheMaxOpacity) * breatheSmoothing;
-      breatheCycleDuration +=
-        (targetBreatheCycleDuration - breatheCycleDuration) * breatheSmoothing;
-    }
-
-    const safeCycleDuration = Math.max(0.5, breatheCycleDuration);
-    breathePhase += deltaTime / safeCycleDuration;
-    if (breathePhase >= 1) {
-      // 完成一个呼吸周期，重新随机亮度范围和周期时长（平滑过渡）
-      breathePhase %= 1;
-      targetBreatheMinOpacity = getRandomBreatheMin();
-      targetBreatheMaxOpacity = getRandomBreatheMax();
-      targetBreatheCycleDuration = getRandomBreatheDuration();
-    }
-
-    // 正弦波呼吸效果 × 淡入系数
-    syncBreatheOpacity();
-
-    if (isAutoGlow) {
-      // 自动游走模式
-      if (isResting) {
-        // 休息中，检查是否休息完毕
-        if (now - restStartTime >= currentRestDuration) {
-          isResting = false;
-          // 选择新的随机目标
-          const newTarget = getRandomWanderTarget();
-          targetGlowX = newTarget.x;
-          targetGlowY = newTarget.y;
-          // 休息结束，速度从零开始（会有加速过程）
-          currentSpeedX = 0;
-          currentSpeedY = 0;
+      if (this.isAutoGlow) {
+        if (this.isResting) {
+          if (now - this.restStartTime >= this.currentRestDuration) {
+            this.isResting = false;
+            const newTarget = this.getRandomWanderTarget();
+            this.targetGlowX = newTarget.x;
+            this.targetGlowY = newTarget.y;
+            this.currentSpeedX = 0;
+            this.currentSpeedY = 0;
+          }
+        } else {
+          const result = this.moveTowardsTarget(this.currentGlowX, this.currentGlowY, this.targetGlowX, this.targetGlowY, deltaTime, this.WANDER_ACCELERATION);
+          if (result.reached) {
+            this.isResting = true;
+            this.restStartTime = now;
+            this.currentRestDuration = Math.random() * 8000;
+          }
+          this.updateGlowPosition(result.x * w, result.y * h);
         }
-        // 休息期间不移动
       } else {
-        // 向目标移动（使用游走加速度）
-        const result = moveTowardsTarget(currentGlowX, currentGlowY, targetGlowX, targetGlowY, deltaTime, WANDER_ACCELERATION);
-
-        if (result.reached) {
-          // 到达目标，开始休息
-          isResting = true;
-          restStartTime = now;
-          currentRestDuration = Math.random() * 8000; // 重新随机下一次休息时间 0-8 秒
+        if (now - this.lastMouseSampleTime >= this.MOUSE_SAMPLE_INTERVAL) {
+          this.setMouseTarget(this.latestMouseX, this.latestMouseY);
+          this.lastMouseSampleTime = now;
         }
-
-        updateGlowPosition(result.x * w, result.y * h);
-      }
-    } else {
-      // 鼠标跟随模式：定期采样鼠标位置（每3秒更新一次目标）
-      if (now - lastMouseSampleTime >= MOUSE_SAMPLE_INTERVAL) {
-        setMouseTarget(latestMouseX, latestMouseY);
-        lastMouseSampleTime = now;
+        const result = this.moveTowardsTarget(this.currentGlowX, this.currentGlowY, this.targetGlowX, this.targetGlowY, deltaTime, this.MOUSE_ACCELERATION);
+        this.updateGlowPosition(result.x * w, result.y * h);
       }
 
-      // 向目标移动（使用更慢的加速度，更柔和）
-      const result = moveTowardsTarget(currentGlowX, currentGlowY, targetGlowX, targetGlowY, deltaTime, MOUSE_ACCELERATION);
-      updateGlowPosition(result.x * w, result.y * h);
+      this.glowAnimationFrame = requestAnimationFrame(this.animateGlow);
+    };
+
+    enableAutoGlow() {
+      if (this.isAutoGlow) return;
+      this.isAutoGlow = true;
+      const newTarget = this.getRandomWanderTarget();
+      this.targetGlowX = newTarget.x;
+      this.targetGlowY = newTarget.y;
     }
 
-    glowAnimationFrame = requestAnimationFrame(animateGlow);
-  };
-
-  const enableAutoGlow = () => {
-    if (isAutoGlow) return;
-    isAutoGlow = true;
-    // 立即选择一个新的随机目标
-    const newTarget = getRandomWanderTarget();
-    targetGlowX = newTarget.x;
-    targetGlowY = newTarget.y;
-  };
-
-  const setMouseTarget = (x, y) => {
-    isAutoGlow = false;
-    targetGlowX = x / window.innerWidth;
-    targetGlowY = y / window.innerHeight;
-  };
-
-  document.addEventListener('mousemove', (e) => {
-    // 只有页面可见时才响应鼠标移动
-    if (document.hidden) return;
-
-    // 记录最新鼠标位置（不立即更新目标）
-    latestMouseX = e.clientX;
-    latestMouseY = e.clientY;
-
-    // 如果是第一次移动鼠标（从自动游走切换过来），立即采样一次
-    if (isAutoGlow) {
-      isAutoGlow = false;
-      lastMouseSampleTime = Date.now();
-      setMouseTarget(latestMouseX, latestMouseY);
+    setMouseTarget(x, y) {
+      this.isAutoGlow = false;
+      this.targetGlowX = x / window.innerWidth;
+      this.targetGlowY = y / window.innerHeight;
     }
 
-    // 重置空闲计时器
-    clearTimeout(mouseIdleTimer);
-    mouseIdleTimer = setTimeout(() => {
-      enableAutoGlow();
-    }, 6000);
-  });
+    handleMouseMove = (e) => {
+      if (document.hidden) return;
 
-  // 页面可见性变化监听：切换标签页或最小化时停止捕捉鼠标
-  document.addEventListener('visibilitychange', () => {
-    if (document.hidden) {
-      // 页面不可见：停止捕捉鼠标，进入自动游走模式
-      clearTimeout(mouseIdleTimer);
-      enableAutoGlow();
+      this.latestMouseX = e.clientX;
+      this.latestMouseY = e.clientY;
 
-      // 10秒后停止渲染（节省性能）
-      visibilityTimer = setTimeout(() => {
-        isRenderingStopped = true;
-        cancelAnimationFrame(glowAnimationFrame);
+      if (this.isAutoGlow) {
+        this.isAutoGlow = false;
+        this.lastMouseSampleTime = Date.now();
+        this.setMouseTarget(this.latestMouseX, this.latestMouseY);
+      }
 
-        // 淡出所有光晕效果
-        document.body.style.setProperty('--breathe-opacity', '0');
-        document.body.style.setProperty('--reflect-top', '0');
-        document.body.style.setProperty('--reflect-bottom', '0');
-        document.body.style.setProperty('--reflect-left', '0');
-        document.body.style.setProperty('--reflect-right', '0');
-      }, 10000);
-    } else {
-      // 页面可见：取消计时器，恢复渲染
-      clearTimeout(visibilityTimer);
+      clearTimeout(this.mouseIdleTimer);
+      this.mouseIdleTimer = setTimeout(() => {
+        this.enableAutoGlow();
+      }, 6000);
+    };
 
-      if (isRenderingStopped) {
-        // 重新启动渲染，从淡入开始
-        isRenderingStopped = false;
-        fadeInPhase = 0; // 重置淡入进度
-        lastFrameTime = Date.now();
-        animateGlow();
+    handleVisibilityChange = () => {
+      if (document.hidden) {
+        clearTimeout(this.mouseIdleTimer);
+        this.enableAutoGlow();
+
+        this.visibilityTimer = setTimeout(() => {
+          this.isRenderingStopped = true;
+          cancelAnimationFrame(this.glowAnimationFrame);
+
+          document.body.style.setProperty('--breathe-opacity', '0');
+          document.body.style.setProperty('--reflect-top', '0');
+          document.body.style.setProperty('--reflect-bottom', '0');
+          document.body.style.setProperty('--reflect-left', '0');
+          document.body.style.setProperty('--reflect-right', '0');
+        }, 10000);
+      } else {
+        clearTimeout(this.visibilityTimer);
+
+        if (this.isRenderingStopped) {
+          this.isRenderingStopped = false;
+          this.fadeInPhase = 0;
+          this.lastFrameTime = Date.now();
+          this.animateGlow();
+        }
+      }
+    };
+
+    mount() {
+      this.downloadBar = document.getElementById('downloadBar');
+      this.decryptBar = document.getElementById('decryptBar');
+      this.statusEl = document.getElementById('status');
+
+      document.addEventListener('mousemove', this.handleMouseMove);
+      document.addEventListener('visibilitychange', this.handleVisibilityChange);
+
+      this.initializeGlowState();
+      this.applyGlowColor();
+      this.syncBreatheOpacity();
+      this.lastFrameTime = Date.now();
+      this.glowAnimationFrame = requestAnimationFrame(this.animateGlow);
+    }
+
+    unmount() {
+      if (this.glowAnimationFrame) {
+        cancelAnimationFrame(this.glowAnimationFrame);
+        this.glowAnimationFrame = null;
+      }
+      clearTimeout(this.mouseIdleTimer);
+      clearTimeout(this.visibilityTimer);
+
+      document.removeEventListener('mousemove', this.handleMouseMove);
+      document.removeEventListener('visibilitychange', this.handleVisibilityChange);
+
+      const body = document.body;
+      if (body) {
+        body.style.removeProperty('--glow-x');
+        body.style.removeProperty('--glow-y');
+        body.style.removeProperty('--breathe-opacity');
+        body.style.removeProperty('--reflect-top');
+        body.style.removeProperty('--reflect-bottom');
+        body.style.removeProperty('--reflect-left');
+        body.style.removeProperty('--reflect-right');
       }
     }
-  });
 
-  initializeGlowState();
-  applyGlowColor();
-  syncBreatheOpacity();
-  animateGlow();
+    onProgress(percent, type) {
+      const bar = type === 'decrypt' ? this.decryptBar : this.downloadBar;
+      if (bar) {
+        bar.style.width = Math.max(0, Math.min(100, percent)) + '%';
+      }
+    }
+
+    onStatus(text) {
+      if (this.statusEl) {
+        this.statusEl.textContent = text;
+      }
+    }
+  }
+
+  const ThemeManager = {
+    adapter: null,
+    cssData: {},
+
+    init() {
+      const raw = window.__THEME_CSS__;
+      this.cssData = raw && typeof raw === 'object' ? raw : {};
+      this.switchTheme('minimal');
+    },
+
+    switchTheme(name) {
+      if (this.adapter && typeof this.adapter.unmount === 'function') {
+        try {
+          this.adapter.unmount();
+        } catch (error) {
+          console.error('Theme unmount error', error);
+        }
+      }
+
+      const styleTag = document.getElementById('theme-css');
+      if (styleTag) {
+        styleTag.textContent = this.cssData[name] || '';
+      }
+
+      if (name === 'minimal') {
+        this.adapter = new MinimalThemeAdapter();
+      } else {
+        this.adapter = null;
+      }
+
+      if (this.adapter && typeof this.adapter.mount === 'function') {
+        this.adapter.mount();
+      }
+    },
+
+    updateStatus(text) {
+      if (this.adapter && typeof this.adapter.onStatus === 'function') {
+        this.adapter.onStatus(text);
+      } else {
+        const el = document.getElementById('status');
+        if (el) el.textContent = text;
+      }
+    },
+
+    updateProgress(percent, type) {
+      if (this.adapter && typeof this.adapter.onProgress === 'function') {
+        this.adapter.onProgress(percent, type);
+      } else {
+        const barId = type === 'decrypt' ? 'decryptBar' : 'downloadBar';
+        const bar = document.getElementById(barId);
+        if (bar) {
+          bar.style.width = Math.max(0, Math.min(100, percent)) + '%';
+        }
+      }
+    },
+
+    updateMetricText(text, type) {
+      const textId = type === 'decrypt' ? 'decryptText' : 'downloadText';
+      const el = document.getElementById(textId);
+      if (el) {
+        el.textContent = text;
+      }
+    },
+  };
 
   /**
    * Base64url 编码（URL 安全 base64）
@@ -577,7 +627,7 @@ const pageScript = buildRawString`
   };
 
   const setStatus = (text) => {
-    statusEl.textContent = text;
+    ThemeManager.updateStatus(text);
     log(text);
   };
 
@@ -2070,10 +2120,10 @@ const pageScript = buildRawString`
     };
 
     const resetUi = () => {
-      if (downloadBar) downloadBar.style.width = '0%';
-      if (decryptBar) decryptBar.style.width = '0%';
-      if (downloadText) downloadText.textContent = '0%';
-      if (decryptText) decryptText.textContent = '0%';
+      ThemeManager.updateProgress(0, 'download');
+      ThemeManager.updateProgress(0, 'decrypt');
+      ThemeManager.updateMetricText('0%', 'download');
+      ThemeManager.updateMetricText('0%', 'decrypt');
       if (speedText) speedText.textContent = '--';
       if (cancelBtn) cancelBtn.disabled = true;
       if (retryFailedSegmentsBtn) retryFailedSegmentsBtn.disabled = true;
@@ -2106,29 +2156,33 @@ const pageScript = buildRawString`
     };
 
     const applyProgress = () => {
-      if (state.totalEncrypted > 0 && downloadBar && downloadText) {
+      if (state.totalEncrypted > 0) {
         const percent = Math.min(100, (state.downloadedEncrypted / state.totalEncrypted) * 100);
         const percentText = percent.toFixed(2) + '%';
-        downloadBar.style.width = percentText;
-        downloadText.textContent =
+        ThemeManager.updateProgress(percent, 'download');
+        ThemeManager.updateMetricText(
           percentText +
           ' (' +
           formatBytes(state.downloadedEncrypted) +
           ' / ' +
           formatBytes(state.totalEncrypted) +
-          ')';
+          ')',
+          'download'
+        );
       }
-      if (state.totalSize > 0 && decryptBar && decryptText) {
+      if (state.totalSize > 0) {
         const percent = Math.min(100, (state.decryptedBytes / state.totalSize) * 100);
         const percentText = percent.toFixed(2) + '%';
-        decryptBar.style.width = percentText;
-        decryptText.textContent =
+        ThemeManager.updateProgress(percent, 'decrypt');
+        ThemeManager.updateMetricText(
           percentText +
           ' (' +
           formatBytes(state.decryptedBytes) +
           ' / ' +
           formatBytes(state.totalSize) +
-          ')';
+          ')',
+          'decrypt'
+        );
       }
     };
 
@@ -3708,23 +3762,28 @@ const pageScript = buildRawString`
   };
 
   const updateClientReadProgress = (value, total) => {
-    if (!downloadBar || !downloadText) return;
     const text = formatProgressText(value, total);
-    downloadBar.style.width = text;
-    downloadText.textContent = Number.isFinite(total) && total > 0
-      ? text + ' (' + formatBytes(value) + ' / ' + formatBytes(total) + ')'
-      : text;
+    const percent = parseFloat(text);
+    ThemeManager.updateProgress(percent, 'download');
+    ThemeManager.updateMetricText(
+      Number.isFinite(total) && total > 0
+        ? text + ' (' + formatBytes(value) + ' / ' + formatBytes(total) + ')'
+        : text,
+      'download'
+    );
   };
 
   const updateClientDecryptProgress = (value, total) => {
     const text = formatProgressText(value, total);
+    const percent = parseFloat(text);
     // 更新 web-only 解密进度条
-    if (decryptBar && decryptText) {
-      decryptBar.style.width = text;
-      decryptText.textContent = Number.isFinite(total) && total > 0
+    ThemeManager.updateProgress(percent, 'decrypt');
+    ThemeManager.updateMetricText(
+      Number.isFinite(total) && total > 0
         ? text + ' (' + formatBytes(value) + ' / ' + formatBytes(total) + ')'
-        : text;
-    }
+        : text,
+      'decrypt'
+    );
     // 更新离线解密模式的文件容器进度（通过 CSS 变量）
     if (clientDecryptFileNameEl && clientDecryptFileNameEl.parentElement) {
       clientDecryptFileNameEl.parentElement.style.setProperty('--decrypt-progress', text);
@@ -3732,10 +3791,10 @@ const pageScript = buildRawString`
   };
 
   const resetClientDecryptProgress = () => {
-    if (downloadBar) downloadBar.style.width = '0%';
-    if (downloadText) downloadText.textContent = '0%';
-    if (decryptBar) decryptBar.style.width = '0%';
-    if (decryptText) decryptText.textContent = '0%';
+    ThemeManager.updateProgress(0, 'download');
+    ThemeManager.updateMetricText('0%', 'download');
+    ThemeManager.updateProgress(0, 'decrypt');
+    ThemeManager.updateMetricText('0%', 'decrypt');
     // 重置离线解密模式的文件容器进度
     if (clientDecryptFileNameEl && clientDecryptFileNameEl.parentElement) {
       clientDecryptFileNameEl.parentElement.style.setProperty('--decrypt-progress', '0%');
@@ -5269,6 +5328,8 @@ const pageScript = buildRawString`
   initClientDecryptDropzone();
 
   const initialise = async () => {
+    ThemeManager.init();
+
     state.infoReady = false;
     updateButtonState();
     retryBtn.disabled = true;
@@ -5405,13 +5466,21 @@ const renderLandingPageHtml = (path, options = {}) => {
   };
   const webDownloaderJson = JSON.stringify(webDownloaderPayload).replace(/</g, '\\u003c');
 
+  // Theme CSS handling
+  const commonCss = themeCSS?.common || cssStyles || '';
+  const minimalCss = themeCSS?.minimal || '';
+  const themeCssJson = JSON.stringify(themeCSS || {}).replace(/</g, '\\u003c');
+
   // Use template and replace placeholders
   return htmlTemplate
     .replace(/\{\{TITLE\}\}/g, title)
+    .replace(/\{\{COMMON_CSS\}\}/g, commonCss)
+    .replace(/\{\{DEFAULT_THEME_CSS\}\}/g, minimalCss)
     .replace(/\{\{STYLES\}\}/g, cssStyles)
     .replace(/\{\{SECURITY_JSON\}\}/g, securityJson)
     .replace(/\{\{AUTO_REDIRECT\}\}/g, autoRedirectLiteral)
     .replace(/\{\{WEB_DOWNLOADER_JSON\}\}/g, webDownloaderJson)
+    .replace(/\{\{THEME_CSS_JSON\}\}/g, themeCssJson)
     .replace(/\{\{SCRIPT\}\}/g, script);
 };
 

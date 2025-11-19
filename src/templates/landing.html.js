@@ -2,9 +2,12 @@
  * Landing page HTML template
  * This template uses placeholder variables that will be replaced during rendering:
  * - {{TITLE}} - Page title (escaped filename)
- * - {{STYLES}} - CSS styles
+ * - {{COMMON_CSS}} - Common layout CSS (structure)
+ * - {{DEFAULT_THEME_CSS}} - Default theme visual CSS
+ * - {{THEME_CSS_JSON}} - Theme CSS data (JSON)
  * - {{SECURITY_JSON}} - Security configuration JSON
  * - {{AUTO_REDIRECT}} - Auto redirect boolean
+ * - {{WEB_DOWNLOADER_JSON}} - Web downloader configuration JSON
  * - {{SCRIPT}} - Page JavaScript code
  */
 
@@ -14,11 +17,13 @@ export const htmlTemplate = `<!DOCTYPE html>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1,shrink-to-fit=no">
     <title>{{TITLE}}</title>
-    <style>{{STYLES}}</style>
+    <style>{{COMMON_CSS}}</style>
+    <style id="theme-css">{{DEFAULT_THEME_CSS}}</style>
     <script src="https://cdn.jsdelivr.net/npm/dexie@3.2.4/dist/dexie.min.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/tweetnacl@1.0.3/nacl-fast.min.js" crossorigin="anonymous"></script>
   </head>
   <body>
+    <div id="visual-layer" class="visual-layer"></div>
     <header>
       <h1 id="fileName">{{TITLE}}</h1>
       <div class="status" id="status">准备就绪</div>
@@ -149,6 +154,7 @@ export const htmlTemplate = `<!DOCTYPE html>
       window.__ALIST_SECURITY__ = {{SECURITY_JSON}};
       window.__AUTO_REDIRECT__ = {{AUTO_REDIRECT}};
       window.__WEB_DOWNLOADER_PROPS__ = {{WEB_DOWNLOADER_JSON}};
+      window.__THEME_CSS__ = {{THEME_CSS_JSON}};
     </script>
     <script type="module">
       {{SCRIPT}}
