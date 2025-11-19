@@ -386,10 +386,13 @@ button:disabled {
   position: fixed;
   inset: 0;
   z-index: 20;
+  opacity: 1;
+  transition: opacity 0.3s ease, backdrop-filter 0.3s ease;
 }
 
 .advanced-backdrop[hidden] {
-  display: none;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .advanced-header {
@@ -921,7 +924,7 @@ button:hover:not(:disabled) {
 
 /* ========== Advanced Panel ========== */
 .advanced-backdrop {
-  background: rgba(15,23,42,0.55);
+  background: rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), 0.55);
   -webkit-backdrop-filter: blur(6px);
   backdrop-filter: blur(6px);
 }
