@@ -3928,6 +3928,29 @@ const pageScript = buildRawString`
     clientDecryptor.clearSourceFile();
   };
 
+  const validateClientDecryptFile = (file) => {
+    if (!file) {
+      return false;
+    }
+    const expectedEncryptedSize = clientDecryptor.getExpectedEncryptedSize();
+    if (!clientDecryptor.isFileSizeMatching(file.size)) {
+      const expectedText =
+        expectedEncryptedSize > 0 ? formatBytes(expectedEncryptedSize) : '未知大小';
+      log(
+        '密文文件大小与预期不匹配（实际：' +
+          formatBytes(file.size) +
+          '，预期：' +
+          expectedText +
+          '）',
+      );
+      clearClientDecryptFile();
+      updateClientDecryptStatusHint('pending');
+      syncClientDecryptControls();
+      return false;
+    }
+    return true;
+  };
+
   const syncClientDecryptControls = () => {
     if (clientDecryptStartBtn) {
       let disabled =
@@ -4016,8 +4039,12 @@ const pageScript = buildRawString`
       }
       const file = dropped[0];
       if (file) {
+        if (!validateClientDecryptFile(file)) {
+          return;
+        }
         setClientDecryptFile(file);
         clientDecryptor.setSourceFile(file);
+        updateClientDecryptStatusHint('pending');
         syncClientDecryptControls();
         setStatus('已选择密文文件：' + (file.name || '')); // status log to inform user
       }
@@ -5116,20 +5143,7 @@ const pageScript = buildRawString`
     clientDecryptFileInput.addEventListener('change', (event) => {
       const file = event.target.files && event.target.files[0];
       if (file) {
-        const expectedEncryptedSize = clientDecryptor.getExpectedEncryptedSize();
-        if (!clientDecryptor.isFileSizeMatching(file.size)) {
-          const expectedText =
-            expectedEncryptedSize > 0 ? formatBytes(expectedEncryptedSize) : '未知大小';
-          log(
-            '密文文件大小与预期不匹配（实际：' +
-              formatBytes(file.size) +
-              '，预期：' +
-              expectedText +
-              '）',
-          );
-          clearClientDecryptFile();
-          updateClientDecryptStatusHint('pending');
-          syncClientDecryptControls();
+        if (!validateClientDecryptFile(file)) {
           return;
         }
         setClientDecryptFile(file);
