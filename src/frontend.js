@@ -3644,8 +3644,8 @@ const pageScript = buildRawString`
       const segments = buildSegments(effectiveSegmentSize);
       await ensureBaseNonceFromFile();
       const expectedEncryptedSize = state.totalEncrypted + (Number(state.fileHeaderSize) || 0);
-      if (expectedEncryptedSize > 0 && Math.abs(state.sourceFile.size - expectedEncryptedSize) > state.blockHeaderSize + state.blockDataSize) {
-        console.warn('密文文件大小与预期不完全一致', state.sourceFile.size, expectedEncryptedSize);
+      if (expectedEncryptedSize > 0 && state.sourceFile.size !== expectedEncryptedSize) {
+        throw new Error('密文文件大小与预期不匹配，无法解密');
       }
       state.running = true;
       state.cancelRequested = false;
