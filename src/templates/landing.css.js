@@ -920,6 +920,12 @@ button:hover:not(:disabled) {
 }
 
 /* ========== Advanced Panel ========== */
+.advanced-backdrop {
+  background: rgba(15,23,42,0.55);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+
 .advanced-panel {
   background: rgba(15,23,42,0.75);
   border-left: 1px solid rgba(148,163,184,0.3);
