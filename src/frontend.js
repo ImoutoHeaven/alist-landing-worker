@@ -4509,9 +4509,14 @@ const pageScript = buildRawString`
     });
   };
 
-  const POWDET_MAX_WAIT_MS = (state.security.powdetChallenge?.expireAt ?? 0) > 0
-    ? Math.max(1000, (state.security.powdetChallenge.expireAt * 1000) - Date.now())
-    : 180000;
+  const getPowdetMaxWaitMs = () => {
+    const expireAtRaw = state?.security?.powdetChallenge?.expireAt;
+    const expireAt = typeof expireAtRaw === 'string' ? Number.parseInt(expireAtRaw, 10) : Number(expireAtRaw);
+    if (Number.isFinite(expireAt) && expireAt > 0) {
+      return Math.max(1000, (expireAt * 1000) - Date.now());
+    }
+    return 180000;
+  };
   const waitForPowdetNonce = async () => {
     if (!state.verification.needPowdet) {
       return '';
@@ -4527,7 +4532,7 @@ const pageScript = buildRawString`
           return;
         }
         reject(new Error('POW 计算超时'));
-      }, POWDET_MAX_WAIT_MS);
+      }, getPowdetMaxWaitMs());
       state.verification.powdetResolvers.push((nonce) => {
         window.clearTimeout(timeoutId);
         resolve(nonce || '');
@@ -4535,9 +4540,14 @@ const pageScript = buildRawString`
     });
   };
 
-  const ALTCHA_MAX_WAIT_MS = (state.security.altchaChallenge?.expires ?? 0) > 0
-    ? Math.max(1000, (Number(state.security.altchaChallenge.expires) * 1000) - Date.now())
-    : 180000;
+  const getAltchaMaxWaitMs = () => {
+    const expiresRaw = state?.security?.altchaChallenge?.expires;
+    const expires = typeof expiresRaw === 'string' ? Number.parseInt(expiresRaw, 10) : Number(expiresRaw);
+    if (Number.isFinite(expires) && expires > 0) {
+      return Math.max(1000, (expires * 1000) - Date.now());
+    }
+    return 180000;
+  };
 
   const consumeTurnstileToken = () => {
     if (!shouldEnforceTurnstile()) return;
@@ -5039,7 +5049,7 @@ const pageScript = buildRawString`
       ? Promise.race([
           startAltchaComputation(),
           new Promise((_, reject) => {
-            window.setTimeout(() => reject(new Error('ALTCHA 计算超时')), ALTCHA_MAX_WAIT_MS);
+            window.setTimeout(() => reject(new Error('ALTCHA 计算超时')), getAltchaMaxWaitMs());
           }),
         ])
       : Promise.resolve(null);
