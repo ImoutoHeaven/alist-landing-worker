@@ -1273,14 +1273,15 @@ const pageScript = buildRawString`
         needPowdet: false,
         altchaReady: false,
         turnstileReady: false,
-        powdetReady: false,
-        altchaSolution: null,
-        turnstileToken: null,
-        powdetNonce: '',
-        altchaIssuedAt: 0,
-        turnstileIssuedAt: 0,
-        tokenResolvers: [],
-      },
+      powdetReady: false,
+      altchaSolution: null,
+      turnstileToken: null,
+      powdetNonce: '',
+      altchaIssuedAt: 0,
+      turnstileIssuedAt: 0,
+      tokenResolvers: [],
+      powdetResolvers: [],
+    },
       clientDecrypt: {
         enabled: clientDecryptSupported,
         ready: false,
@@ -4508,6 +4509,36 @@ const pageScript = buildRawString`
     });
   };
 
+  const POWDET_MAX_WAIT_MS = (state.security.powdetChallenge?.expireAt ?? 0) > 0
+    ? Math.max(1000, (state.security.powdetChallenge.expireAt * 1000) - Date.now())
+    : 180000;
+  const waitForPowdetNonce = async () => {
+    if (!state.verification.needPowdet) {
+      return '';
+    }
+    if (state.verification.powdetNonce) {
+      return state.verification.powdetNonce;
+    }
+    return new Promise((resolve, reject) => {
+      const timeoutId = window.setTimeout(() => {
+        const nonce = state.verification.powdetNonce;
+        if (nonce) {
+          resolve(nonce);
+          return;
+        }
+        reject(new Error('POW 计算超时'));
+      }, POWDET_MAX_WAIT_MS);
+      state.verification.powdetResolvers.push((nonce) => {
+        window.clearTimeout(timeoutId);
+        resolve(nonce || '');
+      });
+    });
+  };
+
+  const ALTCHA_MAX_WAIT_MS = (state.security.altchaChallenge?.expires ?? 0) > 0
+    ? Math.max(1000, (Number(state.security.altchaChallenge.expires) * 1000) - Date.now())
+    : 180000;
+
   const consumeTurnstileToken = () => {
     if (!shouldEnforceTurnstile()) return;
     clearTurnstileToken();
@@ -4527,6 +4558,42 @@ const pageScript = buildRawString`
     input.id = id;
     input.value = value;
     return input;
+  };
+
+  let powdetScriptPromise = null;
+  const ensurePowdetScriptLoaded = () => {
+    if (typeof window.powBotDeterrentInit === 'function') {
+      return Promise.resolve(true);
+    }
+    if (powdetScriptPromise) {
+      return powdetScriptPromise;
+    }
+    powdetScriptPromise = new Promise((resolve) => {
+      const existing = document.getElementById('powbot-script');
+      if (existing) {
+        existing.addEventListener('load', () => resolve(true), { once: true });
+        existing.addEventListener(
+          'error',
+          () => {
+            console.error('powdet script failed to load (existing tag)');
+            resolve(false);
+          },
+          { once: true },
+        );
+        return;
+      }
+      const script = document.createElement('script');
+      script.id = 'powbot-script';
+      script.src = 'https://cdn.jsdelivr.net/gh/ImoutoHeaven/pow-bot-deterrent/static/pow-bot-deterrent.js';
+      script.defer = true;
+      script.onload = () => resolve(true);
+      script.onerror = () => {
+        console.error('powdet script failed to load');
+        resolve(false);
+      };
+      document.head.appendChild(script);
+    });
+    return powdetScriptPromise;
   };
 
   const initPowdetIfNeeded = () => {
@@ -4589,55 +4656,91 @@ const pageScript = buildRawString`
 
     const maxWaitMs = 10000;
     const start = Date.now();
-    (function waitInit() {
-      if (window.powBotDeterrentInit) {
-        try {
-          if (window.powBotDeterrentInitDone && window.powBotDeterrentReset) {
-            window.powBotDeterrentReset();
+    const startTriggering = () => {
+      (function waitInit() {
+        if (window.powBotDeterrentInit) {
+          try {
+            if (typeof window.powBotDeterrentInitDone === 'undefined') {
+              window.powBotDeterrentInitDone = false;
+            }
+            if (window.powBotDeterrentInitDone && window.powBotDeterrentReset) {
+              window.powBotDeterrentReset();
+            }
+            window.powBotDeterrentInit();
+            const triggerDeadline = Date.now() + 5000;
+            const triggerWhenReady = () => {
+              const mainEl =
+                widget && typeof widget.querySelector === 'function'
+                  ? widget.querySelector('.pow-bot-deterrent')
+                  : null;
+              if (!mainEl) {
+                if (Date.now() < triggerDeadline) {
+                  window.setTimeout(triggerWhenReady, 50);
+                } else {
+                  console.warn('powdet widget markup not ready, skip trigger');
+                  // 尝试手动创建基本结构，方便 callback 绑定
+                  try {
+                    const fallback = document.createElement('div');
+                    fallback.className = 'pow-bot-deterrent';
+                    const row = document.createElement('div');
+                    row.className = 'pow-bot-deterrent-row';
+                    fallback.appendChild(row);
+                    const col = document.createElement('div');
+                    row.appendChild(col);
+                    col.appendChild(document.createElement('div')).className = 'pow-bot-deterrent-description';
+                    col.appendChild(document.createElement('div')).className = 'pow-bot-deterrent-progress-bar-container';
+                    col.appendChild(document.createElement('div')).className = 'pow-bot-deterrent-progress-bar';
+                    col.appendChild(document.createElement('div')).className = 'pow-bot-deterrent-best-hash';
+                    col.appendChild(document.createElement('div')).className = 'pow-gears-icon';
+                    col.appendChild(document.createElement('div')).className = 'pow-checkmark-icon';
+                    widget.appendChild(fallback);
+                  } catch (err) {
+                    console.warn('powdet fallback markup insert failed', err);
+                  }
+                }
+                return;
+              }
+              try {
+                if (typeof window.powBotDeterrentTrigger === 'function') {
+                  window.powBotDeterrentTrigger();
+                } else if (Date.now() < triggerDeadline) {
+                  window.setTimeout(triggerWhenReady, 50);
+                }
+              } catch (err) {
+                if (Date.now() < triggerDeadline) {
+                  window.setTimeout(triggerWhenReady, 50);
+                } else {
+                  console.error('powdet trigger failed', err);
+                }
+              }
+            };
+            triggerWhenReady();
+          } catch (e) {
+            console.error('powdet init failed', e);
           }
-          window.powBotDeterrentInit();
-          const triggerDeadline = Date.now() + 5000;
-          const triggerWhenReady = () => {
-            const mainEl =
-              widget && typeof widget.querySelector === 'function'
-                ? widget.querySelector('.pow-bot-deterrent')
-                : null;
-            if (!mainEl) {
-              if (Date.now() < triggerDeadline) {
-                window.setTimeout(triggerWhenReady, 50);
-              } else {
-                console.warn('powdet widget markup not ready, skip trigger');
-              }
-              return;
-            }
-            try {
-              if (typeof window.powBotDeterrentTrigger === 'function') {
-                window.powBotDeterrentTrigger();
-              } else if (Date.now() < triggerDeadline) {
-                window.setTimeout(triggerWhenReady, 50);
-              }
-            } catch (err) {
-              if (Date.now() < triggerDeadline) {
-                window.setTimeout(triggerWhenReady, 50);
-              } else {
-                console.error('powdet trigger failed', err);
-              }
-            }
-          };
-          triggerWhenReady();
-        } catch (e) {
-          console.error('powdet init failed', e);
+          return;
         }
-        return;
-      }
-      if (Date.now() - start > maxWaitMs) {
-        console.warn('powdet script did not initialize in time');
-        return;
-      }
-      window.setTimeout(waitInit, 100);
-    })();
-  };
+        if (Date.now() - start > maxWaitMs) {
+          console.warn('powdet script did not initialize in time');
+          return;
+        }
+        window.setTimeout(waitInit, 100);
+      })();
+    };
 
+    ensurePowdetScriptLoaded()
+      .then((loaded) => {
+        if (!loaded) {
+          console.warn('powdet script load failed, skip powdet verification');
+          return;
+        }
+        startTriggering();
+      })
+      .catch((err) => {
+        console.error('powdet script load error', err);
+      });
+  };
+ 
   window.powdetDoneCallback = function powdetDoneCallback(nonce) {
     try {
       const input = document.getElementById('pow-nonce');
@@ -4647,6 +4750,17 @@ const pageScript = buildRawString`
       state.verification.powdetNonce = String(nonce || '');
       state.verification.powdetReady = true;
       updateButtonState();
+      if (Array.isArray(state.verification.powdetResolvers)) {
+        const resolvers = state.verification.powdetResolvers.slice();
+        state.verification.powdetResolvers = [];
+        resolvers.forEach((fn) => {
+          try {
+            fn(state.verification.powdetNonce);
+          } catch (err) {
+            console.error('powdet resolver error', err);
+          }
+        });
+      }
     } catch (error) {
       console.error('powdet callback failed', error);
     }
@@ -4757,6 +4871,7 @@ const pageScript = buildRawString`
     state.verification.powdetReady = !state.verification.needPowdet;
     state.verification.powdetNonce = '';
     state.verification.tokenResolvers = [];
+    state.verification.powdetResolvers = [];
     syncTurnstilePrompt();
     updateButtonState();
     if (state.verification.needAltcha) {
@@ -4921,7 +5036,12 @@ const pageScript = buildRawString`
     }
 
     const altchaPromise = state.verification.needAltcha
-      ? startAltchaComputation()
+      ? Promise.race([
+          startAltchaComputation(),
+          new Promise((_, reject) => {
+            window.setTimeout(() => reject(new Error('ALTCHA 计算超时')), ALTCHA_MAX_WAIT_MS);
+          }),
+        ])
       : Promise.resolve(null);
 
     let turnstileBindingEncoded = '';
@@ -4971,7 +5091,7 @@ const pageScript = buildRawString`
     let powdetSolution = null;
     if (state.verification.needPowdet) {
       const powChallenge = state.security.powdetChallenge;
-      const powNonce = state.verification.powdetNonce;
+      const powNonce = state.verification.powdetNonce || (await waitForPowdetNonce());
       if (!powChallenge || !powChallenge.challenge || !powNonce) {
         throw new Error('POW 验证未完成');
       }
