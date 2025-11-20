@@ -1281,6 +1281,7 @@ const pageScript = buildRawString`
       turnstileIssuedAt: 0,
       tokenResolvers: [],
       powdetResolvers: [],
+      powReadyAnnounced: false,
     },
       clientDecrypt: {
         enabled: clientDecryptSupported,
@@ -4322,9 +4323,11 @@ const pageScript = buildRawString`
       state.verification.altchaReady = true;
       state.verification.altchaSolution = null;
       updateButtonState();
+      maybeAnnouncePowReady();
       return Promise.resolve(null);
     }
     if (state.verification.altchaReady && state.verification.altchaSolution) {
+      maybeAnnouncePowReady();
       return Promise.resolve(state.verification.altchaSolution);
     }
     if (altchaComputationPromise) {
@@ -4377,15 +4380,11 @@ const pageScript = buildRawString`
           binding: challenge.binding,
           bindingExpiresAt: challenge.bindingExpiresAt,
         };
-        const secondsUntilExpiry = Math.max(
-          0,
-          Math.floor(challenge.bindingExpiresAt - Date.now() / 1000)
-        );
-        log('PoW计算完成，' + secondsUntilExpiry + '秒后失效');
         state.verification.altchaSolution = solution;
         state.verification.altchaIssuedAt = Date.now();
         state.verification.altchaReady = true;
         updateButtonState();
+        maybeAnnouncePowReady();
         return solution;
       } catch (error) {
         state.verification.altchaSolution = null;
@@ -4547,6 +4546,53 @@ const pageScript = buildRawString`
       return Math.max(1000, (expires * 1000) - Date.now());
     }
     return 180000;
+  };
+
+  const getPowExpirySecondsRemaining = () => {
+    const nowSeconds = Date.now() / 1000;
+    const expiries = [];
+    if (state.verification.needAltcha) {
+      const altchaExpiresRaw = state?.security?.altchaChallenge?.bindingExpiresAt;
+      const altchaExpires =
+        typeof altchaExpiresRaw === 'string'
+          ? Number.parseInt(altchaExpiresRaw, 10)
+          : Number(altchaExpiresRaw);
+      if (Number.isFinite(altchaExpires)) {
+        expiries.push(altchaExpires - nowSeconds);
+      }
+    }
+    if (state.verification.needPowdet) {
+      const powdetExpiresRaw = state?.security?.powdetChallenge?.expireAt;
+      const powdetExpires =
+        typeof powdetExpiresRaw === 'string'
+          ? Number.parseInt(powdetExpiresRaw, 10)
+          : Number(powdetExpiresRaw);
+      if (Number.isFinite(powdetExpires)) {
+        expiries.push(powdetExpires - nowSeconds);
+      }
+    }
+    if (expiries.length === 0) {
+      return 0;
+    }
+    return Math.max(0, Math.floor(Math.min(...expiries)));
+  };
+
+  const maybeAnnouncePowReady = () => {
+    if (!state.verification.needAltcha && !state.verification.needPowdet) {
+      return;
+    }
+    if (state.verification.powReadyAnnounced) {
+      return;
+    }
+    if (
+      (state.verification.needAltcha && !state.verification.altchaReady) ||
+      (state.verification.needPowdet && !state.verification.powdetReady)
+    ) {
+      return;
+    }
+    const secondsUntilExpiry = getPowExpirySecondsRemaining();
+    log('PoW计算完成，' + secondsUntilExpiry + '秒后失效');
+    state.verification.powReadyAnnounced = true;
   };
 
   const consumeTurnstileToken = () => {
@@ -4771,6 +4817,7 @@ const pageScript = buildRawString`
           }
         });
       }
+      maybeAnnouncePowReady();
     } catch (error) {
       console.error('powdet callback failed', error);
     }
@@ -4882,6 +4929,7 @@ const pageScript = buildRawString`
     state.verification.powdetNonce = '';
     state.verification.tokenResolvers = [];
     state.verification.powdetResolvers = [];
+    state.verification.powReadyAnnounced = false;
     syncTurnstilePrompt();
     updateButtonState();
     if (state.verification.needAltcha) {
