@@ -93,10 +93,12 @@ persist = true
 # # POWDET_DYNAMIC_WINDOW_SECONDS = "60" # 动态难度窗口（连续命中升档）
 # # POWDET_DYNAMIC_RESET_SECONDS = "300" # 冷却时间（超出则降档/重置）
 # # POWDET_DYNAMIC_BLOCK_SECONDS = "300" # 达到最高等级后的封禁时间
-# # POWDET_BASE_LEVEL_MIN = "12"         # 难度线性映射的最小 level（实际 difficulty）
-# # POWDET_BASE_LEVEL_MAX = "20"         # 难度线性映射的最大 difficulty 上限
-# # POWDET_LEVEL_STEP = "1"              # 每级增加的 difficultyLevel 步长
-# # POWDET_MAX_LEVEL = "4"               # 动态等级上限（配合 BASE_LEVEL/STEP 控制总体范围）
+# # POWDET_BASE_LEVEL_MIN = "12"         # 映射起点：difficulty = BASE_LEVEL_MIN + level * LEVEL_STEP
+# # POWDET_BASE_LEVEL_MAX = "20"         # 映射上限：difficulty 不会超过该值
+# # POWDET_LEVEL_STEP = "1"              # 映射步长：每提升 1 个 level 增加多少 difficulty 值
+# # POWDET_MAX_LEVEL = "4"               # level 上限：动态算法累积的最大 level（作用于映射公式）
+# #   动态难度逻辑：记录 IP 近期开题命中热度，窗口内连续命中则 level 递增（difficulty = BASE_LEVEL_MIN + level * LEVEL_STEP， capped 到 BASE_LEVEL_MAX），
+# #   超过 RESET_SECONDS 未命中则降级/重置；level 达到 MAX_LEVEL 后进入 BLOCK_SECONDS 封禁窗口，封禁结束后按低等级重新计算。
 #
 # # ═══════════════════════════════════════════════════════════════
 # # Web Downloader + Crypt (rclone-compatible) configuration
