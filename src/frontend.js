@@ -4544,12 +4544,14 @@ const pageScript = buildRawString`
       return;
     }
 
-    const form =
+    let form =
       document.querySelector('form[data-role=\"download-form\"]') ||
       document.querySelector('form');
     if (!form) {
-      console.error('powdet: download form not found');
-      return;
+      form = document.createElement('form');
+      form.id = 'powdet-auto-form';
+      form.style.display = 'none';
+      document.body.appendChild(form);
     }
 
     let container = document.getElementById('powdet-headless-container');
