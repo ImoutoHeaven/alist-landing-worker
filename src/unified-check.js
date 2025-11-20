@@ -26,6 +26,9 @@ export const unifiedCheck = async (path, clientIP, altchaTableName, config) => {
   const altchaTokenHash = config.altchaTokenHash || null;
   const altchaTokenIP = config.altchaTokenIP || clientIP || null;
   const normalizedAltchaTableName = altchaTableName || 'ALTCHA_TOKEN_LIST';
+  const powdetChallengeHash = config.powdetChallengeHash || null;
+  const powdetExpireAt = Number.isFinite(config.powdetExpireAt) ? Number(config.powdetExpireAt) : null;
+  const powdetTableName = config.powdetTableName || 'POW_CHALLENGE_TICKET';
 
   if (cacheTTL <= 0) {
     throw new Error('[Unified Check] sizeTTL must be greater than zero');
@@ -80,6 +83,9 @@ export const unifiedCheck = async (path, clientIP, altchaTableName, config) => {
     p_altcha_token_ip: altchaTokenIP,
     p_altcha_filepath_hash: filepathHash,
     p_altcha_table_name: normalizedAltchaTableName,
+    p_pow_challenge_hash: powdetChallengeHash,
+    p_pow_expire_at: powdetExpireAt,
+    p_pow_table_name: powdetTableName,
   };
 
   console.log('[Unified Check] Calling landing_unified_check with params:', JSON.stringify(rpcBody));
@@ -140,6 +146,10 @@ export const unifiedCheck = async (path, clientIP, altchaTableName, config) => {
     ? 0
     : Number.parseInt(row.altcha_access_count, 10);
   const altchaAllowedRaw = row.altcha_allowed;
+  const powConsumedRaw = row.pow_consumed;
+  const powErrorRaw = row.pow_error_code === null || typeof row.pow_error_code === 'undefined'
+    ? 0
+    : Number.parseInt(row.pow_error_code, 10);
 
   const safeAccess = Number.isFinite(accessCount) ? accessCount : 0;
   const safeLastWindow = Number.isFinite(lastWindowTime) ? lastWindowTime : now;
@@ -211,6 +221,10 @@ export const unifiedCheck = async (path, clientIP, altchaTableName, config) => {
       errorCode: Number.isFinite(altchaErrorRaw) ? altchaErrorRaw : 0,
       accessCount: Number.isFinite(altchaAccessRaw) ? altchaAccessRaw : 0,
       expiresAt: row.altcha_expires_at !== null ? Number.parseInt(row.altcha_expires_at, 10) : null,
+    },
+    powdet: {
+      consumed: powConsumedRaw !== false,
+      errorCode: Number.isFinite(powErrorRaw) ? powErrorRaw : 0,
     },
   };
 };

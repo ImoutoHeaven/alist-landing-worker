@@ -52,6 +52,8 @@ const ensureTables = async (
     tokenTableName,
     altchaTableName,
     altchaDifficultyTableName = ALTCHA_DIFFICULTY_TABLE,
+    powTableName = 'POW_CHALLENGE_TICKET',
+    powdetDifficultyTableName = 'POWDET_DIFFICULTY_STATE',
   }
 ) => {
   await executeQuery(accountId, databaseId, apiToken, `
@@ -131,6 +133,27 @@ const ensureTables = async (
     )
   `);
   await executeQuery(accountId, databaseId, apiToken, `CREATE INDEX IF NOT EXISTS idx_altcha_diff_block_until ON ${altchaDifficultyTableName}(BLOCK_UNTIL)`);
+  await executeQuery(accountId, databaseId, apiToken, `
+    CREATE TABLE IF NOT EXISTS ${powTableName} (
+      CHALLENGE_HASH TEXT PRIMARY KEY,
+      FIRST_ISSUED_AT INTEGER NOT NULL,
+      EXPIRE_AT INTEGER NOT NULL,
+      CONSUMED INTEGER NOT NULL DEFAULT 0,
+      CONSUMED_AT INTEGER,
+      LAST_NONCE TEXT
+    )
+  `);
+  await executeQuery(accountId, databaseId, apiToken, `CREATE INDEX IF NOT EXISTS idx_pow_challenge_expire ON ${powTableName}(EXPIRE_AT)`);
+  await executeQuery(accountId, databaseId, apiToken, `
+    CREATE TABLE IF NOT EXISTS ${powdetDifficultyTableName} (
+      IP_HASH TEXT PRIMARY KEY,
+      IP_RANGE TEXT NOT NULL,
+      LEVEL INTEGER NOT NULL DEFAULT 0,
+      LAST_SUCCESS_AT INTEGER NOT NULL,
+      BLOCK_UNTIL INTEGER
+    )
+  `);
+  await executeQuery(accountId, databaseId, apiToken, `CREATE INDEX IF NOT EXISTS idx_powdet_diff_block_until ON ${powdetDifficultyTableName}(BLOCK_UNTIL)`);
 };
 
 export const unifiedCheckD1Rest = async (path, clientIP, altchaTableName, config) => {
@@ -159,6 +182,14 @@ export const unifiedCheckD1Rest = async (path, clientIP, altchaTableName, config
   const altchaTokenHash = config.altchaTokenHash || null;
   const altchaTokenIP = config.altchaTokenIP || clientIP || null;
   const resolvedAltchaTableName = altchaTableName || 'ALTCHA_TOKEN_LIST';
+  const powdetChallengeHash = config.powdetChallengeHash || null;
+  const powdetTableName = config.powdetTableName || 'POW_CHALLENGE_TICKET';
+  const powdetExpireSeconds = Number(config.powdetExpireSeconds) || 0;
+  const powdetExpireAtFromConfig = Number.isFinite(config.powdetExpireAt) ? Number(config.powdetExpireAt) : null;
+  const powdetExpireAt = Number.isFinite(powdetExpireAtFromConfig)
+    ? powdetExpireAtFromConfig
+    : (powdetExpireSeconds > 0 ? now + powdetExpireSeconds : now);
+  const powdetDifficultyTableName = config.powdetDifficultyTableName || 'POWDET_DIFFICULTY_STATE';
   const ipCheckEnabled = windowSeconds > 0 && limit > 0;
   const fileCheckEnabled = fileWindowSeconds > 0 && fileLimit > 0;
 
@@ -174,6 +205,8 @@ export const unifiedCheckD1Rest = async (path, clientIP, altchaTableName, config
       tokenTableName,
       altchaTableName: resolvedAltchaTableName,
       altchaDifficultyTableName: ALTCHA_DIFFICULTY_TABLE,
+      powTableName: powdetTableName,
+      powdetDifficultyTableName,
     });
   }
 
@@ -319,12 +352,40 @@ export const unifiedCheckD1Rest = async (path, clientIP, altchaTableName, config
           sql: 'SELECT NULL AS CLIENT_IP, NULL AS FILEPATH_HASH, NULL AS ACCESS_COUNT, NULL AS EXPIRES_AT',
           params: [],
         },
+    powdetChallengeHash
+      ? {
+          sql: `
+            INSERT INTO ${powdetTableName} (CHALLENGE_HASH, FIRST_ISSUED_AT, EXPIRE_AT, CONSUMED)
+            VALUES (?, ?, ?, 0)
+            ON CONFLICT (CHALLENGE_HASH) DO NOTHING
+          `,
+          params: [powdetChallengeHash, now, powdetExpireAt],
+        }
+      : {
+          sql: 'SELECT 1 AS POW_NOOP',
+          params: [],
+        },
+    powdetChallengeHash
+      ? {
+          sql: `
+            UPDATE ${powdetTableName}
+            SET CONSUMED = 1,
+                CONSUMED_AT = ?
+            WHERE CHALLENGE_HASH = ?
+              AND CONSUMED = 0
+          `,
+          params: [now, powdetChallengeHash],
+        }
+      : {
+          sql: 'SELECT 0 AS changes',
+          params: [],
+        },
   ];
 
   const batchResults = await executeQuery(accountId, databaseId, apiToken, batchQueries);
 
-  if (!batchResults || batchResults.length < 5) {
-    throw new Error(`[Unified Check D1-REST] Batch returned incomplete results: expected 5, got ${batchResults?.length || 0}`);
+  if (!batchResults || batchResults.length < 7) {
+    throw new Error(`[Unified Check D1-REST] Batch returned incomplete results: expected 7, got ${batchResults?.length || 0}`);
   }
 
   const cacheResult = batchResults[0];
@@ -332,6 +393,8 @@ export const unifiedCheckD1Rest = async (path, clientIP, altchaTableName, config
   const fileRateLimitResult = batchResults[2];
   const tokenResult = batchResults[3];
   const altchaResult = batchResults[4];
+  const powInsertResult = batchResults[5];
+  const powUpdateResult = batchResults[6];
 
   const cacheRow = cacheResult?.results?.[0];
   const cacheData = {
@@ -494,6 +557,20 @@ export const unifiedCheckD1Rest = async (path, clientIP, altchaTableName, config
   const safeAltchaAccess = Number.isFinite(altchaAccessCount) ? altchaAccessCount : 0;
   const safeAltchaExpires = Number.isFinite(altchaExpiresAt) ? altchaExpiresAt : null;
 
+  let powConsumed = true;
+  let powErrorCode = 0;
+  if (powdetChallengeHash) {
+    const changes = Number(
+      (powUpdateResult && typeof powUpdateResult.meta?.changes !== 'undefined' ? powUpdateResult.meta?.changes : undefined) ||
+        (Array.isArray(powUpdateResult?.results) && typeof powUpdateResult.results[0]?.changes !== 'undefined'
+          ? powUpdateResult.results[0]?.changes
+          : undefined) ||
+        powUpdateResult?.changes
+    );
+    powConsumed = changes > 0;
+    powErrorCode = powConsumed ? 0 : 1;
+  }
+
   return {
     cache: cacheData,
     rateLimit: {
@@ -523,6 +600,10 @@ export const unifiedCheckD1Rest = async (path, clientIP, altchaTableName, config
       errorCode: Number.isFinite(altchaErrorCode) ? altchaErrorCode : 0,
       accessCount: safeAltchaAccess,
       expiresAt: safeAltchaExpires,
+    },
+    powdet: {
+      consumed: powConsumed,
+      errorCode: Number.isFinite(powErrorCode) ? powErrorCode : 0,
     },
   };
 };

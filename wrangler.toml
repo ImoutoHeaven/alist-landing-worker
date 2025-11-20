@@ -78,6 +78,26 @@ persist = true
 # TURNSTILE_ALLOWED_HOSTNAMES = "landing.example.com"  # Comma-separated allowlist when HOSTNAME enforcement is on
 #                                                        # Example: "landing.example.com,landingv2.example.com"
 #
+# # ════════════════════════════════════════════════════════════════
+# # POWDET (pow-bot-deterrent) 配置
+# # ════════════════════════════════════════════════════════════════
+# # POWDET_ENABLED = "false"             # 是否启用 powdet 验证（需与 ALTCHA/Turnstile 可组合）
+# # POWDET_BASE_URL = ""                 # pow-bot-deterrent 服务地址，例如 https://powdet.example.com
+# # POWDET_API_TOKEN = ""                # 访问 /GetChallenges 和 /Verify 的 Bearer token（32 位 hex）
+# # POWDET_TABLE_NAME = "POW_CHALLENGE_TICKET"   # 票据表名（一次性消费），默认 POW_CHALLENGE_TICKET
+# # POWDET_STATIC_LEVEL = "12"           # 未启用动态难度时的固定 difficultyLevel
+# # POWDET_EXPIRE_SECONDS = "180"        # 页面植入 challenge 的可用时长（绑定过期）
+# # POWDET_CLOCK_SKEW_SECONDS = "60"     # 客户端提交时允许的时钟误差
+# # POWDET_MAX_WINDOW_SECONDS = "600"    # 接受的最大有效期窗口防止超长过期值
+# # POWDET_DYNAMIC_ENABLED = "false"     # 启用则按 IP 记录热度并调整难度/封禁
+# # POWDET_DYNAMIC_WINDOW_SECONDS = "60" # 动态难度窗口（连续命中升档）
+# # POWDET_DYNAMIC_RESET_SECONDS = "300" # 冷却时间（超出则降档/重置）
+# # POWDET_DYNAMIC_BLOCK_SECONDS = "300" # 达到最高等级后的封禁时间
+# # POWDET_BASE_LEVEL_MIN = "12"         # 难度线性映射的最小 level（实际 difficulty）
+# # POWDET_BASE_LEVEL_MAX = "20"         # 难度线性映射的最大 difficulty 上限
+# # POWDET_LEVEL_STEP = "1"              # 每级增加的 difficultyLevel 步长
+# # POWDET_MAX_LEVEL = "4"               # 动态等级上限（配合 BASE_LEVEL/STEP 控制总体范围）
+#
 # # ═══════════════════════════════════════════════════════════════
 # # Web Downloader + Crypt (rclone-compatible) configuration
 # # ═══════════════════════════════════════════════════════════════
@@ -285,11 +305,12 @@ persist = true
 # MIN_ALLOWED_BANDWIDTH = "10"            # Minimum allowed download bandwidth (Mbps)
 # MIN_DURATION_TIME = "1h"                # Minimum expiry duration for generated links (supports h/m/s suffix)
 # MAX_DURATION_TIME = "4h"               # Optional: cap download link lifetime (supports h/m/s suffix, e.g. "4h", "1d")
-# # ACTION 可选值:
+# # ACTION 可选值（verify-pow / verify-both 已移除）:
 # # - block: 返回 403
-# # - verify-pow: 仅要求 ALTCHA PoW 验证
+# # - verify-altcha: 仅要求 ALTCHA 验证
 # # - verify-turn: 仅要求 Turnstile 验证
-# # - verify-both: 同时要求 PoW 和 Turnstile
+# # - verify-powdet: 仅要求 pow-bot-deterrent 验证
+# #   可用逗号组合任意验证项，例如 verify-altcha,verify-powdet 或 verify-altcha,verify-turn,verify-powdet
 # # - pass-web: 跳过验证，强制渲染 landing page
 # # - pass-server: 跳过验证，强制 302 重定向
 # # - pass-asis: 跳过验证，遵循 FAST_REDIRECT 配置
@@ -299,7 +320,7 @@ persist = true
 # WHITELIST_PREFIX = "/public,/shared"
 # WHITELIST_ACTION = "pass-asis"
 # EXCEPT_PREFIX = "/guest,/public"
-# EXCEPT_ACTION = "block-except"   # 支持所有 ACTION 值 + "-except" 后缀（如 block-except, verify-both-except, pass-asis-except）
+# EXCEPT_ACTION = "block-except"   # 支持所有 ACTION 值 + "-except" 后缀（如 block-except, verify-altcha-except, verify-turn-except, verify-powdet-except, pass-asis-except）
 #
 # # ⚠️ NEW: Path INCLUDES Matching (Match keywords anywhere in path)
 # # In addition to PREFIX (startsWith) matching, you can now use INCLUDES (contains) matching

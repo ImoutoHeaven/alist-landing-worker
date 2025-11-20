@@ -449,6 +449,35 @@ CREATE INDEX IF NOT EXISTS idx_altcha_diff_block_until
 
 
 -- ========================================
+-- POWDET 数据表（一次性挑战票据 + 动态难度状态）
+-- ========================================
+
+CREATE TABLE IF NOT EXISTS "POW_CHALLENGE_TICKET" (
+  "CHALLENGE_HASH"   TEXT PRIMARY KEY,
+  "FIRST_ISSUED_AT"  INTEGER NOT NULL,
+  "EXPIRE_AT"        INTEGER NOT NULL,
+  "CONSUMED"         INTEGER NOT NULL DEFAULT 0,
+  "CONSUMED_AT"      INTEGER,
+  "LAST_NONCE"       TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_pow_challenge_expire
+  ON "POW_CHALLENGE_TICKET" ("EXPIRE_AT");
+
+CREATE TABLE IF NOT EXISTS "POWDET_DIFFICULTY_STATE" (
+  "IP_HASH" TEXT PRIMARY KEY,
+  "IP_RANGE" TEXT NOT NULL,
+  "LEVEL" INTEGER NOT NULL DEFAULT 0,
+  "LAST_SUCCESS_AT" INTEGER NOT NULL,
+  "BLOCK_UNTIL" INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_powdet_diff_block_until
+  ON "POWDET_DIFFICULTY_STATE" ("BLOCK_UNTIL")
+  WHERE "BLOCK_UNTIL" IS NOT NULL;
+
+
+-- ========================================
 -- Stored Procedure: Verify and Consume ALTCHA Token
 -- ========================================
 
@@ -684,6 +713,65 @@ $$ LANGUAGE plpgsql;
 
 
 -- ========================================
+-- Stored Procedures: POWDET Challenge 票据
+-- ========================================
+
+CREATE OR REPLACE FUNCTION landing_consume_pow_challenge(
+  p_hash TEXT,
+  p_now INTEGER,
+  p_expire_at INTEGER,
+  p_table_name TEXT DEFAULT 'POW_CHALLENGE_TICKET'
+)
+RETURNS INTEGER AS $$
+DECLARE
+  sql TEXT;
+  updated_count INTEGER := 0;
+BEGIN
+  sql := format(
+    'INSERT INTO %1$I ("CHALLENGE_HASH", "FIRST_ISSUED_AT", "EXPIRE_AT", "CONSUMED")
+     VALUES ($1, $2, $3, 0)
+     ON CONFLICT ("CHALLENGE_HASH") DO NOTHING',
+    p_table_name
+  );
+  EXECUTE sql USING p_hash, p_now, p_expire_at;
+
+  sql := format(
+    'UPDATE %1$I
+     SET "CONSUMED" = 1,
+         "CONSUMED_AT" = $2
+     WHERE "CHALLENGE_HASH" = $1
+       AND "CONSUMED" = 0',
+    p_table_name
+  );
+  EXECUTE sql USING p_hash, p_now;
+  GET DIAGNOSTICS updated_count = ROW_COUNT;
+
+  RETURN updated_count;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION landing_cleanup_expired_pow_challenges(
+  p_now INTEGER,
+  p_table_name TEXT DEFAULT 'POW_CHALLENGE_TICKET'
+)
+RETURNS INTEGER AS $$
+DECLARE
+  sql TEXT;
+  deleted_count INTEGER := 0;
+BEGIN
+  sql := format(
+    'DELETE FROM %1$I
+     WHERE "EXPIRE_AT" <= $1',
+    p_table_name
+  );
+  EXECUTE sql USING p_now;
+  GET DIAGNOSTICS deleted_count = ROW_COUNT;
+  RETURN deleted_count;
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- ========================================
 -- Stored Procedure: Cleanup Expired Turnstile Tokens
 -- ========================================
 
@@ -739,7 +827,10 @@ CREATE OR REPLACE FUNCTION landing_unified_check(
   p_altcha_token_hash TEXT DEFAULT NULL,
   p_altcha_token_ip TEXT DEFAULT NULL,
   p_altcha_filepath_hash TEXT DEFAULT NULL,
-  p_altcha_table_name TEXT DEFAULT 'ALTCHA_TOKEN_LIST'
+  p_altcha_table_name TEXT DEFAULT 'ALTCHA_TOKEN_LIST',
+  p_pow_challenge_hash TEXT DEFAULT NULL,
+  p_pow_expire_at INTEGER DEFAULT NULL,
+  p_pow_table_name TEXT DEFAULT 'POW_CHALLENGE_TICKET'
 )
 RETURNS TABLE(
   cache_size BIGINT,
@@ -759,7 +850,9 @@ RETURNS TABLE(
   altcha_allowed BOOLEAN,
   altcha_error_code INTEGER,
   altcha_access_count INTEGER,
-  altcha_expires_at INTEGER
+  altcha_expires_at INTEGER,
+  pow_consumed BOOLEAN,
+  pow_error_code INTEGER
 ) AS $$
 DECLARE
   cache_sql TEXT;
@@ -779,6 +872,10 @@ DECLARE
   altcha_error_local INTEGER := 0;
   altcha_access_local INTEGER := 0;
   altcha_expires_local INTEGER := NULL;
+  pow_consumed_local BOOLEAN := TRUE;
+  pow_error_local INTEGER := 0;
+  pow_updated_count INTEGER := 0;
+  pow_expire_at_local INTEGER := NULL;
 BEGIN
   IF p_cache_ttl IS NOT NULL AND p_cache_ttl > 0 THEN
     cache_sql := format(
@@ -925,6 +1022,29 @@ BEGIN
   altcha_error_code := altcha_error_local;
   altcha_access_count := altcha_access_local;
   altcha_expires_at := altcha_expires_local;
+
+  IF p_pow_challenge_hash IS NOT NULL AND length(p_pow_challenge_hash) > 0 THEN
+    pow_expire_at_local := COALESCE(p_pow_expire_at, p_now);
+    pow_updated_count := landing_consume_pow_challenge(
+      p_pow_challenge_hash,
+      p_now,
+      pow_expire_at_local,
+      p_pow_table_name
+    );
+    IF pow_updated_count = 1 THEN
+      pow_consumed_local := TRUE;
+      pow_error_local := 0;
+    ELSE
+      pow_consumed_local := FALSE;
+      pow_error_local := 1;
+    END IF;
+  ELSE
+    pow_consumed_local := TRUE;
+    pow_error_local := 0;
+  END IF;
+
+  pow_consumed := pow_consumed_local;
+  pow_error_code := pow_error_local;
 
   RETURN NEXT;
 END;

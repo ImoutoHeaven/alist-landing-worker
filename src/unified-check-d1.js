@@ -9,6 +9,8 @@ const ensureTables = async (db, {
   tokenTableName,
   altchaTableName,
   altchaDifficultyTableName = ALTCHA_DIFFICULTY_TABLE,
+  powTableName = 'POW_CHALLENGE_TICKET',
+  powdetDifficultyTableName = 'POWDET_DIFFICULTY_STATE',
 }) => {
   const statements = [
     db.prepare(`
@@ -84,6 +86,27 @@ const ensureTables = async (db, {
       )
     `),
     db.prepare(`CREATE INDEX IF NOT EXISTS idx_altcha_diff_block_until ON ${altchaDifficultyTableName}(BLOCK_UNTIL)`),
+    db.prepare(`
+      CREATE TABLE IF NOT EXISTS ${powTableName} (
+        CHALLENGE_HASH TEXT PRIMARY KEY,
+        FIRST_ISSUED_AT INTEGER NOT NULL,
+        EXPIRE_AT INTEGER NOT NULL,
+        CONSUMED INTEGER NOT NULL DEFAULT 0,
+        CONSUMED_AT INTEGER,
+        LAST_NONCE TEXT
+      )
+    `),
+    db.prepare(`CREATE INDEX IF NOT EXISTS idx_pow_challenge_expire ON ${powTableName}(EXPIRE_AT)`),
+    db.prepare(`
+      CREATE TABLE IF NOT EXISTS ${powdetDifficultyTableName} (
+        IP_HASH TEXT PRIMARY KEY,
+        IP_RANGE TEXT NOT NULL,
+        LEVEL INTEGER NOT NULL DEFAULT 0,
+        LAST_SUCCESS_AT INTEGER NOT NULL,
+        BLOCK_UNTIL INTEGER
+      )
+    `),
+    db.prepare(`CREATE INDEX IF NOT EXISTS idx_powdet_diff_block_until ON ${powdetDifficultyTableName}(BLOCK_UNTIL)`),
   );
   await db.batch(statements);
 };
@@ -118,6 +141,14 @@ export const unifiedCheckD1 = async (path, clientIP, altchaTableName, config) =>
   const altchaTokenHash = config.altchaTokenHash || null;
   const altchaTokenIP = config.altchaTokenIP || clientIP || null;
   const resolvedAltchaTableName = altchaTableName || 'ALTCHA_TOKEN_LIST';
+  const powdetChallengeHash = config.powdetChallengeHash || null;
+  const powdetTableName = config.powdetTableName || 'POW_CHALLENGE_TICKET';
+  const powdetExpireSeconds = Number(config.powdetExpireSeconds) || 0;
+  const powdetExpireAtFromConfig = Number.isFinite(config.powdetExpireAt) ? Number(config.powdetExpireAt) : null;
+  const powdetExpireAt = Number.isFinite(powdetExpireAtFromConfig)
+    ? powdetExpireAtFromConfig
+    : (powdetExpireSeconds > 0 ? now + powdetExpireSeconds : now);
+  const powdetDifficultyTableName = config.powdetDifficultyTableName || 'POWDET_DIFFICULTY_STATE';
   const ipCheckEnabled = windowSeconds > 0 && limit > 0;
   const fileCheckEnabled = fileWindowSeconds > 0 && fileLimit > 0;
 
@@ -133,6 +164,8 @@ export const unifiedCheckD1 = async (path, clientIP, altchaTableName, config) =>
       tokenTableName,
       altchaTableName: resolvedAltchaTableName,
       altchaDifficultyTableName: ALTCHA_DIFFICULTY_TABLE,
+      powTableName: powdetTableName,
+      powdetDifficultyTableName,
     });
   }
 
@@ -256,9 +289,31 @@ export const unifiedCheckD1 = async (path, clientIP, altchaTableName, config) =>
       : db.prepare(`SELECT NULL AS CLIENT_IP, NULL AS FILEPATH_HASH, NULL AS ACCESS_COUNT, NULL AS EXPIRES_AT`)
   );
 
+  if (powdetChallengeHash) {
+    statements.push(
+      db.prepare(`
+        INSERT INTO ${powdetTableName} (CHALLENGE_HASH, FIRST_ISSUED_AT, EXPIRE_AT, CONSUMED)
+        VALUES (?, ?, ?, 0)
+        ON CONFLICT (CHALLENGE_HASH) DO NOTHING
+      `).bind(powdetChallengeHash, now, powdetExpireAt),
+      db.prepare(`
+        UPDATE ${powdetTableName}
+        SET CONSUMED = 1,
+            CONSUMED_AT = ?
+        WHERE CHALLENGE_HASH = ?
+          AND CONSUMED = 0
+      `).bind(now, powdetChallengeHash)
+    );
+  } else {
+    statements.push(
+      db.prepare('SELECT 1 AS POW_NOOP'),
+      db.prepare('SELECT 0 AS changes')
+    );
+  }
+
   console.log('[Unified Check D1] Executing batch (cache + rate limits + token binding)');
   const results = await db.batch(statements);
-  if (!results || results.length < 5) {
+  if (!results || results.length < 7) {
     throw new Error('[Unified Check D1] Batch returned incomplete results');
   }
 
@@ -423,6 +478,19 @@ export const unifiedCheckD1 = async (path, clientIP, altchaTableName, config) =>
   const safeAltchaAccess = Number.isFinite(altchaAccessCount) ? altchaAccessCount : 0;
   const safeAltchaExpires = Number.isFinite(altchaExpiresAt) ? altchaExpiresAt : null;
 
+  const powUpdateResult = results[6];
+  let powConsumed = true;
+  let powErrorCode = 0;
+  if (powdetChallengeHash) {
+    const changes = Number(
+      (powUpdateResult && typeof powUpdateResult.meta?.changes !== 'undefined' ? powUpdateResult.meta?.changes : undefined) ||
+        (powUpdateResult && typeof powUpdateResult.changes !== 'undefined' ? powUpdateResult.changes : undefined) ||
+        (Array.isArray(powUpdateResult?.results) && powUpdateResult.results[0]?.changes)
+    );
+    powConsumed = changes > 0;
+    powErrorCode = powConsumed ? 0 : 1;
+  }
+
   return {
     cache: cacheResult,
     rateLimit: {
@@ -452,6 +520,10 @@ export const unifiedCheckD1 = async (path, clientIP, altchaTableName, config) =>
       errorCode: Number.isFinite(altchaErrorCode) ? altchaErrorCode : 0,
       accessCount: safeAltchaAccess,
       expiresAt: safeAltchaExpires,
+    },
+    powdet: {
+      consumed: powConsumed,
+      errorCode: Number.isFinite(powErrorCode) ? powErrorCode : 0,
     },
   };
 };

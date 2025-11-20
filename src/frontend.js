@@ -1262,6 +1262,7 @@ const pageScript = buildRawString`
       turnstileAction: 'download',
       altchaChallenge: null,
       turnstileBinding: null,
+      powdetChallenge: null,
       scriptLoaded: false,
       scriptLoading: null,
       widgetId: null,
@@ -1269,10 +1270,13 @@ const pageScript = buildRawString`
       verification: {
         needAltcha: false,
         needTurnstile: false,
+        needPowdet: false,
         altchaReady: false,
         turnstileReady: false,
+        powdetReady: false,
         altchaSolution: null,
         turnstileToken: null,
+        powdetNonce: '',
         altchaIssuedAt: 0,
         turnstileIssuedAt: 0,
         tokenResolvers: [],
@@ -4157,10 +4161,15 @@ const pageScript = buildRawString`
     const {
       needAltcha,
       needTurnstile,
+      needPowdet,
       altchaReady,
       turnstileReady,
+      powdetReady,
     } = state.verification;
-    const canCallInfo = (!needAltcha || altchaReady) && (!needTurnstile || turnstileReady);
+    const canCallInfo =
+      (!needAltcha || altchaReady) &&
+      (!needTurnstile || turnstileReady) &&
+      (!needPowdet || powdetReady);
 
     // 如果 /info 接口获取失败，显示获取失败状态
     if (state.infoError) {
@@ -4511,6 +4520,107 @@ const pageScript = buildRawString`
     }
   };
 
+  const createHiddenInput = (name, id, value) => {
+    const input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = name;
+    input.id = id;
+    input.value = value;
+    return input;
+  };
+
+  const initPowdetIfNeeded = () => {
+    if (!state.verification.needPowdet || !state.security.powdetChallenge) {
+      state.verification.powdetReady = true;
+      updateButtonState();
+      return;
+    }
+
+    const { challenge, expireAt, randomStr, hmac } = state.security.powdetChallenge;
+    if (!challenge || !expireAt || !randomStr || !hmac) {
+      console.warn('powdet challenge payload incomplete');
+      state.verification.powdetReady = true;
+      updateButtonState();
+      return;
+    }
+
+    const form =
+      document.querySelector('form[data-role=\"download-form\"]') ||
+      document.querySelector('form');
+    if (!form) {
+      console.error('powdet: download form not found');
+      return;
+    }
+
+    let container = document.getElementById('powdet-headless-container');
+    if (!container) {
+      container = document.createElement('div');
+      container.id = 'powdet-headless-container';
+      container.style.display = 'none';
+      form.appendChild(container);
+    } else {
+      container.innerHTML = '';
+    }
+
+    const widget = document.createElement('div');
+    widget.dataset.powBotDeterrentStaticAssetsCrossOriginUrl =
+      'https://cdn.jsdelivr.net/gh/ImoutoHeaven/pow-bot-deterrent/static';
+    widget.dataset.powBotDeterrentChallenge = challenge;
+    widget.dataset.powBotDeterrentCallback = 'powdetDoneCallback';
+    container.appendChild(widget);
+
+    const ensureInput = (id, name, val) => {
+      let input = document.getElementById(id);
+      if (!input) {
+        input = createHiddenInput(name, id, val);
+        form.appendChild(input);
+      } else {
+        input.value = val;
+      }
+    };
+
+    ensureInput('pow-challenge', 'pow_challenge', challenge);
+    ensureInput('pow-expire-at', 'pow_expire_at', String(expireAt));
+    ensureInput('pow-random', 'pow_random', randomStr);
+    ensureInput('pow-hmac', 'pow_hmac', hmac);
+    ensureInput('pow-nonce', 'pow_nonce', '');
+
+    const maxWaitMs = 10000;
+    const start = Date.now();
+    (function waitInit() {
+      if (window.powBotDeterrentInit) {
+        try {
+          if (window.powBotDeterrentInitDone && window.powBotDeterrentReset) {
+            window.powBotDeterrentReset();
+          }
+          window.powBotDeterrentInit();
+        } catch (e) {
+          console.error('powdet init failed', e);
+        }
+        return;
+      }
+      if (Date.now() - start > maxWaitMs) {
+        console.warn('powdet script did not initialize in time');
+        return;
+      }
+      window.setTimeout(waitInit, 100);
+    })();
+  };
+
+  window.powdetDoneCallback = function powdetDoneCallback(nonce) {
+    try {
+      const input = document.getElementById('pow-nonce');
+      if (input) {
+        input.value = String(nonce || '');
+      }
+      state.verification.powdetNonce = String(nonce || '');
+      state.verification.powdetReady = true;
+      updateButtonState();
+    } catch (error) {
+      console.error('powdet callback failed', error);
+    }
+  };
+
   const applySecurityConfig = (security = {}) => {
     state.security.underAttack = security.underAttack === true;
     state.security.siteKey =
@@ -4571,9 +4681,39 @@ const pageScript = buildRawString`
     } else {
       state.security.turnstileBinding = null;
     }
+    const rawPowdetChallenge =
+      security.powdetChallenge && typeof security.powdetChallenge === 'object'
+        ? security.powdetChallenge
+        : null;
+    if (rawPowdetChallenge) {
+      const expireAt =
+        typeof rawPowdetChallenge.expireAt === 'number'
+          ? rawPowdetChallenge.expireAt
+          : typeof rawPowdetChallenge.expireAt === 'string'
+            ? Number.parseInt(rawPowdetChallenge.expireAt, 10)
+            : 0;
+      const challengeValue =
+        typeof rawPowdetChallenge.challenge === 'string' ? rawPowdetChallenge.challenge : '';
+      const randomStr =
+        typeof rawPowdetChallenge.randomStr === 'string' ? rawPowdetChallenge.randomStr : '';
+      const hmac = typeof rawPowdetChallenge.hmac === 'string' ? rawPowdetChallenge.hmac : '';
+      if (challengeValue && expireAt > 0 && randomStr && hmac) {
+        state.security.powdetChallenge = {
+          challenge: challengeValue,
+          expireAt,
+          randomStr,
+          hmac,
+        };
+      } else {
+        state.security.powdetChallenge = null;
+      }
+    } else {
+      state.security.powdetChallenge = null;
+    }
     state.verification.needAltcha = !!state.security.altchaChallenge;
     state.verification.needTurnstile =
       state.security.underAttack && typeof state.security.siteKey === 'string' && state.security.siteKey.length > 0;
+    state.verification.needPowdet = !!state.security.powdetChallenge;
     if (!state.verification.needTurnstile) {
       state.security.underAttack = false;
     }
@@ -4583,6 +4723,8 @@ const pageScript = buildRawString`
     state.verification.turnstileToken = null;
     state.verification.turnstileIssuedAt = 0;
     state.verification.turnstileReady = !state.verification.needTurnstile;
+    state.verification.powdetReady = !state.verification.needPowdet;
+    state.verification.powdetNonce = '';
     state.verification.tokenResolvers = [];
     syncTurnstilePrompt();
     updateButtonState();
@@ -4591,6 +4733,7 @@ const pageScript = buildRawString`
         console.error('ALTCHA 初始化失败:', error && error.message ? error.message : error);
       });
     }
+    initPowdetIfNeeded();
   };
 
   const securityConfig =
@@ -4794,6 +4937,22 @@ const pageScript = buildRawString`
       }
     }
 
+    let powdetSolution = null;
+    if (state.verification.needPowdet) {
+      const powChallenge = state.security.powdetChallenge;
+      const powNonce = state.verification.powdetNonce;
+      if (!powChallenge || !powChallenge.challenge || !powNonce) {
+        throw new Error('POW 验证未完成');
+      }
+      powdetSolution = {
+        challenge: powChallenge.challenge,
+        expireAt: powChallenge.expireAt,
+        randomStr: powChallenge.randomStr,
+        hmac: powChallenge.hmac,
+        nonce: powNonce,
+      };
+    }
+
     // 验证完成后，设置 fetchingInfo 标记，表示开始获取 /info 接口数据
     state.fetchingInfo = true;
     updateButtonState();
@@ -4805,6 +4964,11 @@ const pageScript = buildRawString`
       const solutionJson = JSON.stringify(altchaSolution);
       const base64urlToken = base64urlEncode(solutionJson);
       infoURL.searchParams.set('altChallengeResult', base64urlToken);
+    }
+    if (powdetSolution) {
+      const powJson = JSON.stringify(powdetSolution);
+      const powEncoded = base64urlEncode(powJson);
+      infoURL.searchParams.set('powdetSolution', powEncoded);
     }
 
     const headers = new Headers();
@@ -5515,12 +5679,33 @@ const renderLandingPageHtml = (path, options = {}) => {
             : typeof rawTurnstileBinding.expiresAt === 'number'
             ? rawTurnstileBinding.expiresAt
             : typeof rawTurnstileBinding.expiresAt === 'string'
-            ? Number.parseInt(rawTurnstileBinding.expiresAt, 10)
-            : 0,
+          ? Number.parseInt(rawTurnstileBinding.expiresAt, 10)
+          : 0,
         nonce:
           typeof rawTurnstileBinding.nonce === 'string' ? rawTurnstileBinding.nonce : '',
         cdata:
           typeof rawTurnstileBinding.cdata === 'string' ? rawTurnstileBinding.cdata : '',
+      }
+    : null;
+  const rawPowdetChallenge =
+    normalizedOptions.powdetChallenge && typeof normalizedOptions.powdetChallenge === 'object'
+      ? normalizedOptions.powdetChallenge
+      : null;
+  const normalizedPowdetChallenge = rawPowdetChallenge
+    ? {
+        challenge:
+          typeof rawPowdetChallenge.challenge === 'string' ? rawPowdetChallenge.challenge : '',
+        expireAt:
+          typeof rawPowdetChallenge.expireAt === 'number'
+            ? rawPowdetChallenge.expireAt
+            : typeof rawPowdetChallenge.expireAt === 'string'
+            ? Number.parseInt(rawPowdetChallenge.expireAt, 10)
+            : 0,
+        randomStr:
+          typeof rawPowdetChallenge.randomStr === 'string'
+            ? rawPowdetChallenge.randomStr
+            : '',
+        hmac: typeof rawPowdetChallenge.hmac === 'string' ? rawPowdetChallenge.hmac : '',
       }
     : null;
   const turnstileAction =
@@ -5534,6 +5719,7 @@ const renderLandingPageHtml = (path, options = {}) => {
     turnstileAction,
     altchaChallenge: normalizedAltchaChallenge,
     turnstileBinding: normalizedTurnstileBinding,
+    powdetChallenge: normalizedPowdetChallenge,
   };
   const securityJson = JSON.stringify(securityConfig).replace(/</g, '\\u003c');
   const autoRedirectEnabled = normalizedOptions.autoRedirect === true;
