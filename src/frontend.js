@@ -4594,6 +4594,23 @@ const pageScript = buildRawString`
             window.powBotDeterrentReset();
           }
           window.powBotDeterrentInit();
+          if (typeof window.powBotDeterrentTrigger === 'function') {
+            try {
+              window.powBotDeterrentTrigger();
+            } catch (err) {
+              console.error('powdet trigger failed', err);
+            }
+          } else {
+            window.setTimeout(() => {
+              if (typeof window.powBotDeterrentTrigger === 'function') {
+                try {
+                  window.powBotDeterrentTrigger();
+                } catch (err) {
+                  console.error('powdet trigger deferred start failed', err);
+                }
+              }
+            }, 0);
+          }
         } catch (e) {
           console.error('powdet init failed', e);
         }
