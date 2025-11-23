@@ -5403,6 +5403,16 @@ const pageScript = buildRawString`
       downloadBtn.textContent = '开始下载';
       retryBtn.disabled = false;
       clearCacheBtn.disabled = false;
+      if (autoRedirectEnabled) {
+        const opened = triggerClientDecryptDownload(downloadURL, { userGesture: false });
+        if (opened) {
+          state.downloadBtnMode = 'copy';
+          downloadBtn.textContent = '复制链接';
+          log('已尝试自动在新标签页下载密文（AUTO_REDIRECT 开启）');
+        } else {
+          log('浏览器阻止了自动打开，请点击“开始下载”');
+        }
+      }
       log('加密路径匹配，需要本地解密');
       setStatus('已获取下载信息，请使用外部下载器完成密文下载后回到此处解密');
       return;
