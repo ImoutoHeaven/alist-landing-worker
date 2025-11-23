@@ -5408,7 +5408,7 @@ const pageScript = buildRawString`
         if (opened) {
           state.downloadBtnMode = 'copy';
           downloadBtn.textContent = '复制链接';
-          log('已尝试自动在新标签页下载密文（AUTO_REDIRECT 开启）');
+          log('已尝试自动在新标签页下载密文');
         } else {
           log('浏览器阻止了自动打开，请点击“开始下载”');
         }
