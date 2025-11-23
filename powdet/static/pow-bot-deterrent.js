@@ -248,15 +248,14 @@
   function getCallbackFromGlobalNamespace(callbackString) {
     const callbackPath = callbackString.split(".");
     let context = window;
-    callbackPath.forEach(pathElement => {
-      if(!context[pathElement]) {
-        return null;
-      } else {
+    for(const pathElement of callbackPath) {
+      if (context && Object.prototype.hasOwnProperty.call(context, pathElement)) {
         context = context[pathElement];
+      } else {
+        return null;
       }
-    });
-
-    return context;
+    }
+    return typeof context === "function" ? context : null;
   }
 
   function getHashProgressText(challengeState) {
