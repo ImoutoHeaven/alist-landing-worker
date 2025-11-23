@@ -224,14 +224,6 @@ func main() {
 		// requireToken already validated the API Token, so we can just do this:
 		token := strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")
 
-		if _, has := currentChallengesGeneration[token]; !has {
-			currentChallengesGeneration[token] = 0
-		}
-		if _, has := challenges[token]; !has {
-			challenges[token] = map[string]int{}
-		}
-		currentChallengesGeneration[token]++
-
 		requestQuery := request.URL.Query()
 		difficultyLevelString := requestQuery.Get("difficultyLevel")
 		difficultyLevel, err := strconv.Atoi(difficultyLevelString)
