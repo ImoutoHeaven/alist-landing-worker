@@ -145,12 +145,22 @@
 
     let webWorkerPointerDataURL = null;
     if(staticAssetsCrossOriginURL != "") {
-      // https://stackoverflow.com/questions/21913673/execute-web-worker-from-different-origin/62914052#62914052
+      // Always inject STATIC_BASE_URL to guide worker hash-wasm loading
       const webWorkerCrossOriginURL = `${staticAssetsCrossOriginURL}/proofOfWorker_CrossOrigin.js?v=3`;
       const blobContent = `self.STATIC_BASE_URL="${staticAssetsCrossOriginURL}";importScripts("${webWorkerCrossOriginURL}");`;
-      webWorkerPointerDataURL = URL.createObjectURL( 
+      webWorkerPointerDataURL = URL.createObjectURL(
         new Blob(
-          [ blobContent ], 
+          [ blobContent ],
+          { type: "text/javascript" }
+        )
+      );
+    } else {
+      const workerUrl = `/${staticAssetsPath}/proofOfWorker.js?v=3`;
+      const baseForWorker = `/${staticAssetsPath}`;
+      const blobContent = `self.STATIC_BASE_URL="${baseForWorker}";importScripts("${workerUrl}");`;
+      webWorkerPointerDataURL = URL.createObjectURL(
+        new Blob(
+          [ blobContent ],
           { type: "text/javascript" }
         )
       );
@@ -159,11 +169,7 @@
     let webWorkers;
     webWorkers = [...Array(numberOfWebWorkersToCreate)].map((_, i) => {
       let webWorker;
-      if(staticAssetsCrossOriginURL != "") {
-        webWorker = new Worker(webWorkerPointerDataURL);
-      } else {
-        webWorker = new Worker(`/${staticAssetsPath}/proofOfWorker.js?v=3`);
-      }
+      webWorker = new Worker(webWorkerPointerDataURL);
       webWorker.onmessage = function(e) {
         const challengeState = challengesMap[e.data.challenge]
         if(!challengeState) {
