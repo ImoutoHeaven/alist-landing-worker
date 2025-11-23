@@ -83,6 +83,7 @@ persist = true
 # # ════════════════════════════════════════════════════════════════
 # # POWDET_ENABLED = "false"             # 是否启用 powdet 验证（需与 ALTCHA/Turnstile 可组合）
 # # POWDET_BASE_URL = ""                 # pow-bot-deterrent 服务地址，例如 https://powdet.example.com
+# # POWDET_STATIC_BASE_URL = ""          # （可选）静态资源地址，未设时默认 {POWDET_BASE_URL}/powdet/static 或 /powdet/static
 # # POWDET_API_TOKEN = ""                # 访问 /GetChallenges 和 /Verify 的 Bearer token（32 位 hex）
 # # POWDET_TABLE_NAME = "POW_CHALLENGE_TICKET"   # 票据表名（一次性消费），默认 POW_CHALLENGE_TICKET
 # # POWDET_STATIC_LEVEL = "12"           # 未启用动态难度时的固定 difficultyLevel

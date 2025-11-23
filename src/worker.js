@@ -770,6 +770,7 @@ const resolveConfig = (env = {}) => {
 
   const powdetEnabled = parseBoolean(env.POWDET_ENABLED, false);
   const powdetBaseUrl = normalizeString(env.POWDET_BASE_URL);
+  const powdetStaticBaseUrl = normalizeString(env.POWDET_STATIC_BASE_URL);
   const powdetApiToken = normalizeString(env.POWDET_API_TOKEN);
   const powdetTableName = normalizeString(env.POWDET_TABLE_NAME, 'POW_CHALLENGE_TICKET');
   const powdetExpireSeconds = parseDurationToSeconds(env.POWDET_EXPIRE_SECONDS, 180);
@@ -1250,6 +1251,7 @@ const resolveConfig = (env = {}) => {
     altchaTableName,
     powdetEnabled,
     powdetBaseUrl,
+    powdetStaticBaseUrl,
     powdetApiToken,
     powdetTableName,
     powdetExpireSeconds,
@@ -4957,8 +4959,12 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
   }
 
   if (!shouldRedirect && needsPowdetChallenge) {
-    if (config.powdetBaseUrl) {
+    if (config.powdetStaticBaseUrl) {
+      powdetStaticBase = config.powdetStaticBaseUrl.replace(/\/+$/, '');
+    } else if (config.powdetBaseUrl) {
       powdetStaticBase = `${config.powdetBaseUrl.replace(/\/+$/, '')}/powdet/static`;
+    } else {
+      powdetStaticBase = '/powdet/static';
     }
     try {
       const baseNowSeconds = Math.floor(Date.now() / 1000);
