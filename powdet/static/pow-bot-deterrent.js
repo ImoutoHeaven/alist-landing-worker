@@ -147,10 +147,10 @@
     if(staticAssetsCrossOriginURL != "") {
       // https://stackoverflow.com/questions/21913673/execute-web-worker-from-different-origin/62914052#62914052
       const webWorkerCrossOriginURL = `${staticAssetsCrossOriginURL}/proofOfWorker_CrossOrigin.js?v=3`;
-
+      const blobContent = `self.STATIC_BASE_URL="${staticAssetsCrossOriginURL}";importScripts("${webWorkerCrossOriginURL}");`;
       webWorkerPointerDataURL = URL.createObjectURL( 
         new Blob(
-          [ `importScripts( "${ webWorkerCrossOriginURL }" );` ], 
+          [ blobContent ], 
           { type: "text/javascript" }
         )
       );

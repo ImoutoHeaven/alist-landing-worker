@@ -6,11 +6,6 @@
     if (staticBase) {
       candidates.push(`${staticBase.replace(/\/+$/, "")}/hash-wasm-argon2.umd.min.js`);
     }
-    try {
-      candidates.push(new URL("hash-wasm-argon2.umd.min.js", self.location.href).toString());
-    } catch (err) {
-      candidates.push("hash-wasm-argon2.umd.min.js");
-    }
     candidates.push("https://cdn.jsdelivr.net/npm/hash-wasm@4/dist/argon2.umd.min.js");
     return candidates;
   };
