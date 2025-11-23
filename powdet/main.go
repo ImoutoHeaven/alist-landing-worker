@@ -18,6 +18,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	configlite "git.sequentialread.com/forest/config-lite"
@@ -57,6 +58,7 @@ var appDirectory string
 var argon2Parameters Argon2Parameters
 var currentChallengesGeneration = map[string]int{}
 var challenges = map[string]map[string]int{}
+var challengesMu sync.RWMutex
 
 func main() {
 
@@ -235,6 +237,18 @@ func main() {
 			return true
 		}
 
+		challengesMu.Lock()
+		if _, has := currentChallengesGeneration[token]; !has {
+			currentChallengesGeneration[token] = 0
+		}
+		if _, has := challenges[token]; !has {
+			challenges[token] = map[string]int{}
+		}
+		currentChallengesGeneration[token]++
+		tokenChallenges := challenges[token]
+		currentGeneration := currentChallengesGeneration[token]
+		challengesMu.Unlock()
+
 		toReturn := make([]string, config.BatchSize)
 		for i := 0; i < config.BatchSize; i++ {
 			preimageBytes := make([]byte, 8)
@@ -277,17 +291,23 @@ func main() {
 			}
 
 			challengeBase64 := base64.StdEncoding.EncodeToString(challengeBytes)
-			challenges[token][challengeBase64] = currentChallengesGeneration[token]
+			challengesMu.Lock()
+			tokenChallenges[challengeBase64] = currentGeneration
+			challengesMu.Unlock()
 			toReturn[i] = challengeBase64
 		}
 		toRemove := []string{}
-		for k, generation := range challenges[token] {
-			if generation+config.DeprecateAfterBatches < currentChallengesGeneration[token] {
+		challengesMu.RLock()
+		for k, generation := range tokenChallenges {
+			if generation+config.DeprecateAfterBatches < currentGeneration {
 				toRemove = append(toRemove, k)
 			}
 		}
+		challengesMu.RUnlock()
 		for _, k := range toRemove {
-			delete(challenges[token], k)
+			challengesMu.Lock()
+			delete(tokenChallenges, k)
+			challengesMu.Unlock()
 		}
 
 		responseBytes, err := json.Marshal(toReturn)
@@ -311,19 +331,17 @@ func main() {
 		challengeBase64 := requestQuery.Get("challenge")
 		nonceHex := requestQuery.Get("nonce")
 
-		_, hasAnyChallenges := challenges[token]
-		hasChallenge := false
-		if hasAnyChallenges {
-			_, hasChallenge = challenges[token][challengeBase64]
-		}
-
-		if !hasChallenge {
+		challengesMu.Lock()
+		tokenChallenges, hasAnyChallenges := challenges[token]
+		_, hasChallenge := tokenChallenges[challengeBase64]
+		if !hasAnyChallenges || !hasChallenge {
+			challengesMu.Unlock()
 			errorMessage := fmt.Sprintf("404 challenge given by url param ?challenge=%s was not found", challengeBase64)
 			http.Error(responseWriter, errorMessage, http.StatusNotFound)
 			return true
 		}
-
-		delete(challenges[token], challengeBase64)
+		delete(tokenChallenges, challengeBase64)
+		challengesMu.Unlock()
 
 		nonceBuffer := make([]byte, 8)
 		bytesWritten, err := hex.Decode(nonceBuffer, []byte(nonceHex))
