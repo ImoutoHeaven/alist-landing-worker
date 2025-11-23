@@ -697,6 +697,41 @@ const pageScript = buildRawString`
   const CRYPT_HEADER_MAGIC = new Uint8Array([82, 67, 76, 79, 78, 69, 0, 0]);
   const CRYPT_NONCE_SIZE = 24;
 
+  const LIBSODIUM_VERSION = '0.7.13';
+  const LIBSODIUM_MODULE_URL = `https://cdn.jsdelivr.net/npm/libsodium-wrappers@${LIBSODIUM_VERSION}/dist/modules/libsodium-wrappers.js`;
+  const LIBSODIUM_SCRIPT_URL = `https://cdn.jsdelivr.net/npm/libsodium-wrappers@${LIBSODIUM_VERSION}/dist/libsodium-wrappers.min.js`;
+
+  let sodiumPromise = null;
+  let sodiumInstance = null;
+  let sodiumInitError = null;
+
+  const getSodium = () => {
+    if (sodiumPromise) return sodiumPromise;
+    sodiumPromise = (async () => {
+      const mod = await import(LIBSODIUM_MODULE_URL);
+      const sodium = mod?.default || mod;
+      if (!sodium || typeof sodium !== 'object') {
+        throw new Error('libsodium 加载失败');
+      }
+      if (sodium.ready && typeof sodium.ready.then === 'function') {
+        await sodium.ready;
+      }
+      sodiumInstance = sodium;
+      return sodiumInstance;
+    })().catch((error) => {
+      sodiumInitError = error;
+      console.error('加载 libsodium 失败', error);
+      throw error;
+    });
+    return sodiumPromise;
+  };
+
+  const ensureMainSodiumReady = async () => {
+    if (sodiumInstance) return sodiumInstance;
+    if (sodiumInitError) throw sodiumInitError;
+    return getSodium();
+  };
+
   const cloneUint8 = (input) => {
     if (!input) return new Uint8Array(0);
     return input.slice ? input.slice() : new Uint8Array(input);
@@ -730,8 +765,11 @@ const pageScript = buildRawString`
   };
 
   const decryptBlock = (cipherBlock, dataKey, baseNonce, blockIndex) => {
+    if (!sodiumInstance || typeof sodiumInstance.crypto_secretbox_open_easy !== 'function') {
+      throw new Error('libsodium 尚未初始化');
+    }
     const nonce = incrementNonce(baseNonce, blockIndex);
-    const opened = window.nacl?.secretbox?.open(cipherBlock, nonce, dataKey);
+    const opened = sodiumInstance.crypto_secretbox_open_easy(cipherBlock, nonce, dataKey);
     if (!opened) return null;
     return new Uint8Array(opened);
   };
@@ -748,6 +786,52 @@ const pageScript = buildRawString`
     '    blockDataSize: 0,',
     "    encryptionMode: 'plain',",
     '  };',
+    '',
+    '  let sodiumInstance = null;',
+    '  let sodiumReadyPromise = null;',
+    '  let sodiumInitError = null;',
+    '',
+    '  const initSodium = () => {',
+    '    if (sodiumReadyPromise || sodiumInitError) {',
+    '      return;',
+    '    }',
+    '    try {',
+    '      if (typeof self.sodium !== "object") {',
+    "        throw new Error('libsodium 未加载');",
+    '      }',
+    '      sodiumInstance = self.sodium;',
+    '      if (sodiumInstance.ready && typeof sodiumInstance.ready.then === "function") {',
+    '        sodiumReadyPromise = sodiumInstance.ready.catch((error) => {',
+    '          sodiumInitError = error;',
+    '          throw error;',
+    '        });',
+    '      } else {',
+    '        sodiumReadyPromise = Promise.resolve();',
+    '      }',
+    '    } catch (error) {',
+    '      sodiumInitError = error;',
+    '      sodiumReadyPromise = Promise.reject(error);',
+    '    }',
+    '  };',
+    '',
+    '  const ensureSodiumReadyInWorker = async () => {',
+    '    if (!sodiumReadyPromise && !sodiumInitError) {',
+    '      initSodium();',
+    '    }',
+    '    if (sodiumInitError) {',
+    '      throw sodiumInitError;',
+    '    }',
+    '    if (!sodiumReadyPromise) {',
+    "      throw new Error('libsodium 未初始化');",
+    '    }',
+    '    await sodiumReadyPromise;',
+    '    if (!sodiumInstance || typeof sodiumInstance.crypto_secretbox_open_easy !== "function") {',
+    "      throw new Error('libsodium secretbox 不可用');",
+    '    }',
+    '    return sodiumInstance;',
+    '  };',
+    '',
+    '  initSodium();',
     '',
     '  const cloneUint8 = (input) => {',
     '    if (!input) return new Uint8Array(0);',
@@ -767,14 +851,14 @@ const pageScript = buildRawString`
     '    return output;',
     '  };',
     '',
-    '  const decryptBlock = (cipherBlock, dataKey, baseNonce, blockIndex) => {',
+    '  const decryptBlock = (cipherBlock, dataKey, baseNonce, blockIndex, sodium) => {',
     '    const nonce = incrementNonce(baseNonce, blockIndex);',
-    '    const opened = self.nacl?.secretbox?.open(cipherBlock, nonce, dataKey);',
+    '    const opened = sodium.crypto_secretbox_open_easy(cipherBlock, nonce, dataKey);',
     '    if (!opened) return null;',
     '    return new Uint8Array(opened);',
     '  };',
     '',
-    '  const decryptSegmentPayload = (payload) => {',
+    '  const decryptSegmentPayload = (payload, sodium) => {',
     '    const {',
     '      buffer,',
     '      length,',
@@ -815,7 +899,7 @@ const pageScript = buildRawString`
     '      }',
     '      const cipherBlock = cipher.subarray(offset, end);',
     '      offset = end;',
-    '      const plainBlock = decryptBlock(cipherBlock, state.dataKey, state.baseNonce, blockIndex);',
+    '      const plainBlock = decryptBlock(cipherBlock, state.dataKey, state.baseNonce, blockIndex, sodium);',
     '      if (!plainBlock) {',
     "        throw new Error('解密失败，请重试');",
     '      }',
@@ -855,11 +939,12 @@ const pageScript = buildRawString`
     '    });',
     '  };',
     '',
-    '  const handleDecrypt = (data) => {',
+    '  const handleDecrypt = async (data) => {',
     '    const { jobId, index, buffer, length, mapping } = data || {};',
     '    if (!jobId) return;',
     '    try {',
-    '      const plain = decryptSegmentPayload({ buffer, length, mapping });',
+    '      const sodium = await ensureSodiumReadyInWorker();',
+    '      const plain = decryptSegmentPayload({ buffer, length, mapping }, sodium);',
     '      self.postMessage(',
     '        {',
     "          type: 'segment-done',",
@@ -890,6 +975,7 @@ const pageScript = buildRawString`
     '        blockDataSize: Number(data.blockDataSize) || 0,',
     '        encryptionMode: mode,',
     '      };',
+    '      ensureSodiumReadyInWorker().catch(() => {});',
     '      return;',
     '    }',
     "    if (data.type === 'decrypt-segment') {",
@@ -903,7 +989,7 @@ const pageScript = buildRawString`
     let url = null;
     return () => {
       if (url) return url;
-      const prefix = "importScripts('https://cdn.jsdelivr.net/npm/tweetnacl@1.0.3/nacl-fast.min.js');\n";
+      const prefix = `importScripts('${LIBSODIUM_SCRIPT_URL}');\n`;
       const blob = new Blob([prefix + decryptWorkerScript], { type: 'application/javascript' });
       url = URL.createObjectURL(blob);
       return url;
@@ -2709,6 +2795,7 @@ const pageScript = buildRawString`
       if (state.encryptionMode === 'plain') {
         return segment.encrypted.subarray(0, segment.length);
       }
+      await ensureMainSodiumReady();
       const buffer = segment.encrypted;
       const output = new Uint8Array(segment.length);
       let produced = 0;
@@ -2929,9 +3016,7 @@ const pageScript = buildRawString`
             log('已自动重新排队之前失败的分段');
           }
           if (state.encryptionMode === 'crypt') {
-            if (!window.nacl || !window.nacl.secretbox || !window.nacl.secretbox.open) {
-              throw new Error('TweetNaCl 初始化失败，请刷新页面重试');
-            }
+            await ensureMainSodiumReady();
           }
           await ensureWriter();
           if (state.encryptionMode === 'crypt' && !state.baseNonce) {
@@ -5087,6 +5172,8 @@ const pageScript = buildRawString`
     state.infoError = false;
     clientDecryptUiState.ready = false;
     clientDecryptUiState.running = false;
+    clientDecryptUiState.completed = false;
+    clientDecryptUiState.failed = false;
     syncClientDecryptControls();
     updateButtonState();
 
@@ -5273,11 +5360,18 @@ const pageScript = buildRawString`
       } catch (prepareError) {
         throw new Error(prepareError && prepareError.message ? prepareError.message : '离线解密初始化失败');
       }
+      try {
+        await ensureMainSodiumReady();
+      } catch (sodiumError) {
+        console.error('无法初始化 libsodium，离线解密不可用', sodiumError);
+        throw new Error('浏览器不支持本地解密（libsodium 初始化失败）');
+      }
       clearClientDecryptFile();
       syncClientDecryptorSettingsFromInputs();
       clientDecryptUiState.enabled = true;
       clientDecryptUiState.ready = true;
       clientDecryptUiState.completed = false;
+      clientDecryptUiState.failed = false;
       clientDecryptUiState.downloadInitiated = false;
       clientDecryptUiState.isCrypt = infoData.meta?.isCrypt === true;
       clientDecryptUiState.fileName = infoData.meta?.fileName || clientDecryptor.getFileName() || '';
@@ -5435,8 +5529,15 @@ const pageScript = buildRawString`
       return;
     }
     clientDecryptor.setSourceFile(clientDecryptUiState.file);
-    if (!window.nacl || !window.nacl.secretbox || !window.nacl.secretbox.open) {
-      setStatus('TweetNaCl 初始化失败，无法解密');
+    try {
+      await ensureMainSodiumReady();
+    } catch (error) {
+      console.error('libsodium 初始化失败，无法解密', error);
+      setStatus('libsodium 初始化失败，无法解密');
+      clientDecryptUiState.failed = true;
+      clientDecryptUiState.completed = false;
+      updateClientDecryptStatusHint('error');
+      syncClientDecryptControls();
       return;
     }
     if (clientDecryptUiState.running) {
