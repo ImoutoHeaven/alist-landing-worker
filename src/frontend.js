@@ -699,7 +699,6 @@ const pageScript = buildRawString`
 
   const LIBSODIUM_VERSION = '0.7.13';
   const LIBSODIUM_MODULE_URL = `https://cdn.jsdelivr.net/npm/libsodium-wrappers@${LIBSODIUM_VERSION}/dist/modules/libsodium-wrappers.js`;
-  const LIBSODIUM_SCRIPT_URL = `https://cdn.jsdelivr.net/npm/libsodium-wrappers@${LIBSODIUM_VERSION}/dist/libsodium-wrappers.min.js`;
 
   let sodiumPromise = null;
   let sodiumInstance = null;
@@ -779,6 +778,7 @@ const pageScript = buildRawString`
     '/* eslint-disable no-restricted-globals */',
     '(() => {',
     "  'use strict';",
+    `  const LIBSODIUM_MODULE_URL = '${LIBSODIUM_MODULE_URL}';`,
     '  let state = {',
     '    dataKey: null,',
     '    baseNonce: null,',
@@ -791,47 +791,38 @@ const pageScript = buildRawString`
     '  let sodiumReadyPromise = null;',
     '  let sodiumInitError = null;',
     '',
-    '  const initSodium = () => {',
-    '    if (sodiumReadyPromise || sodiumInitError) {',
-    '      return;',
-    '    }',
-    '    try {',
-    '      if (typeof self.sodium !== "object") {',
-    "        throw new Error('libsodium 未加载');",
+    '  const loadSodium = () => {',
+    '    if (sodiumReadyPromise) return sodiumReadyPromise;',
+    '    sodiumReadyPromise = (async () => {',
+    '      const mod = await import(LIBSODIUM_MODULE_URL);',
+    '      const sodium = mod && (mod.default || mod);',
+    '      if (!sodium || typeof sodium !== "object") {',
+    "        throw new Error('libsodium 加载失败');",
     '      }',
-    '      sodiumInstance = self.sodium;',
-    '      if (sodiumInstance.ready && typeof sodiumInstance.ready.then === "function") {',
-    '        sodiumReadyPromise = sodiumInstance.ready.catch((error) => {',
-    '          sodiumInitError = error;',
-    '          throw error;',
-    '        });',
-    '      } else {',
-    '        sodiumReadyPromise = Promise.resolve();',
+    '      if (sodium.ready && typeof sodium.ready.then === "function") {',
+    '        await sodium.ready;',
     '      }',
-    '    } catch (error) {',
+    '      if (typeof sodium.crypto_secretbox_open_easy !== "function") {',
+    "        throw new Error('libsodium secretbox 不可用');",
+    '      }',
+    '      sodiumInstance = sodium;',
+    '      return sodiumInstance;',
+    '    })().catch((error) => {',
     '      sodiumInitError = error;',
-    '      sodiumReadyPromise = Promise.reject(error);',
-    '    }',
+    '      throw error;',
+    '    });',
+    '    return sodiumReadyPromise;',
     '  };',
     '',
     '  const ensureSodiumReadyInWorker = async () => {',
-    '    if (!sodiumReadyPromise && !sodiumInitError) {',
-    '      initSodium();',
-    '    }',
+    '    if (sodiumInstance) return sodiumInstance;',
     '    if (sodiumInitError) {',
     '      throw sodiumInitError;',
     '    }',
-    '    if (!sodiumReadyPromise) {',
-    "      throw new Error('libsodium 未初始化');",
-    '    }',
-    '    await sodiumReadyPromise;',
-    '    if (!sodiumInstance || typeof sodiumInstance.crypto_secretbox_open_easy !== "function") {',
-    "      throw new Error('libsodium secretbox 不可用');",
-    '    }',
-    '    return sodiumInstance;',
+    '    return loadSodium();',
     '  };',
     '',
-    '  initSodium();',
+    '  loadSodium().catch(() => {});',
     '',
     '  const cloneUint8 = (input) => {',
     '    if (!input) return new Uint8Array(0);',
@@ -989,15 +980,14 @@ const pageScript = buildRawString`
     let url = null;
     return () => {
       if (url) return url;
-      const prefix = `importScripts('${LIBSODIUM_SCRIPT_URL}');\n`;
-      const blob = new Blob([prefix + decryptWorkerScript], { type: 'application/javascript' });
+      const blob = new Blob([decryptWorkerScript], { type: 'application/javascript' });
       url = URL.createObjectURL(blob);
       return url;
     };
   })();
 
   const createDecryptWorker = (commonParams) => {
-    const worker = new Worker(getDecryptWorkerUrl());
+    const worker = new Worker(getDecryptWorkerUrl(), { type: 'module' });
     let jobId = 1;
     const pending = new Map();
 
