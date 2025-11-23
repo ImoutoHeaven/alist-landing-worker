@@ -59,6 +59,14 @@ var argon2Parameters Argon2Parameters
 var currentChallengesGeneration = map[string]int{}
 var challenges = map[string]map[string]int{}
 var challengesMu sync.RWMutex
+var apiTokensFolder string
+
+type tokenCache struct {
+	tokens map[string]struct{}
+	mu     sync.RWMutex
+}
+
+var apiTokensCache = tokenCache{tokens: map[string]struct{}{}}
 
 func main() {
 
@@ -101,20 +109,7 @@ func main() {
 			http.Error(responseWriter, errorMsg, http.StatusUnauthorized)
 			return true
 		}
-		fileInfos, err := ioutil.ReadDir(apiTokensFolder)
-		if err != nil {
-			log.Printf("failed to list the apiTokensFolder (%s): %v", apiTokensFolder, err)
-			http.Error(responseWriter, "500 internal server error", http.StatusInternalServerError)
-			return true
-		}
-		foundToken := false
-		for _, fileInfo := range fileInfos {
-			if strings.HasPrefix(fileInfo.Name(), token) {
-				foundToken = true
-				break
-			}
-		}
-		if !foundToken {
+		if !tokenExists(token) {
 			errorMsg := fmt.Sprintf("401 Unauthorized: Authorization Bearer token '%s' was in the right format, but it was unrecognized", token)
 			http.Error(responseWriter, errorMsg, http.StatusUnauthorized)
 			return true
@@ -173,13 +168,18 @@ func main() {
 		tokenBytes := make([]byte, 16)
 		rand.Read(tokenBytes)
 
+		tokenHex := fmt.Sprintf("%x", tokenBytes)
 		ioutil.WriteFile(
-			path.Join(apiTokensFolder, fmt.Sprintf("%x_%s", tokenBytes, name)),
+			path.Join(apiTokensFolder, fmt.Sprintf("%s_%s", tokenHex, name)),
 			[]byte(fmt.Sprintf("%d", time.Now().Unix())),
 			0644,
 		)
 
-		fmt.Fprintf(responseWriter, "%x", tokenBytes)
+		apiTokensCache.mu.Lock()
+		apiTokensCache.tokens[tokenHex] = struct{}{}
+		apiTokensCache.mu.Unlock()
+
+		fmt.Fprintf(responseWriter, "%s", tokenHex)
 
 		return true
 	})
@@ -202,10 +202,17 @@ func main() {
 			http.Error(responseWriter, "500 internal server error", http.StatusInternalServerError)
 			return true
 		}
+		removed := false
 		for _, fileInfo := range fileInfos {
 			if strings.HasPrefix(fileInfo.Name(), token) {
 				os.Remove(path.Join(apiTokensFolder, fileInfo.Name()))
+				removed = true
 			}
+		}
+		if removed {
+			apiTokensCache.mu.Lock()
+			delete(apiTokensCache.tokens, token)
+			apiTokensCache.mu.Unlock()
 		}
 
 		responseWriter.Write([]byte("Revoked"))
@@ -489,9 +496,45 @@ func getCurrentExecDir() (dir string, err error) {
 	return dir, nil
 }
 
+func loadAPITokens() error {
+	tokens := map[string]struct{}{}
+	fileInfos, err := ioutil.ReadDir(apiTokensFolder)
+	if err != nil {
+		return err
+	}
+	for _, fileInfo := range fileInfos {
+		parts := strings.Split(fileInfo.Name(), "_")
+		if len(parts) >= 1 && len(parts[0]) == 32 {
+			tokens[parts[0]] = struct{}{}
+		}
+	}
+	apiTokensCache.mu.Lock()
+	apiTokensCache.tokens = tokens
+	apiTokensCache.mu.Unlock()
+	return nil
+}
+
+func tokenExists(token string) bool {
+	apiTokensCache.mu.RLock()
+	_, ok := apiTokensCache.tokens[token]
+	apiTokensCache.mu.RUnlock()
+	if ok {
+		return true
+	}
+	// refresh once on miss (handles manual token file changes)
+	if err := loadAPITokens(); err != nil {
+		log.Printf("failed to reload API tokens: %v", err)
+		return false
+	}
+	apiTokensCache.mu.RLock()
+	_, ok = apiTokensCache.tokens[token]
+	apiTokensCache.mu.RUnlock()
+	return ok
+}
+
 func readConfiguration() string {
-	apiTokensFolderPath := locateAPITokensFolder()
-	appDirectory = filepath.Dir(apiTokensFolderPath)
+	apiTokensFolder = locateAPITokensFolder()
+	appDirectory = filepath.Dir(apiTokensFolder)
 	configJsonPath := filepath.Join(appDirectory, "config.json")
 	err := configlite.ReadConfiguration(configJsonPath, "POW_BOT_DETERRENT", []string{}, reflect.ValueOf(&config))
 	if err != nil {
@@ -549,5 +592,9 @@ func readConfiguration() string {
 	)
 	log.Println(configToLogString)
 
-	return apiTokensFolderPath
+	if err := loadAPITokens(); err != nil {
+		log.Fatalf("failed to load API tokens from %s: %v", apiTokensFolder, err)
+	}
+
+	return apiTokensFolder
 }

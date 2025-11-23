@@ -38,6 +38,18 @@ function base64ToBytes(str) {
   return arr;
 }
 
+function hexToBytes(hex) {
+  const clean = hex.trim();
+  if (clean.length % 2 !== 0) {
+    throw new Error(`invalid hex length: ${clean.length}`);
+  }
+  const out = new Uint8Array(clean.length / 2);
+  for (let i = 0; i < clean.length; i += 2) {
+    out[i / 2] = parseInt(clean.slice(i, i + 2), 16);
+  }
+  return out;
+}
+
 function normalizeChallenge(raw) {
   return {
     memoryKiB: raw.m,
@@ -52,8 +64,9 @@ function normalizeChallenge(raw) {
 
 async function argon2idHashHex(opts) {
   const { nonceHex, preimageBytes, challenge } = opts;
+  const nonceBytes = hexToBytes(nonceHex);
   return hashwasm.argon2id({
-    password: nonceHex,
+    password: nonceBytes,
     salt: preimageBytes,
     parallelism: challenge.parallelism,
     iterations: challenge.iterations,

@@ -7,3 +7,5 @@ dist/
 .claude/
 powdet/pow-bot-deterrent
 powdet/PoW_Bot_Deterrent_API_Tokens/
+powdet/powdet
+powdet/*.exe
