@@ -1262,6 +1262,7 @@ const pageScript = buildRawString`
       turnstileAction: 'download',
       altchaChallenge: null,
       turnstileBinding: null,
+      powdetStaticBase: '',
       powdetChallenge: null,
       scriptLoaded: false,
       scriptLoading: null,
@@ -4616,6 +4617,16 @@ const pageScript = buildRawString`
     return input;
   };
 
+  const getPowdetStaticBase = () => {
+    const rawBase =
+      typeof state.security.powdetStaticBase === 'string' ? state.security.powdetStaticBase : '';
+    const normalizedBase = rawBase ? rawBase.replace(/\/+$/u, '') : '';
+    if (normalizedBase) {
+      return normalizedBase;
+    }
+    return '/powdet/static';
+  };
+
   let powdetScriptPromise = null;
   const ensurePowdetScriptLoaded = () => {
     if (typeof window.powBotDeterrentInit === 'function') {
@@ -4624,6 +4635,7 @@ const pageScript = buildRawString`
     if (powdetScriptPromise) {
       return powdetScriptPromise;
     }
+    const staticBase = getPowdetStaticBase();
     powdetScriptPromise = new Promise((resolve) => {
       const existing = document.getElementById('powbot-script');
       if (existing) {
@@ -4640,7 +4652,7 @@ const pageScript = buildRawString`
       }
       const script = document.createElement('script');
       script.id = 'powbot-script';
-      script.src = 'https://cdn.jsdelivr.net/gh/ImoutoHeaven/pow-bot-deterrent/static/pow-bot-deterrent.js';
+      script.src = (staticBase || '/powdet/static') + '/pow-bot-deterrent.js';
       script.defer = true;
       script.onload = () => resolve(true);
       script.onerror = () => {
@@ -4687,9 +4699,9 @@ const pageScript = buildRawString`
       container.innerHTML = '';
     }
 
+    const staticBase = getPowdetStaticBase();
     const widget = document.createElement('div');
-    widget.dataset.powBotDeterrentStaticAssetsCrossOriginUrl =
-      'https://cdn.jsdelivr.net/gh/ImoutoHeaven/pow-bot-deterrent/static';
+    widget.dataset.powBotDeterrentStaticAssetsCrossOriginUrl = staticBase;
     widget.dataset.powBotDeterrentChallenge = challenge;
     widget.dataset.powBotDeterrentCallback = 'powdetDoneCallback';
     container.appendChild(widget);
@@ -4883,6 +4895,9 @@ const pageScript = buildRawString`
     } else {
       state.security.turnstileBinding = null;
     }
+    const rawPowdetStaticBase =
+      typeof security.powdetStaticBase === 'string' ? security.powdetStaticBase.trim() : '';
+    state.security.powdetStaticBase = rawPowdetStaticBase;
     const rawPowdetChallenge =
       security.powdetChallenge && typeof security.powdetChallenge === 'object'
         ? security.powdetChallenge
@@ -5900,6 +5915,10 @@ const renderLandingPageHtml = (path, options = {}) => {
     normalizedOptions.powdetChallenge && typeof normalizedOptions.powdetChallenge === 'object'
       ? normalizedOptions.powdetChallenge
       : null;
+  const powdetStaticBase =
+    typeof normalizedOptions.powdetStaticBase === 'string'
+      ? normalizedOptions.powdetStaticBase.trim()
+      : '';
   const normalizedPowdetChallenge = rawPowdetChallenge
     ? {
         challenge:
@@ -5929,6 +5948,7 @@ const renderLandingPageHtml = (path, options = {}) => {
     altchaChallenge: normalizedAltchaChallenge,
     turnstileBinding: normalizedTurnstileBinding,
     powdetChallenge: normalizedPowdetChallenge,
+    powdetStaticBase,
   };
   const securityJson = JSON.stringify(securityConfig).replace(/</g, '\\u003c');
   const autoRedirectEnabled = normalizedOptions.autoRedirect === true;

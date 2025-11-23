@@ -4798,6 +4798,7 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
   let altchaChallengePayload = null;
   let turnstileBindingPayload = null;
   let powdetChallengePayload = null;
+  let powdetStaticBase = '/powdet/static';
   const needsAltchaChallenge = needAltcha;
   const needsTurnstileBinding = needTurnstile && config.turnstileCookieExpireSeconds > 0;
   const needsPowdetChallenge = needPowdet;
@@ -4956,6 +4957,9 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
   }
 
   if (!shouldRedirect && needsPowdetChallenge) {
+    if (config.powdetBaseUrl) {
+      powdetStaticBase = `${config.powdetBaseUrl.replace(/\/+$/, '')}/powdet/static`;
+    }
     try {
       const baseNowSeconds = Math.floor(Date.now() / 1000);
       const expireSeconds = Number.isFinite(config.powdetExpireSeconds) ? config.powdetExpireSeconds : 180;
@@ -4991,6 +4995,7 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
     altchaChallenge: altchaChallengePayload,
     turnstileBinding: turnstileBindingPayload,
     powdetChallenge: powdetChallengePayload,
+    powdetStaticBase,
     autoRedirect: config.autoRedirect,
     webDownloader: needWebDownloader,
     isCryptPath: isCrypt,

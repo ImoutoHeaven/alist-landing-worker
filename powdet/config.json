@@ -1,0 +1,11 @@
+{
+  "listen_port": 2370,
+  "batch_size": 1000,
+  "deprecate_after_batches": 10,
+
+  "argon2_memory_kib": 16384,
+  "argon2_iterations": 2,
+  "argon2_parallelism": 1,
+
+  "admin_api_token": "REPLACE_WITH_ADMIN_TOKEN"
+}
