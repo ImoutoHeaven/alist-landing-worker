@@ -1,10 +1,19 @@
 // Argon2id proof-of-work worker powered by hash-wasm
 (() => {
-  const sources = [
-    "hash-wasm-argon2.umd.min.js",
-    "https://cdn.jsdelivr.net/npm/hash-wasm@4/dist/argon2.umd.min.js",
-  ];
-  for (const src of sources) {
+  const buildSources = () => {
+    const candidates = [];
+    try {
+      const url = new URL(self.location.href);
+      const base = `${url.origin}${url.pathname.replace(/[^/]+$/, "").replace(/\/$/, "")}`;
+      candidates.push(`${base}/hash-wasm-argon2.umd.min.js`);
+    } catch (err) {
+      // fallback to relative
+      candidates.push("hash-wasm-argon2.umd.min.js");
+    }
+    candidates.push("https://cdn.jsdelivr.net/npm/hash-wasm@4/dist/argon2.umd.min.js");
+    return candidates;
+  };
+  for (const src of buildSources()) {
     try {
       importScripts(src);
       break;
