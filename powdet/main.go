@@ -384,18 +384,20 @@ func main() {
 		return true
 	})
 
-	http.HandleFunc("/static/captcha.css", func(responseWriter http.ResponseWriter, request *http.Request) {
+	// Static assets for the frontend worker (served under /powdet/static)
+	http.HandleFunc("/powdet/static/pow-bot-deterrent.css", func(responseWriter http.ResponseWriter, request *http.Request) {
 		bytez, _ := os.ReadFile("./static/pow-bot-deterrent.css")
 		responseWriter.Header().Set("Content-Type", "text/css")
 		responseWriter.Write(bytez)
 	})
-	http.HandleFunc("/static/captcha.js", func(responseWriter http.ResponseWriter, request *http.Request) {
+	http.HandleFunc("/powdet/static/pow-bot-deterrent.js", func(responseWriter http.ResponseWriter, request *http.Request) {
 		bytez, _ := os.ReadFile("./static/pow-bot-deterrent.js")
 		responseWriter.Header().Set("Content-Type", "application/javascript")
 		responseWriter.Write(bytez)
 	})
 
-	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("./static/"))))
+	http.Handle("/powdet/static/", http.StripPrefix("/powdet/static/", http.FileServer(http.Dir("./static/"))))
+	// Backward compatibility for older paths
 	http.Handle("/pow-bot-deterrent-static/", http.StripPrefix("/pow-bot-deterrent-static/", http.FileServer(http.Dir("./static/"))))
 
 	log.Printf("💥  PoW! Bot Deterrent server listening on port %d", config.ListenPort)
