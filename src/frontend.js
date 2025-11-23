@@ -698,7 +698,9 @@ const pageScript = buildRawString`
   const CRYPT_NONCE_SIZE = 24;
 
   const LIBSODIUM_VERSION = '0.7.13';
-  const LIBSODIUM_MODULE_URL = `https://cdn.jsdelivr.net/npm/libsodium-wrappers@${LIBSODIUM_VERSION}/dist/modules/libsodium-wrappers.js`;
+  const LIBSODIUM_MODULE_URL = 'https://cdn.jsdelivr.net/npm/libsodium-wrappers@' +
+    LIBSODIUM_VERSION +
+    '/dist/modules/libsodium-wrappers.js';
 
   let sodiumPromise = null;
   let sodiumInstance = null;
@@ -778,7 +780,7 @@ const pageScript = buildRawString`
     '/* eslint-disable no-restricted-globals */',
     '(() => {',
     "  'use strict';",
-    `  const LIBSODIUM_MODULE_URL = '${LIBSODIUM_MODULE_URL}';`,
+    '  const LIBSODIUM_MODULE_URL = \'' + LIBSODIUM_MODULE_URL + '\';',
     '  let state = {',
     '    dataKey: null,',
     '    baseNonce: null,',
