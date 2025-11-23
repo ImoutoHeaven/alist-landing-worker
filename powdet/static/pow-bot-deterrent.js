@@ -144,27 +144,16 @@
     }
 
     let webWorkerPointerDataURL = null;
-    if(staticAssetsCrossOriginURL != "") {
-      // Always inject STATIC_BASE_URL to guide worker hash-wasm loading
-      const webWorkerCrossOriginURL = `${staticAssetsCrossOriginURL}/proofOfWorker_CrossOrigin.js?v=3`;
-      const blobContent = `self.STATIC_BASE_URL="${staticAssetsCrossOriginURL}";importScripts("${webWorkerCrossOriginURL}");`;
-      webWorkerPointerDataURL = URL.createObjectURL(
-        new Blob(
-          [ blobContent ],
-          { type: "text/javascript" }
-        )
-      );
-    } else {
-      const workerUrl = `/${staticAssetsPath}/proofOfWorker.js?v=3`;
-      const baseForWorker = `/${staticAssetsPath}`;
-      const blobContent = `self.STATIC_BASE_URL="${baseForWorker}";importScripts("${workerUrl}");`;
-      webWorkerPointerDataURL = URL.createObjectURL(
-        new Blob(
-          [ blobContent ],
-          { type: "text/javascript" }
-        )
-      );
-    }
+    const workerUrl = staticAssetsCrossOriginURL != ""
+      ? `${staticAssetsCrossOriginURL}/proofOfWorker_CrossOrigin.js?v=3`
+      : `/${staticAssetsPath}/proofOfWorker.js?v=3`;
+    const blobContent = `importScripts("${workerUrl}");`;
+    webWorkerPointerDataURL = URL.createObjectURL(
+      new Blob(
+        [ blobContent ],
+        { type: "text/javascript" }
+      )
+    );
 
     let webWorkers;
     webWorkers = [...Array(numberOfWebWorkersToCreate)].map((_, i) => {
