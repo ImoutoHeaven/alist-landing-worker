@@ -3,9 +3,7 @@
   const buildSources = () => {
     const candidates = [];
     try {
-      const url = new URL(self.location.href);
-      const base = `${url.origin}${url.pathname.replace(/[^/]+$/, "").replace(/\/$/, "")}`;
-      candidates.push(`${base}/hash-wasm-argon2.umd.min.js`);
+      candidates.push(new URL("hash-wasm-argon2.umd.min.js", self.location.href).toString());
     } catch (err) {
       candidates.push("hash-wasm-argon2.umd.min.js");
     }
