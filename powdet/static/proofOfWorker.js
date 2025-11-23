@@ -2,6 +2,10 @@
 (() => {
   const buildSources = () => {
     const candidates = [];
+    const staticBase = self.STATIC_BASE_URL || "";
+    if (staticBase) {
+      candidates.push(`${staticBase.replace(/\/+$/, "")}/hash-wasm-argon2.umd.min.js`);
+    }
     try {
       candidates.push(new URL("hash-wasm-argon2.umd.min.js", self.location.href).toString());
     } catch (err) {
