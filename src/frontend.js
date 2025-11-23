@@ -4525,6 +4525,13 @@ const pageScript = buildRawString`
       return state.verification.powdetNonce;
     }
     return new Promise((resolve, reject) => {
+      const resolver = (nonce) => {
+        window.clearTimeout(timeoutId);
+        if (Array.isArray(state.verification.powdetResolvers)) {
+          state.verification.powdetResolvers = state.verification.powdetResolvers.filter((fn) => fn !== resolver);
+        }
+        resolve(nonce || '');
+      };
       const timeoutId = window.setTimeout(() => {
         const nonce = state.verification.powdetNonce;
         if (nonce) {
@@ -4532,11 +4539,11 @@ const pageScript = buildRawString`
           return;
         }
         reject(new Error('POW 计算超时'));
+        state.verification.powdetResolvers = Array.isArray(state.verification.powdetResolvers)
+          ? state.verification.powdetResolvers.filter((fn) => fn !== resolver)
+          : [];
       }, getPowdetMaxWaitMs());
-      state.verification.powdetResolvers.push((nonce) => {
-        window.clearTimeout(timeoutId);
-        resolve(nonce || '');
-      });
+      state.verification.powdetResolvers.push(resolver);
     });
   };
 
