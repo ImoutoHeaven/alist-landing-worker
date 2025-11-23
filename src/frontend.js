@@ -698,7 +698,12 @@ const pageScript = buildRawString`
   const CRYPT_NONCE_SIZE = 24;
 
   const LIBSODIUM_VERSION = '0.7.13';
-  const LIBSODIUM_MODULE_URL = 'https://cdn.jsdelivr.net/npm/libsodium-wrappers@' +
+  const LIBSODIUM_CORE_URL =
+    'https://cdn.jsdelivr.net/npm/libsodium@' +
+    LIBSODIUM_VERSION +
+    '/dist/modules/libsodium.js';
+  const LIBSODIUM_WRAPPERS_URL =
+    'https://cdn.jsdelivr.net/npm/libsodium-wrappers@' +
     LIBSODIUM_VERSION +
     '/dist/modules/libsodium-wrappers.js';
 
@@ -706,11 +711,30 @@ const pageScript = buildRawString`
   let sodiumInstance = null;
   let sodiumInitError = null;
 
+  const loadScriptOnce = (() => {
+    const cache = new Map();
+    return (url) => {
+      if (cache.has(url)) return cache.get(url);
+      const promise = new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = url;
+        script.async = true;
+        script.crossOrigin = 'anonymous';
+        script.onload = () => resolve();
+        script.onerror = (event) => reject(event?.error || new Error('加载脚本失败: ' + url));
+        document.head.appendChild(script);
+      });
+      cache.set(url, promise);
+      return promise;
+    };
+  })();
+
   const getSodium = () => {
     if (sodiumPromise) return sodiumPromise;
     sodiumPromise = (async () => {
-      const mod = await import(LIBSODIUM_MODULE_URL);
-      const sodium = mod?.default || mod;
+      await loadScriptOnce(LIBSODIUM_CORE_URL);
+      await loadScriptOnce(LIBSODIUM_WRAPPERS_URL);
+      const sodium = window.sodium;
       if (!sodium || typeof sodium !== 'object') {
         throw new Error('libsodium 加载失败');
       }
@@ -778,9 +802,9 @@ const pageScript = buildRawString`
   // 解密 Worker 脚本（通过 Blob URL 注入）
   const decryptWorkerScript = [
     '/* eslint-disable no-restricted-globals */',
+    "importScripts('" + LIBSODIUM_CORE_URL + "', '" + LIBSODIUM_WRAPPERS_URL + "');",
     '(() => {',
     "  'use strict';",
-    '  const LIBSODIUM_MODULE_URL = \'' + LIBSODIUM_MODULE_URL + '\';',
     '  let state = {',
     '    dataKey: null,',
     '    baseNonce: null,',
@@ -793,38 +817,32 @@ const pageScript = buildRawString`
     '  let sodiumReadyPromise = null;',
     '  let sodiumInitError = null;',
     '',
-    '  const loadSodium = () => {',
-    '    if (sodiumReadyPromise) return sodiumReadyPromise;',
-    '    sodiumReadyPromise = (async () => {',
-    '      const mod = await import(LIBSODIUM_MODULE_URL);',
-    '      const sodium = mod && (mod.default || mod);',
+    '  const ensureSodiumReadyInWorker = async () => {',
+    '    if (sodiumInstance) return sodiumInstance;',
+    '    if (sodiumInitError) {',
+    '      throw sodiumInitError;',
+    '    }',
+    '    try {',
+    '      const sodium = self.sodium;',
     '      if (!sodium || typeof sodium !== "object") {',
-    "        throw new Error('libsodium 加载失败');",
+    "        throw new Error('sodium 未加载');",
     '      }',
     '      if (sodium.ready && typeof sodium.ready.then === "function") {',
-    '        await sodium.ready;',
+    '        sodiumReadyPromise = sodium.ready;',
+    '        await sodiumReadyPromise;',
     '      }',
     '      if (typeof sodium.crypto_secretbox_open_easy !== "function") {',
     "        throw new Error('libsodium secretbox 不可用');",
     '      }',
     '      sodiumInstance = sodium;',
     '      return sodiumInstance;',
-    '    })().catch((error) => {',
+    '    } catch (error) {',
     '      sodiumInitError = error;',
     '      throw error;',
-    '    });',
-    '    return sodiumReadyPromise;',
-    '  };',
-    '',
-    '  const ensureSodiumReadyInWorker = async () => {',
-    '    if (sodiumInstance) return sodiumInstance;',
-    '    if (sodiumInitError) {',
-    '      throw sodiumInitError;',
     '    }',
-    '    return loadSodium();',
     '  };',
     '',
-    '  loadSodium().catch(() => {});',
+    '  ensureSodiumReadyInWorker().catch(() => {});',
     '',
     '  const cloneUint8 = (input) => {',
     '    if (!input) return new Uint8Array(0);',
@@ -989,7 +1007,7 @@ const pageScript = buildRawString`
   })();
 
   const createDecryptWorker = (commonParams) => {
-    const worker = new Worker(getDecryptWorkerUrl(), { type: 'module' });
+    const worker = new Worker(getDecryptWorkerUrl());
     let jobId = 1;
     const pending = new Map();
 
