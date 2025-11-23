@@ -63,9 +63,9 @@
 
       let cssIsAlreadyLoaded;
       if(staticAssetsCrossOriginURL) {
-        cssIsAlreadyLoaded = document.querySelector(`link[href='/${staticAssetsPath}/pow-bot-deterrent.css']`);
-      } else {
         cssIsAlreadyLoaded = document.querySelector(`link[href='${staticAssetsCrossOriginURL}/pow-bot-deterrent.css']`);
+      } else {
+        cssIsAlreadyLoaded = document.querySelector(`link[href='/${staticAssetsPath}/pow-bot-deterrent.css']`);
       }
 
       cssIsAlreadyLoaded = cssIsAlreadyLoaded || Array.from(document.styleSheets).some(x => {
@@ -82,7 +82,8 @@
           "charset": "utf8",
         });
         stylesheet.onload = () => renderProgressInfo(element);
-        stylesheet.setAttribute("href", `${staticAssetsCrossOriginURL || staticAssetsPath}/pow-bot-deterrent.css`);
+        const cssBase = staticAssetsCrossOriginURL ? staticAssetsCrossOriginURL : `/${staticAssetsPath}`;
+        stylesheet.setAttribute("href", `${cssBase}/pow-bot-deterrent.css`);
       } else {
         renderProgressInfo(element);
       }
