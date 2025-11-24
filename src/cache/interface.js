@@ -2,10 +2,8 @@
  * Filesize cache interface
  *
  * All cache implementations provide TTL-based lookup/save helpers that operate on
- * the reduced schema (PATH_HASH, PATH, SIZE, TIMESTAMP). Implementations live in:
- *   - d1.js
- *   - d1-rest.js
- *   - custom-pg-rest.js
+ * the reduced schema (PATH_HASH, PATH, SIZE, TIMESTAMP). The concrete implementation
+ * is provided by custom-pg-rest.js.
  *
  * Cache records store filesize only to keep the payload minimal while still
  * allowing RTT reductions for the /api/fs/get endpoint.

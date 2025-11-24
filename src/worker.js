@@ -19,8 +19,6 @@ import { renderLandingPage } from './frontend.js';
 import { createRateLimiter } from './ratelimit/factory.js';
 import { createCacheManager } from './cache/factory.js';
 import { unifiedCheck } from './unified-check.js';
-import { unifiedCheckD1 } from './unified-check-d1.js';
-import { unifiedCheckD1Rest } from './unified-check-d1-rest.js';
 
 const REQUIRED_ENV = ['TOKEN', 'WORKER_ADDRESS_DOWNLOAD'];
 
@@ -71,7 +69,8 @@ const getNormalizedDbMode = (config) => {
   if (!config || typeof config.dbMode !== 'string') {
     return '';
   }
-  return config.dbMode.trim().toLowerCase();
+  const normalized = config.dbMode.trim().toLowerCase();
+  return normalized === 'custom-pg-rest' ? 'custom-pg-rest' : '';
 };
 
 let ipRateLimitDisabledLogged = false;
@@ -626,45 +625,6 @@ const parseAltchaPathBindingValue = (value) => {
   };
 };
 
-const resolveD1DatabaseBinding = (config, env) => {
-  const envSource = config.cacheConfig?.env || config.rateLimitConfig?.env || env;
-  const bindingName = config.cacheConfig?.databaseBinding || config.rateLimitConfig?.databaseBinding || 'DB';
-  if (!envSource || !bindingName) {
-    return null;
-  }
-  return envSource[bindingName] || null;
-};
-
-/**
- * 执行 D1 REST 查询
- * @param {{accountId:string,databaseId:string,apiToken:string}} restConfig
- * @param {Array<{sql:string,params?:any[]}>|{sql:string,params?:any[]}} statements
- */
-async function executeD1RestQuery(restConfig, statements) {
-  if (!restConfig || !restConfig.accountId || !restConfig.databaseId || !restConfig.apiToken) {
-    throw new Error('D1 REST configuration is incomplete');
-  }
-  const endpoint = `https://api.cloudflare.com/client/v4/accounts/${restConfig.accountId}/d1/database/${restConfig.databaseId}/query`;
-  const payload = Array.isArray(statements) ? statements : [statements];
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${restConfig.apiToken}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok) {
-    const text = await response.text().catch(() => '');
-    throw new Error(`D1 REST API error (${response.status}): ${text}`);
-  }
-  const result = await response.json().catch(() => ({}));
-  if (result && result.success === false) {
-    throw new Error(`D1 REST API query failed: ${JSON.stringify(result.errors || [])}`);
-  }
-  return result?.result || [];
-}
-
 const hopByHopHeaders = new Set([
   'connection',
   'keep-alive',
@@ -891,17 +851,18 @@ const resolveConfig = (env = {}) => {
   }
 
   // Parse database mode for rate limiting
-  const dbMode = env.DB_MODE && typeof env.DB_MODE === 'string' ? env.DB_MODE.trim() : '';
-  const hasDbMode = typeof dbMode === 'string' && dbMode.length > 0;
+  const dbModeRaw = env.DB_MODE && typeof env.DB_MODE === 'string' ? env.DB_MODE.trim() : '';
+  const normalizedDbMode = dbModeRaw ? dbModeRaw.toLowerCase() : '';
+  const dbMode = normalizedDbMode === 'custom-pg-rest' ? 'custom-pg-rest' : '';
+  const hasDbMode = dbMode === 'custom-pg-rest';
+  if (normalizedDbMode && !hasDbMode) {
+    throw new Error(`Invalid DB_MODE: "${dbModeRaw}". Only "" or "custom-pg-rest" are supported.`);
+  }
   const enableCfRatelimiter = normalizeString(env.ENABLE_CF_RATELIMITER, 'false').toLowerCase() === 'true';
   const cfRatelimiterBinding = normalizeString(env.CF_RATELIMITER_BINDING, 'CF_RATE_LIMITER');
-  let d1DatabaseBinding = '';
-  let d1AccountId = '';
-  let d1DatabaseId = '';
-  let d1ApiToken = '';
   let postgrestUrl = '';
 
-  if (!dbMode) {
+  if (!hasDbMode) {
     turnstileTokenBindingEnabled = false;
   }
 
@@ -980,193 +941,72 @@ const resolveConfig = (env = {}) => {
   let rateLimitConfig = {};
   let cacheEnabled = false;
   let cacheConfig = {};
-  let d1RestConfig = null;
+  const ipRateLimitActive = Boolean(hasDbMode && windowTimeSeconds > 0 && ipSubnetLimit > 0);
+  const fileRateLimitActive = Boolean(hasDbMode && fileWindowTimeSeconds > 0 && fileLimit > 0);
 
-  const ipRateLimitActive = Boolean(dbMode && windowTimeSeconds > 0 && ipSubnetLimit > 0);
-  const fileRateLimitActive = Boolean(dbMode && fileWindowTimeSeconds > 0 && fileLimit > 0);
-
-  if (dbMode && ipSubnetLimit === 0 && !ipRateLimitDisabledLogged) {
+  if (hasDbMode && ipSubnetLimit === 0 && !ipRateLimitDisabledLogged) {
     console.log('IP rate limiting disabled (limit=0)');
     ipRateLimitDisabledLogged = true;
   }
 
-  if (dbMode) {
-    const normalizedDbMode = dbMode.toLowerCase();
+  if (hasDbMode) {
+    // Custom PostgreSQL REST API (PostgREST) configuration
+    postgrestUrl = env.POSTGREST_URL && typeof env.POSTGREST_URL === 'string' ? env.POSTGREST_URL.trim() : '';
+    const postgrestTableName = env.POSTGREST_TABLE_NAME && typeof env.POSTGREST_TABLE_NAME === 'string' ? env.POSTGREST_TABLE_NAME.trim() : '';
 
-    if (normalizedDbMode === 'd1') {
-      // D1 (Cloudflare D1 Binding) configuration
-      d1DatabaseBinding = env.D1_DATABASE_BINDING && typeof env.D1_DATABASE_BINDING === 'string' ? env.D1_DATABASE_BINDING.trim() : 'DB';
-      const d1TableName = env.D1_TABLE_NAME && typeof env.D1_TABLE_NAME === 'string' ? env.D1_TABLE_NAME.trim() : '';
+    if (!postgrestUrl || verifyHeaders.length === 0 || verifySecrets.length === 0) {
+      throw new Error('DB_MODE is set to "custom-pg-rest" but POSTGREST_URL, VERIFY_HEADER, or VERIFY_SECRET is missing');
+    }
+    if (ipSubnetLimit > 0 && windowTimeSeconds <= 0) {
+      throw new Error('WINDOW_TIME must be greater than zero when IPSUBNET_WINDOWTIME_LIMIT > 0');
+    }
+    if (fileLimit > 0 && fileWindowTimeSeconds <= 0) {
+      throw new Error('FILE_WINDOW_TIME must be greater than zero when IPSUBNET_FILE_WINDOWTIME_LIMIT > 0');
+    }
 
-      if (!d1DatabaseBinding) {
-        throw new Error('DB_MODE is set to "d1" but D1_DATABASE_BINDING is missing');
-      }
+    rateLimitConfig = {
+      postgrestUrl,
+      verifyHeader: verifyHeaders,
+      verifySecret: verifySecrets,
+      tableName: postgrestTableName || 'IP_LIMIT_TABLE',
+      windowTimeSeconds,
+      limit: ipSubnetLimit,
+      ipv4Suffix,
+      ipv6Suffix,
+      pgErrorHandle: validPgErrorHandle,
+      cleanupProbability,
+      blockTimeSeconds,
+      fileLimit,
+      fileWindowTimeSeconds,
+      fileBlockTimeSeconds,
+      fileTableName: 'IP_FILE_LIMIT_TABLE',
+      ipRateLimitEnabled: ipRateLimitActive,
+      fileRateLimitEnabled: fileRateLimitActive,
+    };
 
-      if (ipSubnetLimit > 0 && windowTimeSeconds <= 0) {
-        throw new Error('WINDOW_TIME must be greater than zero when IPSUBNET_WINDOWTIME_LIMIT > 0');
-      }
-      if (fileLimit > 0 && fileWindowTimeSeconds <= 0) {
-        throw new Error('FILE_WINDOW_TIME must be greater than zero when IPSUBNET_FILE_WINDOWTIME_LIMIT > 0');
-      }
+    rateLimitEnabled = Boolean(ipRateLimitActive || fileRateLimitActive);
 
-      rateLimitConfig = {
-        env, // Pass env object so rate limiter can access the binding
-        databaseBinding: d1DatabaseBinding,
-        tableName: d1TableName || 'IP_LIMIT_TABLE',
-        windowTimeSeconds,
-        limit: ipSubnetLimit,
-        ipv4Suffix,
-        ipv6Suffix,
-        pgErrorHandle: validPgErrorHandle,
-        cleanupProbability,
-        blockTimeSeconds,
-        fileLimit,
-        fileWindowTimeSeconds,
-        fileBlockTimeSeconds,
-        fileTableName: 'IP_FILE_LIMIT_TABLE',
-        ipRateLimitEnabled: ipRateLimitActive,
-        fileRateLimitEnabled: fileRateLimitActive,
-      };
-
-      rateLimitEnabled = Boolean(ipRateLimitActive || fileRateLimitActive);
-
-      if (sizeTTLSeconds > 0) {
-        cacheEnabled = true;
-        cacheConfig = {
-          env,
-          databaseBinding: d1DatabaseBinding,
-          tableName: filesizeCacheTableName,
-          sizeTTL: sizeTTLSeconds,
-          cleanupProbability,
-        };
-      }
-    } else if (normalizedDbMode === 'd1-rest') {
-      // D1 REST API configuration
-      d1AccountId = env.D1_ACCOUNT_ID && typeof env.D1_ACCOUNT_ID === 'string' ? env.D1_ACCOUNT_ID.trim() : '';
-      d1DatabaseId = env.D1_DATABASE_ID && typeof env.D1_DATABASE_ID === 'string' ? env.D1_DATABASE_ID.trim() : '';
-      d1ApiToken = env.D1_API_TOKEN && typeof env.D1_API_TOKEN === 'string' ? env.D1_API_TOKEN.trim() : '';
-      const d1TableName = env.D1_TABLE_NAME && typeof env.D1_TABLE_NAME === 'string' ? env.D1_TABLE_NAME.trim() : '';
-
-      if (!d1AccountId || !d1DatabaseId || !d1ApiToken) {
-        throw new Error('DB_MODE is set to "d1-rest" but D1_ACCOUNT_ID, D1_DATABASE_ID, or D1_API_TOKEN is missing');
-      }
-      if (ipSubnetLimit > 0 && windowTimeSeconds <= 0) {
-        throw new Error('WINDOW_TIME must be greater than zero when IPSUBNET_WINDOWTIME_LIMIT > 0');
-      }
-      if (fileLimit > 0 && fileWindowTimeSeconds <= 0) {
-        throw new Error('FILE_WINDOW_TIME must be greater than zero when IPSUBNET_FILE_WINDOWTIME_LIMIT > 0');
-      }
-
-      rateLimitConfig = {
-        accountId: d1AccountId,
-        databaseId: d1DatabaseId,
-        apiToken: d1ApiToken,
-        tableName: d1TableName || 'IP_LIMIT_TABLE',
-        windowTimeSeconds,
-        limit: ipSubnetLimit,
-        ipv4Suffix,
-        ipv6Suffix,
-        pgErrorHandle: validPgErrorHandle,
-        cleanupProbability,
-        blockTimeSeconds,
-        fileLimit,
-        fileWindowTimeSeconds,
-        fileBlockTimeSeconds,
-        fileTableName: 'IP_FILE_LIMIT_TABLE',
-        ipRateLimitEnabled: ipRateLimitActive,
-        fileRateLimitEnabled: fileRateLimitActive,
-      };
-
-      rateLimitEnabled = Boolean(ipRateLimitActive || fileRateLimitActive);
-
-      if (sizeTTLSeconds > 0) {
-        cacheEnabled = true;
-        cacheConfig = {
-          accountId: d1AccountId,
-          databaseId: d1DatabaseId,
-          apiToken: d1ApiToken,
-          tableName: filesizeCacheTableName,
-          sizeTTL: sizeTTLSeconds,
-          cleanupProbability,
-        };
-      }
-
-      d1RestConfig = {
-        accountId: d1AccountId,
-        databaseId: d1DatabaseId,
-        apiToken: d1ApiToken,
-      };
-    } else if (normalizedDbMode === 'custom-pg-rest') {
-      // Custom PostgreSQL REST API (PostgREST) configuration
-      postgrestUrl = env.POSTGREST_URL && typeof env.POSTGREST_URL === 'string' ? env.POSTGREST_URL.trim() : '';
-      const postgrestTableName = env.POSTGREST_TABLE_NAME && typeof env.POSTGREST_TABLE_NAME === 'string' ? env.POSTGREST_TABLE_NAME.trim() : '';
-
-      if (!postgrestUrl || verifyHeaders.length === 0 || verifySecrets.length === 0) {
-        throw new Error('DB_MODE is set to "custom-pg-rest" but POSTGREST_URL, VERIFY_HEADER, or VERIFY_SECRET is missing');
-      }
-      if (ipSubnetLimit > 0 && windowTimeSeconds <= 0) {
-        throw new Error('WINDOW_TIME must be greater than zero when IPSUBNET_WINDOWTIME_LIMIT > 0');
-      }
-      if (fileLimit > 0 && fileWindowTimeSeconds <= 0) {
-        throw new Error('FILE_WINDOW_TIME must be greater than zero when IPSUBNET_FILE_WINDOWTIME_LIMIT > 0');
-      }
-
-      rateLimitConfig = {
+    if (sizeTTLSeconds > 0) {
+      cacheEnabled = true;
+      cacheConfig = {
         postgrestUrl,
         verifyHeader: verifyHeaders,
         verifySecret: verifySecrets,
-        tableName: postgrestTableName || 'IP_LIMIT_TABLE',
-        windowTimeSeconds,
-        limit: ipSubnetLimit,
-        ipv4Suffix,
-        ipv6Suffix,
-        pgErrorHandle: validPgErrorHandle,
+        tableName: filesizeCacheTableName,
+        sizeTTL: sizeTTLSeconds,
         cleanupProbability,
-        blockTimeSeconds,
-        fileLimit,
-        fileWindowTimeSeconds,
-        fileBlockTimeSeconds,
-        fileTableName: 'IP_FILE_LIMIT_TABLE',
-        ipRateLimitEnabled: ipRateLimitActive,
-        fileRateLimitEnabled: fileRateLimitActive,
       };
-
-      rateLimitEnabled = Boolean(ipRateLimitActive || fileRateLimitActive);
-
-      if (sizeTTLSeconds > 0) {
-        cacheEnabled = true;
-        cacheConfig = {
-          postgrestUrl,
-          verifyHeader: verifyHeaders,
-          verifySecret: verifySecrets,
-          tableName: filesizeCacheTableName,
-          sizeTTL: sizeTTLSeconds,
-          cleanupProbability,
-        };
-      } else {
-        console.warn('[CONFIG] Cache DISABLED: sizeTTLSeconds =', sizeTTLSeconds);
-      }
     } else {
-      throw new Error(`Invalid DB_MODE: "${dbMode}". Valid options are: "d1", "d1-rest", "custom-pg-rest"`);
+      console.warn('[CONFIG] Cache DISABLED: sizeTTLSeconds =', sizeTTLSeconds);
     }
   }
 
   const idleTimeoutRaw = normalizeString(env.IDLE_TIMEOUT, '0');
-  let idleTimeoutSeconds = parseWindowTime(idleTimeoutRaw);
+  let idleTimeoutSeconds = hasDbMode ? parseWindowTime(idleTimeoutRaw) : 0;
   if (!Number.isFinite(idleTimeoutSeconds) || idleTimeoutSeconds < 0) {
     idleTimeoutSeconds = 0;
   }
 
-  const idleDbModeCandidate = env.IDLE_DB_MODE && typeof env.IDLE_DB_MODE === 'string'
-    ? env.IDLE_DB_MODE.trim()
-    : '';
-  const idleDbMode = idleDbModeCandidate || dbMode;
-
-  const idleD1DatabaseBinding = normalizeString(env.IDLE_D1_DATABASE_BINDING, '') || d1DatabaseBinding;
-  const idleD1AccountId = normalizeString(env.IDLE_D1_ACCOUNT_ID, '') || d1AccountId;
-  const idleD1DatabaseId = normalizeString(env.IDLE_D1_DATABASE_ID, '') || d1DatabaseId;
-  const idleD1ApiToken = normalizeString(env.IDLE_D1_API_TOKEN, '') || d1ApiToken;
-  const idlePostgrestUrl = normalizeString(env.IDLE_POSTGREST_URL, '') || postgrestUrl;
   const idleTableName = normalizeString(env.IDLE_TABLE_NAME, 'DOWNLOAD_LAST_ACTIVE_TABLE');
 
   const appendAdditional = parseBoolean(env.IF_APPEND_ADDITIONAL, true);
@@ -1298,7 +1138,6 @@ const resolveConfig = (env = {}) => {
     sizeTTL,
     sizeTTLSeconds,
     filesizeCacheTableName,
-    d1RestConfig,
     windowTime,
     ipSubnetLimit,
     fileWindowTime,
@@ -1319,12 +1158,6 @@ const resolveConfig = (env = {}) => {
     maxDurationSeconds,
     idleTimeoutRaw,
     idleTimeoutSeconds,
-    idleDbMode,
-    idleD1DatabaseBinding,
-    idleD1AccountId,
-    idleD1DatabaseId,
-    idleD1ApiToken,
-    idlePostgrestUrl,
     idleTableName,
     initTables,
     crypt: {
@@ -1566,40 +1399,6 @@ const normalizeAltchaStateRow = (row) => {
   };
 };
 
-const readAltchaStateFromD1 = async (db, ipHash) => {
-  if (!db || !ipHash) {
-    return null;
-  }
-  try {
-    const row = await db.prepare(
-      `SELECT LEVEL, LAST_SUCCESS_AT, BLOCK_UNTIL FROM ${ALTCHA_DIFFICULTY_TABLE} WHERE IP_HASH = ? LIMIT 1`
-    ).bind(ipHash).first();
-    return normalizeAltchaStateRow(row);
-  } catch (error) {
-    console.error('[ALTCHA Dynamic] D1 read failed:', error instanceof Error ? error.message : String(error));
-    return null;
-  }
-};
-
-const readAltchaStateFromD1Rest = async (restConfig, ipHash) => {
-  if (!restConfig || !ipHash) {
-    return null;
-  }
-  try {
-    const sql = `SELECT LEVEL, LAST_SUCCESS_AT, BLOCK_UNTIL FROM ${ALTCHA_DIFFICULTY_TABLE} WHERE IP_HASH = ? LIMIT 1`;
-    const result = await executeD1RestQuery(restConfig, { sql, params: [ipHash] });
-    if (Array.isArray(result) && result.length > 0) {
-      const rows = Array.isArray(result[0]?.results) ? result[0].results : [];
-      if (rows.length > 0) {
-        return normalizeAltchaStateRow(rows[0]);
-      }
-    }
-  } catch (error) {
-    console.error('[ALTCHA Dynamic] D1 REST read failed:', error instanceof Error ? error.message : String(error));
-  }
-  return null;
-};
-
 const buildTurnstileCData = async (secret, bindingMac, nonce) => {
   if (!secret || typeof secret !== 'string' || secret.length === 0) {
     return '';
@@ -1624,89 +1423,39 @@ const fetchAltchaDifficultyState = async (config, env, ipHash) => {
     return null;
   }
   const dbMode = getNormalizedDbMode(config);
-  if (!dbMode) {
+  if (dbMode !== 'custom-pg-rest') {
     return null;
   }
   try {
-    if (dbMode === 'custom-pg-rest') {
-      const postgrestUrl = config.rateLimitConfig?.postgrestUrl;
-      if (!postgrestUrl) {
-        return null;
-      }
-      const rpcUrl = `${postgrestUrl}/rpc/landing_get_altcha_difficulty`;
-      const headers = { 'Content-Type': 'application/json' };
-      applyVerifyHeaders(headers, config.verifyHeader, config.verifySecret);
-      const response = await fetch(rpcUrl, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          p_ip_hash: ipHash,
-          p_table_name: ALTCHA_DIFFICULTY_TABLE,
-        }),
-      });
-      if (!response.ok) {
-        const text = await response.text().catch(() => '');
-        console.error('[ALTCHA Dynamic] PostgREST fetch failed:', response.status, text);
-        return null;
-      }
-      const payload = await response.json().catch(() => null);
-      if (Array.isArray(payload) && payload.length > 0) {
-        return normalizeAltchaStateRow(payload[0]);
-      }
+    const postgrestUrl = config.rateLimitConfig?.postgrestUrl;
+    if (!postgrestUrl) {
       return null;
     }
-    if (dbMode === 'd1') {
-      const db = resolveD1DatabaseBinding(config, env);
-      return await readAltchaStateFromD1(db, ipHash);
+    const rpcUrl = `${postgrestUrl}/rpc/landing_get_altcha_difficulty`;
+    const headers = { 'Content-Type': 'application/json' };
+    applyVerifyHeaders(headers, config.verifyHeader, config.verifySecret);
+    const response = await fetch(rpcUrl, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        p_ip_hash: ipHash,
+        p_table_name: ALTCHA_DIFFICULTY_TABLE,
+      }),
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      console.error('[ALTCHA Dynamic] PostgREST fetch failed:', response.status, text);
+      return null;
     }
-    if (dbMode === 'd1-rest') {
-      const restConfig = config.d1RestConfig;
-      return await readAltchaStateFromD1Rest(restConfig, ipHash);
+    const payload = await response.json().catch(() => null);
+    if (Array.isArray(payload) && payload.length > 0) {
+      return normalizeAltchaStateRow(payload[0]);
     }
+    return null;
   } catch (error) {
     console.error('[ALTCHA Dynamic] Failed to fetch state:', error instanceof Error ? error.message : String(error));
   }
   return null;
-};
-
-const upsertAltchaDifficultyStateD1 = async (db, scope, cfg, nowSeconds) => {
-  if (!db || !scope?.ipHash || !scope?.ipRange || !cfg) {
-    return;
-  }
-  const prev = await readAltchaStateFromD1(db, scope.ipHash);
-  const next = computeNextAltchaDifficultyState(prev, nowSeconds, cfg);
-  await db.prepare(
-    `
-      INSERT INTO ${ALTCHA_DIFFICULTY_TABLE} (IP_HASH, IP_RANGE, LEVEL, LAST_SUCCESS_AT, BLOCK_UNTIL)
-      VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(IP_HASH) DO UPDATE SET
-        IP_RANGE = excluded.IP_RANGE,
-        LEVEL = excluded.LEVEL,
-        LAST_SUCCESS_AT = excluded.LAST_SUCCESS_AT,
-        BLOCK_UNTIL = excluded.BLOCK_UNTIL
-    `
-  ).bind(scope.ipHash, scope.ipRange, next.level, next.lastSuccessAt, next.blockUntil ?? null).run();
-};
-
-const upsertAltchaDifficultyStateD1Rest = async (restConfig, scope, cfg, nowSeconds) => {
-  if (!restConfig || !scope?.ipHash || !scope?.ipRange || !cfg) {
-    return;
-  }
-  const prev = await readAltchaStateFromD1Rest(restConfig, scope.ipHash);
-  const next = computeNextAltchaDifficultyState(prev, nowSeconds, cfg);
-  const sql = `
-    INSERT INTO ${ALTCHA_DIFFICULTY_TABLE} (IP_HASH, IP_RANGE, LEVEL, LAST_SUCCESS_AT, BLOCK_UNTIL)
-    VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT(IP_HASH) DO UPDATE SET
-      IP_RANGE = excluded.IP_RANGE,
-      LEVEL = excluded.LEVEL,
-      LAST_SUCCESS_AT = excluded.LAST_SUCCESS_AT,
-      BLOCK_UNTIL = excluded.BLOCK_UNTIL
-  `;
-  await executeD1RestQuery(restConfig, {
-    sql,
-    params: [scope.ipHash, scope.ipRange, next.level, next.lastSuccessAt, next.blockUntil ?? null],
-  });
 };
 
 const updateAltchaDifficultyState = async (config, env, scope, nowSeconds) => {
@@ -1747,23 +1496,6 @@ const updateAltchaDifficultyState = async (config, env, scope, nowSeconds) => {
       }
       return;
     }
-    if (dbMode === 'd1') {
-      const db = resolveD1DatabaseBinding(config, env);
-      if (!db) {
-        console.warn('[ALTCHA Dynamic] D1 binding unavailable for update');
-        return;
-      }
-      await upsertAltchaDifficultyStateD1(db, scope, config.altchaDynamic, nowSeconds);
-      return;
-    }
-    if (dbMode === 'd1-rest') {
-      const restConfig = config.d1RestConfig;
-      if (!restConfig) {
-        console.warn('[ALTCHA Dynamic] D1 REST config unavailable for update');
-        return;
-      }
-      await upsertAltchaDifficultyStateD1Rest(restConfig, scope, config.altchaDynamic, nowSeconds);
-    }
   } catch (error) {
     console.error('[ALTCHA Dynamic] Failed to update state:', error instanceof Error ? error.message : String(error));
   }
@@ -1771,135 +1503,45 @@ const updateAltchaDifficultyState = async (config, env, scope, nowSeconds) => {
 
 const normalizePowdetStateRow = normalizeAltchaStateRow;
 
-const readPowdetStateFromD1 = async (db, ipHash, tableName = POWDET_DIFFICULTY_TABLE) => {
-  if (!db || !ipHash) {
-    return null;
-  }
-  try {
-    const row = await db.prepare(
-      `SELECT LEVEL, LAST_SUCCESS_AT, BLOCK_UNTIL FROM ${tableName} WHERE IP_HASH = ? LIMIT 1`
-    ).bind(ipHash).first();
-    return normalizePowdetStateRow(row);
-  } catch (error) {
-    console.error('[Powdet Dynamic] D1 read failed:', error instanceof Error ? error.message : String(error));
-    return null;
-  }
-};
-
-const readPowdetStateFromD1Rest = async (restConfig, ipHash, tableName = POWDET_DIFFICULTY_TABLE) => {
-  if (!restConfig || !ipHash) {
-    return null;
-  }
-  try {
-    const sql = `SELECT LEVEL, LAST_SUCCESS_AT, BLOCK_UNTIL FROM ${tableName} WHERE IP_HASH = ? LIMIT 1`;
-    const result = await executeD1RestQuery(restConfig, { sql, params: [ipHash] });
-    if (Array.isArray(result) && result.length > 0) {
-      const rows = Array.isArray(result[0]?.results) ? result[0].results : [];
-      if (rows.length > 0) {
-        return normalizePowdetStateRow(rows[0]);
-      }
-    }
-  } catch (error) {
-    console.error('[Powdet Dynamic] D1 REST read failed:', error instanceof Error ? error.message : String(error));
-  }
-  return null;
-};
-
 const fetchPowdetDifficultyState = async (config, env, ipHash) => {
   if (!config?.powdetDynamic || !ipHash) {
     return null;
   }
   const dbMode = getNormalizedDbMode(config);
-  if (!dbMode) {
+  if (dbMode !== 'custom-pg-rest') {
     return null;
   }
   const tableName = config.powdetDifficultyTableName || POWDET_DIFFICULTY_TABLE;
   try {
-    if (dbMode === 'custom-pg-rest') {
-      const postgrestUrl = config.rateLimitConfig?.postgrestUrl;
-      if (!postgrestUrl) {
-        return null;
-      }
-      const rpcUrl = `${postgrestUrl}/rpc/landing_get_altcha_difficulty`;
-      const headers = { 'Content-Type': 'application/json' };
-      applyVerifyHeaders(headers, config.verifyHeader, config.verifySecret);
-      const response = await fetch(rpcUrl, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          p_ip_hash: ipHash,
-          p_table_name: tableName,
-        }),
-      });
-      if (!response.ok) {
-        const text = await response.text().catch(() => '');
-        console.error('[Powdet Dynamic] PostgREST fetch failed:', response.status, text);
-        return null;
-      }
-      const payload = await response.json().catch(() => null);
-      if (Array.isArray(payload) && payload.length > 0) {
-        return normalizePowdetStateRow(payload[0]);
-      }
+    const postgrestUrl = config.rateLimitConfig?.postgrestUrl;
+    if (!postgrestUrl) {
       return null;
     }
-    if (dbMode === 'd1') {
-      const db = resolveD1DatabaseBinding(config, env);
-      return await readPowdetStateFromD1(db, ipHash, tableName);
+    const rpcUrl = `${postgrestUrl}/rpc/landing_get_altcha_difficulty`;
+    const headers = { 'Content-Type': 'application/json' };
+    applyVerifyHeaders(headers, config.verifyHeader, config.verifySecret);
+    const response = await fetch(rpcUrl, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        p_ip_hash: ipHash,
+        p_table_name: tableName,
+      }),
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      console.error('[Powdet Dynamic] PostgREST fetch failed:', response.status, text);
+      return null;
     }
-    if (dbMode === 'd1-rest') {
-      const restConfig = config.d1RestConfig;
-      return await readPowdetStateFromD1Rest(restConfig, ipHash, tableName);
+    const payload = await response.json().catch(() => null);
+    if (Array.isArray(payload) && payload.length > 0) {
+      return normalizePowdetStateRow(payload[0]);
     }
+    return null;
   } catch (error) {
     console.error('[Powdet Dynamic] Failed to fetch state:', error instanceof Error ? error.message : String(error));
   }
   return null;
-};
-
-const upsertPowdetDifficultyStateD1 = async (db, scope, cfg, nowSeconds, tableName = POWDET_DIFFICULTY_TABLE) => {
-  if (!db || !scope?.ipHash || !scope?.ipRange || !cfg) {
-    return;
-  }
-  const prev = await readPowdetStateFromD1(db, scope.ipHash, tableName);
-  const next = computeNextPowdetDifficultyState(prev, nowSeconds, cfg);
-  await db.prepare(
-    `
-      INSERT INTO ${tableName} (IP_HASH, IP_RANGE, LEVEL, LAST_SUCCESS_AT, BLOCK_UNTIL)
-      VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(IP_HASH) DO UPDATE SET
-        IP_RANGE = excluded.IP_RANGE,
-        LEVEL = excluded.LEVEL,
-        LAST_SUCCESS_AT = excluded.LAST_SUCCESS_AT,
-        BLOCK_UNTIL = excluded.BLOCK_UNTIL
-    `
-  ).bind(scope.ipHash, scope.ipRange, next.level, next.lastSuccessAt, next.blockUntil ?? null).run();
-};
-
-const upsertPowdetDifficultyStateD1Rest = async (
-  restConfig,
-  scope,
-  cfg,
-  nowSeconds,
-  tableName = POWDET_DIFFICULTY_TABLE
-) => {
-  if (!restConfig || !scope?.ipHash || !scope?.ipRange || !cfg) {
-    return;
-  }
-  const prev = await readPowdetStateFromD1Rest(restConfig, scope.ipHash, tableName);
-  const next = computeNextPowdetDifficultyState(prev, nowSeconds, cfg);
-  const sql = `
-    INSERT INTO ${tableName} (IP_HASH, IP_RANGE, LEVEL, LAST_SUCCESS_AT, BLOCK_UNTIL)
-    VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT(IP_HASH) DO UPDATE SET
-      IP_RANGE = excluded.IP_RANGE,
-      LEVEL = excluded.LEVEL,
-      LAST_SUCCESS_AT = excluded.LAST_SUCCESS_AT,
-      BLOCK_UNTIL = excluded.BLOCK_UNTIL
-  `;
-  await executeD1RestQuery(restConfig, {
-    sql,
-    params: [scope.ipHash, scope.ipRange, next.level, next.lastSuccessAt, next.blockUntil ?? null],
-  });
 };
 
 const updatePowdetDifficultyState = async (config, env, scope, nowSeconds) => {
@@ -1940,23 +1582,6 @@ const updatePowdetDifficultyState = async (config, env, scope, nowSeconds) => {
         console.error('[Powdet Dynamic] PostgREST update failed:', response.status, text);
       }
       return;
-    }
-    if (dbMode === 'd1') {
-      const db = resolveD1DatabaseBinding(config, env);
-      if (!db) {
-        console.warn('[Powdet Dynamic] D1 binding unavailable for update');
-        return;
-      }
-      await upsertPowdetDifficultyStateD1(db, scope, config.powdetDynamic, nowSeconds, tableName);
-      return;
-    }
-    if (dbMode === 'd1-rest') {
-      const restConfig = config.d1RestConfig;
-      if (!restConfig) {
-        console.warn('[Powdet Dynamic] D1 REST config unavailable for update');
-        return;
-      }
-      await upsertPowdetDifficultyStateD1Rest(restConfig, scope, config.powdetDynamic, nowSeconds, tableName);
     }
   } catch (error) {
     console.error('[Powdet Dynamic] Failed to update state:', error instanceof Error ? error.message : String(error));
@@ -2248,42 +1873,6 @@ const fetchFilesizeFromCache = async (config, pathHash) => {
       return 0;
     }
 
-    if (normalizedDbMode === 'd1') {
-      const envSource = config.cacheConfig?.env || config.rateLimitConfig?.env;
-      const bindingName = config.cacheConfig?.databaseBinding || config.rateLimitConfig?.databaseBinding || 'DB';
-      const db = envSource ? envSource[bindingName] : null;
-      if (!db || typeof db.prepare !== 'function') {
-        return 0;
-      }
-      const statement = db.prepare(`SELECT FILE_SIZE FROM ${tableName} WHERE PATH_HASH = ? LIMIT 1`);
-      const result = await statement.bind(pathHash).first();
-      if (result) {
-        const value = result.FILE_SIZE ?? result.file_size ?? result.size ?? result.SIZE;
-        return parseFileSize(value);
-      }
-      return 0;
-    }
-
-    if (normalizedDbMode === 'd1-rest') {
-      const restConfig = config.d1RestConfig || config.cacheConfig;
-      if (!restConfig || !restConfig.accountId || !restConfig.databaseId || !restConfig.apiToken) {
-        return 0;
-      }
-      const statements = {
-        sql: `SELECT FILE_SIZE FROM ${tableName} WHERE PATH_HASH = ? LIMIT 1`,
-        params: [pathHash],
-      };
-      const queryResults = await executeD1RestQuery(restConfig, statements);
-      if (Array.isArray(queryResults) && queryResults.length > 0) {
-        const statementResult = queryResults[0];
-        const rows = Array.isArray(statementResult?.results) ? statementResult.results : [];
-        if (rows.length > 0) {
-          const value = rows[0]?.FILE_SIZE ?? rows[0]?.file_size ?? rows[0]?.size ?? rows[0]?.SIZE;
-          return parseFileSize(value);
-        }
-      }
-      return 0;
-    }
   } catch (error) {
     console.warn('[Landing] Filesize cache lookup failed:', error instanceof Error ? error.message : String(error));
   }
@@ -2428,18 +2017,14 @@ const createDownloadURL = async (
       writeIdleInitialRecord(ctx, {
         clientIP,
         path: decodedPath,
-        idleDbMode: config.idleDbMode,
-        idleD1DatabaseBinding: config.idleD1DatabaseBinding,
-        idleD1AccountId: config.idleD1AccountId,
-        idleD1DatabaseId: config.idleD1DatabaseId,
-        idleD1ApiToken: config.idleD1ApiToken,
-        idlePostgrestUrl: config.idlePostgrestUrl,
+        dbMode: config.dbMode,
+        rateLimitConfig: config.rateLimitConfig,
+        cacheConfig: config.cacheConfig,
         verifyHeader: config.verifyHeader,
         verifySecret: config.verifySecret,
         idleTableName: config.idleTableName,
         ipv4Suffix: config.ipv4Suffix,
         ipv6Suffix: config.ipv6Suffix,
-        env: config.env,
       })
     );
   }
@@ -2456,36 +2041,21 @@ async function writeIdleInitialRecord(ctx, config) {
   const {
     clientIP,
     path,
-    idleDbMode,
-    idleD1DatabaseBinding,
-    idleD1AccountId,
-    idleD1DatabaseId,
-    idleD1ApiToken,
-    idlePostgrestUrl,
+    dbMode,
+    rateLimitConfig,
+    cacheConfig,
     verifyHeader,
     verifySecret,
     idleTableName,
     ipv4Suffix,
     ipv6Suffix,
-    env,
   } = config || {};
 
-  if (!clientIP || !path) {
+  if (!clientIP || !path || dbMode !== 'custom-pg-rest' || !idleTableName) {
     return;
   }
 
   try {
-    const normalizedIdleDbMode =
-      typeof idleDbMode === 'string' ? idleDbMode.trim().toLowerCase() : '';
-    if (!normalizedIdleDbMode) {
-      return;
-    }
-
-    if (!idleTableName) {
-      console.log('[IDLE] Table name missing');
-      return;
-    }
-
     const ipSubnet = calculateIPSubnet(clientIP, ipv4Suffix, ipv6Suffix);
     if (!ipSubnet) {
       console.log('[IDLE] Failed to calculate IP subnet');
@@ -2504,101 +2074,37 @@ async function writeIdleInitialRecord(ctx, config) {
 
     const now = Math.floor(Date.now() / 1000);
 
-    if (normalizedIdleDbMode === 'd1') {
-      if (!env) {
-        console.log('[IDLE] Env binding not available for D1 mode');
-        return;
-      }
-      const bindingName = idleD1DatabaseBinding || 'DB';
-      const db = env[bindingName];
-      if (!db || typeof db.prepare !== 'function') {
-        console.log('[IDLE] D1 database binding not found');
-        return;
-      }
-
-      await db
-        .prepare(`
-        INSERT INTO ${idleTableName} (IP_HASH, PATH_HASH, LAST_ACCESS_TIME, TOTAL_ACCESS_COUNT)
-        VALUES (?, ?, ?, 0)
-        ON CONFLICT (IP_HASH, PATH_HASH) DO UPDATE SET
-          LAST_ACCESS_TIME = excluded.LAST_ACCESS_TIME
-      `)
-        .bind(ipHash, pathHash, now)
-        .run();
-
-      console.log('[IDLE] D1 write success');
+    const idlePostgrestUrl =
+      rateLimitConfig?.postgrestUrl || cacheConfig?.postgrestUrl;
+    if (!idlePostgrestUrl) {
+      console.log('[IDLE] PostgREST URL missing');
       return;
     }
 
-    if (normalizedIdleDbMode === 'd1-rest') {
-      if (!idleD1AccountId || !idleD1DatabaseId || !idleD1ApiToken) {
-        console.log('[IDLE] D1 REST configuration incomplete');
-        return;
-      }
+    const headers = {
+      'Content-Type': 'application/json',
+      Prefer: 'return=representation',
+    };
+    applyVerifyHeaders(headers, verifyHeader, verifySecret);
 
-      const response = await fetch(
-        `https://api.cloudflare.com/client/v4/accounts/${idleD1AccountId}/d1/database/${idleD1DatabaseId}/query`,
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${idleD1ApiToken}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            sql: `INSERT INTO ${idleTableName} (IP_HASH, PATH_HASH, LAST_ACCESS_TIME, TOTAL_ACCESS_COUNT) VALUES (?, ?, ?, 0) ON CONFLICT (IP_HASH, PATH_HASH) DO UPDATE SET LAST_ACCESS_TIME = excluded.LAST_ACCESS_TIME`,
-            params: [ipHash, pathHash, now],
-          }),
-        }
-      );
+    const response = await fetch(`${idlePostgrestUrl}/rpc/download_update_last_active`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        p_ip_hash: ipHash,
+        p_path_hash: pathHash,
+        p_last_access_time: now,
+        p_table_name: idleTableName,
+      }),
+    });
 
-      if (!response.ok) {
-        const errorText = await response.text().catch(() => '');
-        console.log('[IDLE] D1 REST write failed:', response.status, errorText);
-        return;
-      }
-
-      console.log('[IDLE] D1 REST write success');
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => '');
+      console.log('[IDLE] PostgREST write failed:', response.status, errorText);
       return;
     }
 
-    if (normalizedIdleDbMode === 'custom-pg-rest') {
-      if (!idlePostgrestUrl) {
-        console.log('[IDLE] PostgREST URL missing');
-        return;
-      }
-
-      const headers = {
-        'Content-Type': 'application/json',
-        Prefer: 'return=representation',
-      };
-
-      if (Array.isArray(verifyHeader) && Array.isArray(verifySecret)) {
-        for (let i = 0; i < verifyHeader.length && i < verifySecret.length; i += 1) {
-          if (verifyHeader[i] && verifySecret[i]) {
-            headers[verifyHeader[i]] = verifySecret[i];
-          }
-        }
-      }
-
-      const response = await fetch(`${idlePostgrestUrl}/rpc/download_update_last_active`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          p_ip_hash: ipHash,
-          p_path_hash: pathHash,
-          p_last_access_time: now,
-          p_table_name: idleTableName,
-        }),
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text().catch(() => '');
-        console.log('[IDLE] PostgREST write failed:', response.status, errorText);
-        return;
-      }
-
-      console.log('[IDLE] PostgREST write success');
-    }
+    console.log('[IDLE] PostgREST write success');
   } catch (error) {
     console.error('[IDLE] Failed to write initial record:', error instanceof Error ? error.message : String(error));
   }
@@ -2919,9 +2425,7 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
     }
   }
 
-  const hasDbMode = typeof config.dbMode === 'string'
-    ? config.dbMode.length > 0
-    : Boolean(config.dbMode);
+  const hasDbMode = config.dbMode === 'custom-pg-rest';
   const tokenTTLSeconds = Number(config.turnstileTokenTTLSeconds) || 0;
   const tokenTableName = config.turnstileTokenTableName || 'TURNSTILE_TOKEN_BINDING';
   const altchaTableName = config.altchaTableName || 'ALTCHA_TOKEN_LIST';
@@ -2999,64 +2503,6 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
           console.error('[Turnstile Binding] PostgREST insert error:', error instanceof Error ? error.message : String(error));
         }
       })());
-    } else if (config.dbMode === 'd1') {
-      const envSource = config.cacheConfig?.env || config.rateLimitConfig?.env;
-      const bindingName = config.cacheConfig?.databaseBinding || config.rateLimitConfig?.databaseBinding || 'DB';
-      const db = envSource ? envSource[bindingName] : null;
-      if (!db) {
-        console.error('[Turnstile Binding] D1 binding not available; cannot insert token binding');
-        return;
-      }
-      const statement = db.prepare(`
-        INSERT INTO ${tokenTableName} (TOKEN_HASH, CLIENT_IP, FILEPATH_HASH, ACCESS_COUNT, CREATED_AT, UPDATED_AT, EXPIRES_AT)
-        VALUES (?, ?, ?, 0, ?, ?, ?)
-        ON CONFLICT(TOKEN_HASH) DO NOTHING
-      `).bind(tokenHash, clientIP, filepathHashValue, nowSeconds, nowSeconds, expiresAt);
-      ctx.waitUntil((async () => {
-        try {
-          await statement.run();
-        } catch (error) {
-          console.error('[Turnstile Binding] D1 insert failed:', error instanceof Error ? error.message : String(error));
-        }
-      })());
-    } else if (config.dbMode === 'd1-rest') {
-      const accountId = config.rateLimitConfig?.accountId || config.cacheConfig?.accountId;
-      const databaseId = config.rateLimitConfig?.databaseId || config.cacheConfig?.databaseId;
-      const apiToken = config.rateLimitConfig?.apiToken || config.cacheConfig?.apiToken;
-      if (!accountId || !databaseId || !apiToken) {
-        console.error('[Turnstile Binding] D1 REST credentials missing; cannot insert token binding');
-        return;
-      }
-      const sql = `
-        INSERT INTO ${tokenTableName} (TOKEN_HASH, CLIENT_IP, FILEPATH_HASH, ACCESS_COUNT, CREATED_AT, UPDATED_AT, EXPIRES_AT)
-        VALUES (?, ?, ?, 0, ?, ?, ?)
-        ON CONFLICT(TOKEN_HASH) DO NOTHING
-      `;
-      const body = {
-        sql,
-        params: [tokenHash, clientIP, filepathHashValue, nowSeconds, nowSeconds, expiresAt],
-      };
-      ctx.waitUntil((async () => {
-        try {
-          const response = await fetch(
-            `https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database/${databaseId}/query`,
-            {
-              method: 'POST',
-              headers: {
-                Authorization: `Bearer ${apiToken}`,
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify(body),
-            }
-          );
-          if (!response.ok) {
-            const text = await response.text().catch(() => '');
-            console.error('[Turnstile Binding] D1 REST insert failed:', response.status, text);
-          }
-        } catch (error) {
-          console.error('[Turnstile Binding] D1 REST insert error:', error instanceof Error ? error.message : String(error));
-        }
-      })());
     }
   };
 
@@ -3107,74 +2553,6 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
           }
         } catch (error) {
           console.error('[Turnstile Binding] PostgREST update error:', error instanceof Error ? error.message : String(error));
-        }
-      })());
-    } else if (config.dbMode === 'd1') {
-      const envSource = config.cacheConfig?.env || config.rateLimitConfig?.env;
-      const bindingName = config.cacheConfig?.databaseBinding || config.rateLimitConfig?.databaseBinding || 'DB';
-      const db = envSource ? envSource[bindingName] : null;
-      if (!db) {
-        console.error('[Turnstile Binding] D1 binding not available; cannot update token binding');
-        return;
-      }
-      const statement = db.prepare(`
-        UPDATE ${tokenTableName}
-        SET ACCESS_COUNT = MIN(ACCESS_COUNT + 1, 2147483647),
-            UPDATED_AT = ?,
-            EXPIRES_AT = CASE
-              WHEN EXPIRES_AT IS NULL OR EXPIRES_AT < ? THEN ?
-              ELSE EXPIRES_AT
-            END
-        WHERE TOKEN_HASH = ? AND CLIENT_IP = ? AND FILEPATH_HASH = ?
-      `).bind(nowSeconds, expiresAt, expiresAt, tokenHash, clientIP, filepathHashValue);
-      ctx.waitUntil((async () => {
-        try {
-          await statement.run();
-        } catch (error) {
-          console.error('[Turnstile Binding] D1 update failed:', error instanceof Error ? error.message : String(error));
-        }
-      })());
-    } else if (config.dbMode === 'd1-rest') {
-      const accountId = config.rateLimitConfig?.accountId || config.cacheConfig?.accountId;
-      const databaseId = config.rateLimitConfig?.databaseId || config.cacheConfig?.databaseId;
-      const apiToken = config.rateLimitConfig?.apiToken || config.cacheConfig?.apiToken;
-      if (!accountId || !databaseId || !apiToken) {
-        console.error('[Turnstile Binding] D1 REST credentials missing; cannot update token binding');
-        return;
-      }
-      const sql = `
-        UPDATE ${tokenTableName}
-        SET ACCESS_COUNT = MIN(ACCESS_COUNT + 1, 2147483647),
-            UPDATED_AT = ?,
-            EXPIRES_AT = CASE
-              WHEN EXPIRES_AT IS NULL OR EXPIRES_AT < ? THEN ?
-              ELSE EXPIRES_AT
-            END
-        WHERE TOKEN_HASH = ? AND CLIENT_IP = ? AND FILEPATH_HASH = ?
-      `;
-      const body = {
-        sql,
-        params: [nowSeconds, expiresAt, expiresAt, tokenHash, clientIP, filepathHashValue],
-      };
-      ctx.waitUntil((async () => {
-        try {
-          const response = await fetch(
-            `https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database/${databaseId}/query`,
-            {
-              method: 'POST',
-              headers: {
-                Authorization: `Bearer ${apiToken}`,
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify(body),
-            }
-          );
-          if (!response.ok) {
-            const text = await response.text().catch(() => '');
-            console.error('[Turnstile Binding] D1 REST update failed:', response.status, text);
-          }
-        } catch (error) {
-          console.error('[Turnstile Binding] D1 REST update error:', error instanceof Error ? error.message : String(error));
         }
       })());
     }
@@ -3532,67 +2910,6 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
           powdetExpireAt,
         };
         unifiedResult = await unifiedCheck(decodedPath, clientIP, config.altchaTableName, unifiedConfig);
-      } else if (config.dbMode === 'd1') {
-        unifiedResult = await unifiedCheckD1(decodedPath, clientIP, config.altchaTableName, {
-          env: config.cacheConfig.env || config.rateLimitConfig.env,
-          databaseBinding: config.cacheConfig.databaseBinding || config.rateLimitConfig.databaseBinding || 'DB',
-          sizeTTL: config.cacheConfig.sizeTTL ?? config.sizeTTLSeconds,
-          cacheTableName: config.cacheConfig.tableName || config.filesizeCacheTableName || 'FILESIZE_CACHE_TABLE',
-          windowTimeSeconds: config.rateLimitConfig.windowTimeSeconds,
-          limit: limitValue,
-          blockTimeSeconds: config.rateLimitConfig.blockTimeSeconds,
-          rateLimitTableName: config.rateLimitConfig.tableName || 'IP_LIMIT_TABLE',
-          fileLimit: config.fileLimit,
-          fileWindowTimeSeconds: config.fileWindowTimeSeconds,
-          fileBlockTimeSeconds: config.fileBlockTimeSeconds,
-          fileRateLimitTableName: config.rateLimitConfig.fileTableName || 'IP_FILE_LIMIT_TABLE',
-          ipv4Suffix: config.rateLimitConfig.ipv4Suffix,
-          ipv6Suffix: config.rateLimitConfig.ipv6Suffix,
-          turnstileTokenBinding: shouldBindToken,
-          tokenHash,
-          tokenIP: clientIP,
-          tokenTTLSeconds: config.turnstileTokenTTLSeconds,
-          tokenTableName: config.turnstileTokenTableName,
-          altchaTokenHash,
-          altchaTokenIP: clientIP,
-          altchaTableName,
-          initTables: config.initTables,
-          powdetChallengeHash,
-          powdetTableName: powTableName,
-          powdetExpireSeconds: config.powdetExpireSeconds,
-          powdetExpireAt,
-        });
-      } else if (config.dbMode === 'd1-rest') {
-        unifiedResult = await unifiedCheckD1Rest(decodedPath, clientIP, config.altchaTableName, {
-          accountId: config.rateLimitConfig.accountId || config.cacheConfig.accountId,
-          databaseId: config.rateLimitConfig.databaseId || config.cacheConfig.databaseId,
-          apiToken: config.rateLimitConfig.apiToken || config.cacheConfig.apiToken,
-          sizeTTL: config.cacheConfig.sizeTTL ?? config.sizeTTLSeconds,
-          cacheTableName: config.cacheConfig.tableName || config.filesizeCacheTableName || 'FILESIZE_CACHE_TABLE',
-          windowTimeSeconds: config.rateLimitConfig.windowTimeSeconds,
-          limit: limitValue,
-          blockTimeSeconds: config.rateLimitConfig.blockTimeSeconds,
-          rateLimitTableName: config.rateLimitConfig.tableName || 'IP_LIMIT_TABLE',
-          fileLimit: config.fileLimit,
-          fileWindowTimeSeconds: config.fileWindowTimeSeconds,
-          fileBlockTimeSeconds: config.fileBlockTimeSeconds,
-          fileRateLimitTableName: config.rateLimitConfig.fileTableName || 'IP_FILE_LIMIT_TABLE',
-          ipv4Suffix: config.rateLimitConfig.ipv4Suffix,
-          ipv6Suffix: config.rateLimitConfig.ipv6Suffix,
-          turnstileTokenBinding: shouldBindToken,
-          tokenHash,
-          tokenIP: clientIP,
-          tokenTTLSeconds: config.turnstileTokenTTLSeconds,
-          tokenTableName: config.turnstileTokenTableName,
-          altchaTokenHash,
-          altchaTokenIP: clientIP,
-          altchaTableName,
-          initTables: config.initTables,
-          powdetChallengeHash,
-          powdetTableName: powTableName,
-          powdetExpireSeconds: config.powdetExpireSeconds,
-          powdetExpireAt,
-        });
       } else {
         unifiedResult = null;
       }
@@ -3914,51 +3231,6 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
               const text = await response.text().catch(() => '');
               console.error('[ALTCHA Token Recording] PostgREST failed:', response.status, text);
             }
-          } else if (normalizedDbMode === 'd1') {
-            const envSource = config.cacheConfig?.env || config.rateLimitConfig?.env;
-            const bindingName = config.cacheConfig?.databaseBinding || config.rateLimitConfig?.databaseBinding || 'DB';
-            const db = envSource ? envSource[bindingName] : null;
-            if (!db) {
-              console.warn('[ALTCHA Token Recording] D1 binding missing');
-              return;
-            }
-            await db.prepare(`
-              INSERT INTO ${altchaTableName} (ALTCHA_TOKEN_HASH, CLIENT_IP, FILEPATH_HASH, ACCESS_COUNT, CREATED_AT, EXPIRES_AT)
-              VALUES (?, ?, ?, 1, ?, ?)
-              ON CONFLICT (ALTCHA_TOKEN_HASH) DO UPDATE SET ACCESS_COUNT = ACCESS_COUNT + 1
-            `).bind(altchaTokenHash, clientIP, filepathHash, nowSeconds, expiresAt).run();
-          } else if (normalizedDbMode === 'd1-rest') {
-            const accountId = config.rateLimitConfig?.accountId || config.cacheConfig?.accountId;
-            const databaseId = config.rateLimitConfig?.databaseId || config.cacheConfig?.databaseId;
-            const apiToken = config.rateLimitConfig?.apiToken || config.cacheConfig?.apiToken;
-            if (!accountId || !databaseId || !apiToken) {
-              console.warn('[ALTCHA Token Recording] D1 REST credentials missing');
-              return;
-            }
-            const sql = `
-              INSERT INTO ${altchaTableName} (ALTCHA_TOKEN_HASH, CLIENT_IP, FILEPATH_HASH, ACCESS_COUNT, CREATED_AT, EXPIRES_AT)
-              VALUES (?, ?, ?, 1, ?, ?)
-              ON CONFLICT (ALTCHA_TOKEN_HASH) DO UPDATE SET ACCESS_COUNT = ACCESS_COUNT + 1
-            `;
-            const body = {
-              sql,
-              params: [altchaTokenHash, clientIP, filepathHash, nowSeconds, expiresAt],
-            };
-            const response = await fetch(
-              `https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database/${databaseId}/query`,
-              {
-                method: 'POST',
-                headers: {
-                  Authorization: `Bearer ${apiToken}`,
-                  'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(body),
-              }
-            );
-            if (!response.ok) {
-              const text = await response.text().catch(() => '');
-              console.error('[ALTCHA Token Recording] D1 REST failed:', response.status, text);
-            }
           }
         } catch (error) {
           console.error('[ALTCHA Token Recording] Failed:', error instanceof Error ? error.message : String(error));
@@ -4004,29 +3276,6 @@ async function cleanupExpiredAltchaTokens(config, env) {
       return;
     }
 
-    if (config.dbMode === 'd1') {
-      const envSource = config.cacheConfig?.env || config.rateLimitConfig?.env || env;
-      const bindingName = config.cacheConfig?.databaseBinding || config.rateLimitConfig?.databaseBinding || 'DB';
-      const db = envSource ? envSource[bindingName] : null;
-      if (!db) {
-        console.error('[ALTCHA Cleanup] D1 binding not available');
-        return;
-      }
-      await db.prepare(
-        `DELETE FROM ${config.altchaTableName} WHERE EXPIRES_AT < ?`
-      ).bind(nowSeconds).run();
-      return;
-    }
-
-    if (config.dbMode === 'd1-rest') {
-      const restConfig = config.d1RestConfig;
-      if (!restConfig) {
-        console.error('[ALTCHA Cleanup] D1 REST config missing');
-        return;
-      }
-      const sql = `DELETE FROM ${config.altchaTableName} WHERE EXPIRES_AT < ?`;
-      await executeD1RestQuery(restConfig, [{ sql, params: [nowSeconds] }]);
-    }
   } catch (error) {
     console.error('[ALTCHA Cleanup] Failed:', error instanceof Error ? error.message : String(error));
   }
@@ -4065,26 +3314,6 @@ async function cleanupAltchaDifficultyState(config, env) {
       }
       return;
     }
-    if (dbMode === 'd1') {
-      const db = resolveD1DatabaseBinding(config, env);
-      if (!db) {
-        return;
-      }
-      await db.prepare(
-        `DELETE FROM ${ALTCHA_DIFFICULTY_TABLE} WHERE LAST_SUCCESS_AT < ?`
-      ).bind(cutoffTime).run();
-      return;
-    }
-    if (dbMode === 'd1-rest') {
-      const restConfig = config.d1RestConfig;
-      if (!restConfig) {
-        return;
-      }
-      await executeD1RestQuery(restConfig, [{
-        sql: `DELETE FROM ${ALTCHA_DIFFICULTY_TABLE} WHERE LAST_SUCCESS_AT < ?`,
-        params: [cutoffTime],
-      }]);
-    }
   } catch (error) {
     console.error('[ALTCHA Dynamic] Cleanup failed:', error instanceof Error ? error.message : String(error));
   }
@@ -4120,26 +3349,6 @@ async function cleanupExpiredPowdetTickets(config, env) {
         console.error('[Powdet Cleanup] PostgREST RPC failed:', error instanceof Error ? error.message : String(error));
       });
       return;
-    }
-
-    if (dbMode === 'd1') {
-      const db = resolveD1DatabaseBinding(config, env);
-      if (!db) {
-        console.error('[Powdet Cleanup] D1 binding not available');
-        return;
-      }
-      await db.prepare(`DELETE FROM ${tableName} WHERE EXPIRE_AT <= ?`).bind(nowSeconds).run();
-      return;
-    }
-
-    if (dbMode === 'd1-rest') {
-      const restConfig = config.d1RestConfig || config.cacheConfig || config.rateLimitConfig;
-      if (!restConfig) {
-        console.error('[Powdet Cleanup] D1 REST config missing');
-        return;
-      }
-      const sql = `DELETE FROM ${tableName} WHERE EXPIRE_AT <= ?`;
-      await executeD1RestQuery(restConfig, [{ sql, params: [nowSeconds] }]);
     }
   } catch (error) {
     console.error('[Powdet Cleanup] Failed:', error instanceof Error ? error.message : String(error));
@@ -4180,24 +3389,6 @@ async function cleanupPowdetDifficultyState(config, env) {
       }
       return;
     }
-    if (dbMode === 'd1') {
-      const db = resolveD1DatabaseBinding(config, env);
-      if (!db) {
-        return;
-      }
-      await db.prepare(`DELETE FROM ${tableName} WHERE LAST_SUCCESS_AT < ?`).bind(cutoffTime).run();
-      return;
-    }
-    if (dbMode === 'd1-rest') {
-      const restConfig = config.d1RestConfig;
-      if (!restConfig) {
-        return;
-      }
-      await executeD1RestQuery(restConfig, [{
-        sql: `DELETE FROM ${tableName} WHERE LAST_SUCCESS_AT < ?`,
-        params: [cutoffTime],
-      }]);
-    }
   } catch (error) {
     console.error('[Powdet Dynamic] Cleanup failed:', error instanceof Error ? error.message : String(error));
   }
@@ -4235,30 +3426,6 @@ async function cleanupExpiredTurnstileTokens(config, env) {
         console.error('[Turnstile Cleanup] PostgREST RPC failed:', response.status, text);
       }
       return;
-    }
-
-    if (config.dbMode === 'd1') {
-      const envSource = config.cacheConfig?.env || config.rateLimitConfig?.env || env;
-      const bindingName = config.cacheConfig?.databaseBinding || config.rateLimitConfig?.databaseBinding || 'DB';
-      const db = envSource ? envSource[bindingName] : null;
-      if (!db) {
-        console.error('[Turnstile Cleanup] D1 binding not available');
-        return;
-      }
-      await db.prepare(
-        `DELETE FROM ${turnstileTableName} WHERE EXPIRES_AT < ?`
-      ).bind(nowSeconds).run();
-      return;
-    }
-
-    if (config.dbMode === 'd1-rest') {
-      const restConfig = config.d1RestConfig;
-      if (!restConfig) {
-        console.error('[Turnstile Cleanup] D1 REST config missing');
-        return;
-      }
-      const sql = `DELETE FROM ${turnstileTableName} WHERE EXPIRES_AT < ?`;
-      await executeD1RestQuery(restConfig, [{ sql, params: [nowSeconds] }]);
     }
   } catch (error) {
     console.error('[Turnstile Cleanup] Failed:', error instanceof Error ? error.message : String(error));
@@ -4347,34 +3514,6 @@ async function cleanupSingleRateLimitTable(config, env, tableName, windowTimeSec
     }
     return;
   }
-
-  if (config.dbMode === 'd1') {
-    const envSource = config.cacheConfig?.env || config.rateLimitConfig?.env || env;
-    const bindingName = config.cacheConfig?.databaseBinding || config.rateLimitConfig?.databaseBinding || 'DB';
-    const db = envSource ? envSource[bindingName] : null;
-    if (!db) {
-      console.error('[Rate Limit Cleanup] D1 binding not available');
-      return;
-    }
-    await db.prepare(
-      `DELETE FROM ${tableName}
-       WHERE LAST_WINDOW_TIME < ?
-         AND (BLOCK_UNTIL IS NULL OR BLOCK_UNTIL < ?)`
-    ).bind(cutoffTime, nowSeconds).run();
-    return;
-  }
-
-  if (config.dbMode === 'd1-rest') {
-    const restConfig = config.d1RestConfig;
-    if (!restConfig) {
-      console.error('[Rate Limit Cleanup] D1 REST config missing');
-      return;
-    }
-    const sql = `DELETE FROM ${tableName}
-                 WHERE LAST_WINDOW_TIME < ?
-                   AND (BLOCK_UNTIL IS NULL OR BLOCK_UNTIL < ?)`;
-    await executeD1RestQuery(restConfig, [{ sql, params: [cutoffTime, nowSeconds] }]);
-  }
 }
 
 /**
@@ -4410,35 +3549,12 @@ async function cleanupExpiredCache(config, env) {
           p_table_name: tableName,
         }),
       });
-      if (!response.ok) {
-        const text = await response.text().catch(() => '');
-        console.error('[Cache Cleanup] PostgREST RPC failed:', response.status, text);
-      }
-      return;
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      console.error('[Cache Cleanup] PostgREST RPC failed:', response.status, text);
     }
-
-    if (config.dbMode === 'd1') {
-      const envSource = config.cacheConfig?.env || config.rateLimitConfig?.env || env;
-      const bindingName = config.cacheConfig?.databaseBinding || config.rateLimitConfig?.databaseBinding || 'DB';
-      const db = envSource ? envSource[bindingName] : null;
-      if (!db) {
-        console.error('[Cache Cleanup] D1 binding not available');
-        return;
-      }
-      const sql = `DELETE FROM ${tableName} WHERE TIMESTAMP < ?`;
-      await db.prepare(sql).bind(cutoffTime).run();
-      return;
-    }
-
-    if (config.dbMode === 'd1-rest') {
-      const restConfig = config.d1RestConfig || config.cacheConfig;
-      if (!restConfig || !restConfig.accountId) {
-        console.error('[Cache Cleanup] D1 REST config missing');
-        return;
-      }
-      const sql = `DELETE FROM ${tableName} WHERE TIMESTAMP < ?`;
-      await executeD1RestQuery(restConfig, [{ sql, params: [cutoffTime] }]);
-    }
+    return;
+  }
   } catch (error) {
     console.error('[Cache Cleanup] Failed:', error instanceof Error ? error.message : String(error));
   }
@@ -4451,7 +3567,7 @@ async function cleanupExpiredCache(config, env) {
  * @param {ExecutionContext} ctx - Workers ExecutionContext
  */
 async function scheduleAllCleanups(config, env, ctx) {
-  const hasDbMode = typeof config.dbMode === 'string' && config.dbMode.length > 0;
+  const hasDbMode = getNormalizedDbMode(config) === 'custom-pg-rest';
   if (!hasDbMode || config.cleanupPercentage <= 0) {
     return; // Skip if no DB configured or cleanup disabled
   }
@@ -4651,44 +3767,7 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
             ipv6Suffix: config.rateLimitConfig.ipv6Suffix,
           };
           unifiedResult = await unifiedCheck(decodedPath, clientIP, config.altchaTableName, unifiedConfig);
-        } else if (config.dbMode === 'd1') {
-        unifiedResult = await unifiedCheckD1(decodedPath, clientIP, config.altchaTableName, {
-          env: config.cacheConfig.env || config.rateLimitConfig.env,
-          databaseBinding: config.cacheConfig.databaseBinding || config.rateLimitConfig.databaseBinding || 'DB',
-          sizeTTL: config.cacheConfig.sizeTTL ?? config.sizeTTLSeconds,
-          cacheTableName: config.cacheConfig.tableName || config.filesizeCacheTableName || 'FILESIZE_CACHE_TABLE',
-          windowTimeSeconds: config.rateLimitConfig.windowTimeSeconds,
-          limit: limitValue,
-          blockTimeSeconds: config.rateLimitConfig.blockTimeSeconds,
-          rateLimitTableName: config.rateLimitConfig.tableName || 'IP_LIMIT_TABLE',
-          fileLimit: config.fileLimit,
-          fileWindowTimeSeconds: config.fileWindowTimeSeconds,
-          fileBlockTimeSeconds: config.fileBlockTimeSeconds,
-          fileRateLimitTableName: config.rateLimitConfig.fileTableName || 'IP_FILE_LIMIT_TABLE',
-          ipv4Suffix: config.rateLimitConfig.ipv4Suffix,
-          ipv6Suffix: config.rateLimitConfig.ipv6Suffix,
-          initTables: config.initTables,
-        });
-      } else if (config.dbMode === 'd1-rest') {
-        unifiedResult = await unifiedCheckD1Rest(decodedPath, clientIP, config.altchaTableName, {
-          accountId: config.rateLimitConfig.accountId || config.cacheConfig.accountId,
-          databaseId: config.rateLimitConfig.databaseId || config.cacheConfig.databaseId,
-          apiToken: config.rateLimitConfig.apiToken || config.cacheConfig.apiToken,
-          sizeTTL: config.cacheConfig.sizeTTL ?? config.sizeTTLSeconds,
-          cacheTableName: config.cacheConfig.tableName || config.filesizeCacheTableName || 'FILESIZE_CACHE_TABLE',
-          windowTimeSeconds: config.rateLimitConfig.windowTimeSeconds,
-          limit: limitValue,
-          blockTimeSeconds: config.rateLimitConfig.blockTimeSeconds,
-          rateLimitTableName: config.rateLimitConfig.tableName || 'IP_LIMIT_TABLE',
-          fileLimit: config.fileLimit,
-          fileWindowTimeSeconds: config.fileWindowTimeSeconds,
-          fileBlockTimeSeconds: config.fileBlockTimeSeconds,
-          fileRateLimitTableName: config.rateLimitConfig.fileTableName || 'IP_FILE_LIMIT_TABLE',
-          ipv4Suffix: config.rateLimitConfig.ipv4Suffix,
-          ipv6Suffix: config.rateLimitConfig.ipv6Suffix,
-          initTables: config.initTables,
-        });
-      } else {
+        } else {
           unifiedResult = null;
         }
 

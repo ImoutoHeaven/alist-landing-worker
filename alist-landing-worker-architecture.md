@@ -69,7 +69,7 @@ Landing worker自身不直接向 AList / upstream 代理文件，而是只做「
      - 若超限，直接返回 429 + `Retry-After`。
 
 3. **DB 限流与 cache 配置**
-   - 基于 `DB_MODE`（`d1` / `d1-rest` / `custom-pg-rest`）构造：
+   - 基于 `DB_MODE`（`""` / `custom-pg-rest`）构造：
      - `rateLimitConfig`：IP 子网限流 + 文件维度限流（`IP_LIMIT_TABLE` / `IP_FILE_LIMIT_TABLE`）
      - `cacheConfig`：文件大小 cache（`FILESIZE_CACHE_TABLE`）
    - `DB_MODE` 为空则完全关闭这些功能，仅依赖 Cloudflare 原生 Rate Limiter 与 PoW。
@@ -464,8 +464,8 @@ Landing worker 的 DB schema 由 `init.sql` 定义，服务 `DB_MODE="custom-pg-
 - Powdet：
   - `POWDET_ENABLED`, `POWDET_BASE_URL`, `POWDET_STATIC_BASE_URL`, `POWDET_API_TOKEN`, `POWDET_TABLE_NAME`, `POWDET_EXPIRE_SECONDS`, `POWDET_CLOCK_SKEW_SECONDS`, `POWDET_MAX_WINDOW_SECONDS`, `POWDET_STATIC_LEVEL`, `POWDET_DYNAMIC_*`
 - DB 模式：
-  - `DB_MODE`（`d1` / `d1-rest` / `custom-pg-rest`）
-  - `D1_*` / `POSTGREST_URL` / `VERIFY_HEADER` / `VERIFY_SECRET`
+  - `DB_MODE`（`""` / `custom-pg-rest`）
+  - `POSTGREST_URL` / `VERIFY_HEADER` / `VERIFY_SECRET`
   - `WINDOW_TIME`, `IPSUBNET_WINDOWTIME_LIMIT`, `FILE_WINDOW_TIME`, `IPSUBNET_FILE_WINDOWTIME_LIMIT`, `BLOCK_TIME`, `PG_ERROR_HANDLE`
   - `SIZE_TTL`, `FILESIZE_CACHE_TABLE`
 - CF Rate Limiter：

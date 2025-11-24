@@ -168,7 +168,7 @@ Download Worker 接到请求后：
    - 强制 token/PoW 在短窗口内使用，超过即失效。
 4. **访问频率控制：**
    - CF Rate Limiter 在边缘层快速把高频恶意流量挡在 Worker 之前；
-   - D1/PG 限流则提供更细粒度的长时间窗口控制。
+   - PostgREST 限流提供更细粒度的长时间窗口控制。
 5. **上游存储保护：**
    - 下载缓存减少对 AList 和后端存储的请求次数；
    - Throttle 保护将错误状态缓存在 DB 中，避免持续打在已知故障 hostname 上；
@@ -178,17 +178,15 @@ Download Worker 接到请求后：
 
 ### 1. 数据库模式
 
-两类 Worker（Landing & Download）都支持三种 DB 模式：
+两类 Worker（Landing & Download）统一收敛为两种 DB 模式：
 
-- `d1`：Cloudflare D1 Binding
-- `d1-rest`：通过 HTTP 访问 Cloudflare D1 REST API
-- `custom-pg-rest`：自建 PostgreSQL + PostgREST
+- 空字符串：关闭数据库相关功能，回退到纯无状态限流/校验。
+- `custom-pg-rest`：自建 PostgreSQL + PostgREST。
 
 设计上：
 
 - 所有与限流 / token / cache / fair queue 相关的逻辑都尽量下沉到存储层的函数（init.sql 中），Worker 仅调用简化接口；
-- D1 版本大体复刻这些逻辑，但使用 SQL/JS 而非 plpgsql；
-- 这样既保证部署在 Cloudflare 生态内的一致性，也允许迁移到自建 PG。
+- 历史的 D1 / D1-REST 路径已移除，需迁移到 PostgREST。
 
 ### 2. Pow-bot-deterrent 扩展
 
@@ -220,4 +218,3 @@ Fair Queue 抽象了「对某一主机模式的并发 slot 与队列」：
 - 数据库与 Cloudflare 基础设施提供强一致的限流与状态记录。
 
 在不牺牲用户体验（可按需选择 Turnstile/ALTCHA/Powdet）的前提下，该架构可以有效提高「自动化下载」「爬虫」「打码/代理组合攻击」的成本。
-

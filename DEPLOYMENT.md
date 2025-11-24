@@ -163,7 +163,7 @@ Powdet 提供第二套 PoW 防爬机制，本仓库内 `powdet/` 目录为推荐
   - `POWDET_DYNAMIC_ENABLED`, `POWDET_DYNAMIC_WINDOW_SECONDS`, `POWDET_DYNAMIC_RESET_SECONDS`, `POWDET_DYNAMIC_BLOCK_SECONDS`  
   - `POWDET_BASE_LEVEL_MIN`, `POWDET_BASE_LEVEL_MAX`, `POWDET_LEVEL_STEP`, `POWDET_MAX_LEVEL`  
 
-数据库表（由 `init.sql` 或 D1 自动创建）：
+数据库表（由 `init.sql` 创建）：
 - `POW_CHALLENGE_TICKET` – 一次性挑战票据  
 - `POWDET_DIFFICULTY_STATE` – Powdet 动态难度状态  
 
@@ -175,7 +175,7 @@ Powdet 提供第二套 PoW 防爬机制，本仓库内 `powdet/` 目录为推荐
 
 数据库相关变量与行为在 `wrangler.toml` 中有完整注释，这里只列出主线：
 
-- `DB_MODE`：`""` / `"d1"` / `"d1-rest"` / `"custom-pg-rest"`  
+- `DB_MODE`：`""` / `"custom-pg-rest"`  
 - 速率限制与窗口参数：  
   - `IPSUBNET_WINDOWTIME_LIMIT`, `WINDOW_TIME`, `BLOCK_TIME`  
   - `IPV4_SUFFIX`, `IPV6_SUFFIX`  
@@ -187,7 +187,7 @@ Powdet 提供第二套 PoW 防爬机制，本仓库内 `powdet/` 目录为推荐
   - `FILESIZE_CACHE_TABLE`（默认 `FILESIZE_CACHE_TABLE`）  
   - `SIZE_TTL`  
 - 表创建控制：  
-  - `INIT_TABLES` – 为 `true` 时 Worker 会在请求前尝试创建相关表（D1 / D1-REST）。  
+  - `INIT_TABLES` – 仅保留兼容用途；PostgREST 模式下仍需先执行 `init.sql` 创建函数与表。  
 
 统一检查（`landing_unified_check`，见 `init.sql`）会在一次 RPC 内完成：
 - IP / 文件维度限流（`IP_LIMIT_TABLE` / `IP_FILE_LIMIT_TABLE`）  
@@ -215,8 +215,7 @@ Powdet 提供第二套 PoW 防爬机制，本仓库内 `powdet/` 目录为推荐
 ### 2.6 Idle Timeout & CF Rate Limiter
 
 - Idle Timeout：  
-  - `IDLE_TIMEOUT`, `IDLE_TABLE_NAME`  
-  - `IDLE_DB_MODE`, `IDLE_*`（可单独指定 IDLE 使用的数据库，与主 `DB_MODE` 复用或分离）。  
+  - `IDLE_TIMEOUT`, `IDLE_TABLE_NAME`（仅在 `DB_MODE="custom-pg-rest"` 时生效）。  
 - Cloudflare Rate Limiter Binding：  
   - `ENABLE_CF_RATELIMITER`, `CF_RATELIMITER_BINDING`  
   - 同时配合 `[[rate_limit]]` 绑定使用，作为第一层无状态限流，详见 `wrangler.toml`。  
@@ -225,12 +224,20 @@ Powdet 提供第二套 PoW 防爬机制，本仓库内 `powdet/` 目录为推荐
 
 ## 3. Database Backends (DB_MODE)
 
+当前仅支持两种模式：
+
+- `DB_MODE=""`：无数据库，依赖 Cloudflare Rate Limiter / ALTCHA / Powdet 的无状态能力。
+- `DB_MODE="custom-pg-rest"`：启用 PostgreSQL + PostgREST 的统一检查（限流 / 缓存 / Token 状态）。
+
 ### 3.1 Shared Settings
 
-无论使用哪种数据库后端，只要想启用 DB 限流/缓存/Token 功能，都需要至少配置：
+启用数据库功能时，至少需要：
 
 ```env
-DB_MODE=d1            # or "d1-rest" / "custom-pg-rest"
+DB_MODE=custom-pg-rest
+POSTGREST_URL=https://postgrest.example.com
+VERIFY_HEADER=X-Auth-Token
+VERIFY_SECRET=your-postgrest-secret
 IPSUBNET_WINDOWTIME_LIMIT=100
 WINDOW_TIME=24h
 ```
@@ -243,46 +250,11 @@ IPV6_SUFFIX=/60
 PG_ERROR_HANDLE=fail-closed
 CLEANUP_PERCENTAGE=5
 BLOCK_TIME=10m
+FILESIZE_CACHE_TABLE=FILESIZE_CACHE_TABLE
+SIZE_TTL=24h
 ```
 
-### 3.2 D1 Binding Mode (`DB_MODE="d1"`)
-
-1. 创建 D1 数据库：
-   ```bash
-   wrangler d1 create alist-landing-db
-   ```
-2. 将生成的 `[[d1_databases]]` 片段拷贝到 `wrangler.toml`（binding 通常命名为 `DB`）。  
-3. 环境变量：
-   ```env
-   DB_MODE=d1
-   D1_DATABASE_BINDING=DB            # 可省略，默认 "DB"
-   D1_TABLE_NAME=IP_LIMIT_TABLE      # 可省略
-   ```
-4. 初次部署可暂时设置：
-   ```env
-   INIT_TABLES=true
-   ```
-   待 D1 中自动创建完所有表后，建议改回 `false` 以减少开销。
-
-> 注：D1 / D1-REST 模式下，表结构由 Worker 通过 `ensureTables()` 自动创建，无需手工执行 `init.sql`。
-
-### 3.3 D1 REST Mode (`DB_MODE="d1-rest"`)
-
-当无法使用 D1 绑定时，可通过 REST API 访问 D1。
-
-必需变量：
-
-```env
-DB_MODE=d1-rest
-D1_ACCOUNT_ID=your-account-id
-D1_DATABASE_ID=your-d1-database-id
-D1_API_TOKEN=your-d1-api-token
-D1_TABLE_NAME=IP_LIMIT_TABLE   # 可省略
-```
-
-首次部署同样可以采用 `INIT_TABLES=true` 以确保自动建表。
-
-### 3.4 Custom PostgreSQL + PostgREST (`DB_MODE="custom-pg-rest"`)
+### 3.2 Custom PostgreSQL + PostgREST (`DB_MODE="custom-pg-rest"`)
 
 此模式使用你自建的 PostgreSQL + PostgREST 服务。
 
@@ -318,6 +290,16 @@ D1_TABLE_NAME=IP_LIMIT_TABLE   # 可省略
   - `landing_unified_check` – 单次 RPC 完成 cache + rate + Turnstile + ALTCHA + Powdet 检查。  
 
 如果 PostgREST 出现 `PGRST205` 找不到表/函数错误，通常是 `init.sql` 未正确执行或表名大小写不匹配，可参考 `init.sql` 中的注释与 wrangler.toml 的说明进行排查。
+
+### 3.3 从 D1 迁移到 PostgREST
+
+- 本版本已移除 `DB_MODE=d1` / `d1-rest`，Worker 启动时会直接报错。  
+- 迁移步骤建议：
+  1) 准备可用的 PostgreSQL + PostgREST 服务，并执行 `init.sql`；  
+  2) 将 `DB_MODE` 设为 `custom-pg-rest`，配置 `POSTGREST_URL` / `VERIFY_HEADER` / `VERIFY_SECRET`；  
+  3) 移除所有 `D1_*`、`IDLE_D1_*` 等旧环境变量与 `[[d1_databases]]` 绑定片段；  
+  4) download worker（如 `simple-alist-cf-proxy`）也需同步改为 `custom-pg-rest`；  
+  5) 验证统一检查与缓存/限流功能是否正常。
 
 ---
 
@@ -447,4 +429,3 @@ Download worker（例如 `simple-alist-cf-proxy`）应：
   - 路径规则中的 `pass-web` / `pass-server` / `pass-asis` 也会影响最终行为。  
 
 更多细节问题，可结合 Cloudflare 日志、控制台报错与 `wrangler.toml` 的注释进行排查。  
-

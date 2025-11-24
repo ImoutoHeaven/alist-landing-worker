@@ -45,7 +45,7 @@ persist = true
 # # 4. Token can only be used once (access_count limit)
 # #
 # # Requirements:
-# # - DB_MODE must be set (d1, d1-rest, or custom-pg-rest)
+# # - DB_MODE must be set to "custom-pg-rest"（D1 / D1-REST 已下线）
 # # - For custom-pg-rest: Run init.sql to create TURNSTILE_TOKEN_BINDING table and functions
 # # - Token binding is automatically disabled if DB_MODE is empty (fallback to stateless mode)
 # #
@@ -194,7 +194,7 @@ persist = true
 # ALTCHA_DIFFICULTY_RESET = "2m"           # Inactivity threshold; ≥RESET resets to 0x, WINDOW<Δ<RESET lowers level by 1
 #
 # # Replay Attack Prevention + Dynamic Difficulty (Stateful Mode - Requires Database):
-# # When DB_MODE is set (d1, d1-rest, or custom-pg-rest):
+# # When DB_MODE is "custom-pg-rest":
 # # - Worker records ALTCHA token hash in ALTCHA_TOKEN_LIST table after verification
 # # - Token bound to: Client IP + File Path + Expiry Time
 # # - Second use of same token → 403 ALTCHA token already used (replay attack detected)
@@ -208,12 +208,11 @@ persist = true
 # # - Suitable for low-security scenarios or when database is unavailable
 # #
 # # Requirements for Stateful Mode:
-# # - DB_MODE must be set (d1, d1-rest, or custom-pg-rest)
-# # - For custom-pg-rest: Run init.sql to create ALTCHA_TOKEN_LIST table and functions:
+# # - DB_MODE must be set为 "custom-pg-rest"（唯一受支持的有状态模式）
+# # - 运行 init.sql 以创建 ALTCHA_TOKEN_LIST 表和相关函数：
 # #   * landing_verify_altcha_token() - Verify token and check replay
 # #   * landing_record_altcha_token() - Record token usage
 # #   * landing_cleanup_expired_altcha_tokens() - Cleanup expired tokens
-# # - For D1/D1-REST: Tables auto-created by ensureTables()
 # #
 # # Performance Notes:
 # # - ALTCHA verification integrated into unified check (1 RTT for cache + rate + turnstile + altcha)
@@ -370,9 +369,10 @@ persist = true
 # #    → Example: /staging/file.txt → no action (normal flow)
 #
 # # Database Mode for IP Rate Limiting
-# # Options: "d1" (Cloudflare D1 Binding), "d1-rest" (Cloudflare D1 REST API), "custom-pg-rest" (Custom PostgreSQL + PostgREST)
-# # If not set, rate limiting is completely disabled
-# DB_MODE = ""
+# # Options: "" (disable database integration) or "custom-pg-rest" (PostgreSQL + PostgREST)
+# # D1 / D1-REST 已移除，不再受支持
+# DB_MODE = ""                          # Leave empty to disable DB features
+# # DB_MODE = "custom-pg-rest"          # Enable PostgREST unified check
 # IPSUBNET_WINDOWTIME_LIMIT = "100"
 # WINDOW_TIME = "24h"
 # IPV4_SUFFIX = "/32"
@@ -418,9 +418,8 @@ persist = true
 # #
 # # Recommended Workflow:
 # # 1. First deployment: INIT_TABLES="true" → Creates all tables
-# # 2. Verify tables exist: Check D1 dashboard or run SELECT on tables
-# # 3. Switch to production: INIT_TABLES="false" → Optimal performance
-# # 4. Schema updates: Temporarily set to "true" → Apply changes → Set back to "false"
+# # 2. Switch to production: INIT_TABLES="false" → Optimal performance
+# # 3. Schema updates: Temporarily set to "true" → Apply changes → Set back to "false"
 # #
 # # Tables Created (when INIT_TABLES="true"):
 # # - FILESIZE_CACHE_TABLE (filesize cache)
@@ -432,18 +431,6 @@ persist = true
 # #       INIT_TABLES only creates tables, not functions/procedures
 # #
 # INIT_TABLES = "false"
-#
-# # D1 (Cloudflare D1 Binding) Rate Limiting - requires DB_MODE="d1"
-# # Note: You must also configure d1_databases binding below
-# D1_DATABASE_BINDING = "DB"  # Optional, defaults to "DB"
-# D1_TABLE_NAME = "IP_LIMIT_TABLE"  # Optional, defaults to IP_LIMIT_TABLE
-#
-# # D1 REST API Rate Limiting - requires DB_MODE="d1-rest"
-# # Use this mode when you cannot use Workers binding (e.g., external API calls)
-# D1_ACCOUNT_ID = "your-cloudflare-account-id"
-# D1_DATABASE_ID = "your-d1-database-id"
-# D1_API_TOKEN = "your-cloudflare-api-token"
-# D1_TABLE_NAME = "IP_LIMIT_TABLE"  # Optional, defaults to IP_LIMIT_TABLE
 #
 # # Custom PostgreSQL + PostgREST Rate Limiting - requires DB_MODE="custom-pg-rest"
 # # Use this mode when you have self-hosted PostgreSQL with PostgREST REST API
@@ -480,8 +467,8 @@ persist = true
 # # 3. TTL expires: Re-fetches from /api/fs/get, updates cache
 # #
 # # Requirements:
-# # - DB_MODE must be set (d1, d1-rest, or custom-pg-rest)
-# # - For custom-pg-rest: Run init.sql to create FILESIZE_CACHE_TABLE and stored procedures
+# # - DB_MODE must be "custom-pg-rest"（仅此模式可用）
+# # - 运行 init.sql 创建 FILESIZE_CACHE_TABLE 及存储过程
 # #
 # # Configuration:
 # FILESIZE_CACHE_TABLE = "FILESIZE_CACHE_TABLE"  # Table name for filesize cache
@@ -523,8 +510,8 @@ persist = true
 # #
 # # Requirements:
 # # - IDLE_TIMEOUT must be non-zero to enable IDLE writes
-# # - IDLE_DB_MODE falls back to DB_MODE when not specified
-# # - For custom-pg-rest: DOWNLOAD_LAST_ACTIVE_TABLE must exist (see simple-alist-cf-proxy/init.sql)
+# # - DB_MODE 必须为 "custom-pg-rest"（无数据库模式下自动禁用）
+# # - DOWNLOAD_LAST_ACTIVE_TABLE must exist (see simple-alist-cf-proxy/init.sql)
 # #
 # # Configuration:
 # IDLE_TIMEOUT = "0"                            # IDLE timeout duration (0 = disabled)
@@ -537,15 +524,6 @@ persist = true
 #                                                   # Default: "DOWNLOAD_LAST_ACTIVE_TABLE"
 #                                                   # Must match table in simple-alist-cf-proxy
 #
-# # IDLE DB Configuration (fallback to main DB_MODE if not specified)
-# # Only configure these if you want separate database for IDLE tracking
-# # IDLE_DB_MODE = ""                            # Optional override ("d1", "d1-rest", "custom-pg-rest"); falls back to DB_MODE
-# # IDLE_D1_DATABASE_BINDING = ""                # D1 binding for IDLE storage (when IDLE_DB_MODE="d1"); defaults to D1_DATABASE_BINDING
-# # IDLE_D1_ACCOUNT_ID = ""                      # Required when IDLE_DB_MODE="d1-rest"; defaults to D1_ACCOUNT_ID
-# # IDLE_D1_DATABASE_ID = ""                     # Required when IDLE_DB_MODE="d1-rest"; defaults to D1_DATABASE_ID
-# # IDLE_D1_API_TOKEN = ""                       # Required when IDLE_DB_MODE="d1-rest"; defaults to D1_API_TOKEN
-# # IDLE_POSTGREST_URL = ""                      # Required when IDLE_DB_MODE="custom-pg-rest"; defaults to POSTGREST_URL
-# #
 # # Data Flow:
 # # 1. Landing worker generates link → includes idle_timeout in additionalInfo (signed)
 # # 2. Landing worker writes: (IP_HASH, PATH_HASH, now, ACCESS_COUNT=0) via ctx.waitUntil (async)
@@ -561,14 +539,8 @@ persist = true
 # # Example Configuration (Enable IDLE with 30min timeout):
 # #   IDLE_TIMEOUT = "30m"
 # #   IDLE_TABLE_NAME = "DOWNLOAD_LAST_ACTIVE_TABLE"
-# #   DB_MODE = "custom-pg-rest"  # IDLE_DB_MODE will fall back to this
+# #   DB_MODE = "custom-pg-rest"
 # #   POSTGREST_URL = "https://postgrest.example.com"
-# #
-# # Example Configuration (Separate IDLE Database):
-# #   IDLE_TIMEOUT = "1h"
-# #   IDLE_DB_MODE = "custom-pg-rest"
-# #   IDLE_POSTGREST_URL = "https://idle-postgrest.example.com"
-# #   IDLE_TABLE_NAME = "DOWNLOAD_LAST_ACTIVE_TABLE"
 # #
 # # Performance Notes:
 # # - Landing writes IDLE record asynchronously (ctx.waitUntil) - no response blocking
@@ -644,13 +616,6 @@ persist = true
 # #   IPSUBNET_WINDOWTIME_LIMIT = "100"  # 100 requests per 24h (DB layer)
 # #   # CF Rate Limiter configured in binding: 10 requests per 10s (edge layer)
 # #   # Verification order: CF Rate Limiter → ALTCHA PoW → DB Rate Limit → Download
-
-# D1 Database Binding (for DB_MODE="d1")
-# Uncomment and configure this section if using D1 binding mode
-# [[d1_databases]]
-# binding = "DB"  # Must match D1_DATABASE_BINDING env var (or use default "DB")
-# database_name = "alist-ratelimit-db"
-# database_id = "your-d1-database-id"
 
 # ═══════════════════════════════════════════════════════════════
 # ⚠️ NEW: Cloudflare Rate Limiter Binding (for ENABLE_CF_RATELIMITER="true")

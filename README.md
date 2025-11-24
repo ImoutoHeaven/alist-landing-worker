@@ -5,11 +5,11 @@ Cloudflare Workers 版 AList 下载「落地网关」。它部署在 AList / 下
 ## Key Features
 
 - **多层安全防护**：Cloudflare Turnstile、ALTCHA PoW、人机混合 Pow Bot Deterrent（Argon2id）。
-- **数据库限流**：支持 D1 / PostgREST / D1-REST 的 IP / IP+文件级限流与缓存，并通过统一检查（Unified Check）减少往返。
+- **数据库限流**：支持 PostgREST 的 IP / IP+文件级限流与缓存，并通过统一检查（Unified Check）减少往返。
 - **下载票据签发**：校验 AList 签名 URL，生成短效下载票据（`sign`、`hashSign`、`workerSign`、`additionalInfo`），统一驱动 download worker。
 - **灵活下载模式**：快速 302 跳转模式，或带安全组件的 HTML 落地页，可选浏览器分段下载（webDownloader）与客户端解密。
 - **AList 集成**：从 AList 查询文件元信息，将路径/大小/加密元信息传递给 download worker。
-- **多种 DB 模式**：支持纯无状态、`d1`、`d1-rest`、`custom-pg-rest`（PostgREST）模式。
+- **多种 DB 模式**：支持纯无状态与 `custom-pg-rest`（PostgREST）模式。
 - **内置 Argon2 Powdet 后端**：`powdet/` 目录提供 Argon2id pow-bot-deterrent 后端与静态资源，可直接部署并通过 `/powdet/static` 提供前端脚本。
 
 ## Request Flow（简要）
@@ -42,7 +42,7 @@ Cloudflare Workers 版 AList 下载「落地网关」。它部署在 AList / 下
 - `src/worker.js` – Cloudflare Worker 入口，负责路由（`/` vs `/info`）与全部后端逻辑。
 - `src/frontend.js` – 落地页脚本，负责安全验证前端流程、webDownloader、客户端解密等。
 - `src/templates/` – 落地页 HTML/CSS 模板。
-- `init.sql` – `custom-pg-rest` / D1 模式下使用的数据库 Schema 与函数。
+- `init.sql` – `custom-pg-rest` 模式下使用的数据库 Schema 与函数。
 - `wrangler.toml` – Worker 配置与环境变量注释说明。
 - `powdet/` – Argon2id Pow Bot Deterrent 后端（`/GetChallenges`、`/Verify`）及 `/powdet/static/` 下的前端资源。
 - `DEPLOYMENT.md` – 详细部署与环境变量配置指引。
@@ -66,7 +66,6 @@ Cloudflare Workers 版 AList 下载「落地网关」。它部署在 AList / 下
 
 - **DB 模式**
   - `DB_MODE` 为空：不使用 DB 限流/缓存，仅依赖 Cloudflare Rate Limiter/PoW。
-  - `d1` / `d1-rest`：使用 Cloudflare D1 及其 REST API。
   - `custom-pg-rest`：使用 PostgREST 与 `init.sql` 中定义的 Schema。
 - **统一检查（Unified Check）**
   - 在一次 RPC 中：
@@ -131,7 +130,7 @@ Download worker（例如 `simple-alist-cf-proxy`）应当：
   - ALTCHA：`ALTCHA_ENABLED`, `ALTCHA_*`, `PAGE_SECRET`
   - Powdet：`POWDET_ENABLED`, `POWDET_BASE_URL`, `POWDET_STATIC_BASE_URL`, `POWDET_API_TOKEN`, `POWDET_*`
 - **数据库：**
-  - `DB_MODE`, `D1_*`, `POSTGREST_URL`, `VERIFY_HEADER`, `VERIFY_SECRET` 等
+  - `DB_MODE`, `POSTGREST_URL`, `VERIFY_HEADER`, `VERIFY_SECRET` 等
 - **路径规则：**
   - `BLACKLIST_*`, `WHITELIST_*`, `EXCEPT_*` 及 `pass-web` / `pass-server` / `pass-asis` / `pass-web-download` / `pass-decrypt` 等动作。
 
@@ -155,7 +154,7 @@ npm run build
 npm run deploy
 ```
 
-更详细的部署步骤与 D1/PostgREST 配置，请参阅 `DEPLOYMENT.md`。
+更详细的部署步骤与 PostgREST 配置，请参阅 `DEPLOYMENT.md`。
 
 ## Related Projects
 
@@ -165,4 +164,3 @@ npm run deploy
 ## License
 
 MIT
-
