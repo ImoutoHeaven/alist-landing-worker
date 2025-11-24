@@ -317,22 +317,20 @@ Landing worker 对「验证码」类验证（Turnstile、ALTCHA）做了上下�
      - `verifySignature(sign)`：过期 / HMAC 是否匹配；
      - Recalculate sign 再次确认（防 secret 不一致配置）；
    - 若任何失败 → 401/403/500 对应错误码。
-5. Unified Check（数据库统一查询）：
-   - 使用 `unifiedCheck` / `unifiedCheckD1` / `unifiedCheckD1Rest` 之一，根据 `DB_MODE` 选择后端：
+5. Unified Check（数据库统一查询，PostgREST 模式）：
+   - 当 `DB_MODE=""`：跳过 unified check，依赖 CF Rate Limiter + ALTCHA/Turnstile/Powdet 的无状态校验。
+   - 当 `DB_MODE="custom-pg-rest"`：调用 `unifiedCheck`（封装 `landing_unified_check` RPC）：
      - 入参包括：
        - IP hash + IP range（限流）
        - Path hash / Filepath hash
        - ALTCHA token hash（如有）与 IP + filepath hash
        - Turnstile token hash（如有）与 IP + filepath hash
        - Powdet challenge hash（如有）与 expireAt
-     - 对应 SQL / RPC 封装在 `init.sql` 中的：
-       - `landing_unified_check`（PostgREST）
-       - D1 版本通过多条 SQL + `db.batch` 或 REST Batch 模式；
-   - 返回结果：
-     - 当前 IP/文件是否超限（IP/文件级限流）
-     - 缓存的文件大小（`FILESIZE_CACHE_TABLE`）
-     - ALTCHA / Turnstile / Powdet Token 的状态（是否已使用/过期/不匹配）。
-   - 若限流或 token 无效，则返回对应错误（含 429/463/464 等细分 code）。
+     - 返回结果：
+       - 当前 IP/文件是否超限（IP/文件级限流）
+       - 缓存的文件大小（`FILESIZE_CACHE_TABLE`）
+       - ALTCHA / Turnstile / Powdet Token 的状态（是否已使用/过期/不匹配）。
+     - 若限流或 token 无效，则返回对应错误（含 429/463/464 等细分 code）。
 6. 获取 AList 文件信息：
    - 调用 `fetchAlistFileInfo(config, decodedPath, clientIP)`：
      - `POST {ALIST_ADDRESS}/api/fs/get`，附带：
@@ -409,7 +407,7 @@ Landing worker 对「验证码」类验证（Turnstile、ALTCHA）做了上下�
 
 ## 三、数据库 schema 与 init.sql 集成
 
-Landing worker 的 DB schema 由 `init.sql` 定义，服务 `DB_MODE="custom-pg-rest"`；D1/D1-REST 模式下由 Worker 自行建表。主要表与函数：
+Landing worker 的 DB schema 由 `init.sql` 定义，仅服务 `DB_MODE="custom-pg-rest"`（旧版 D1/D1-REST 已移除）。主要表与函数：
 
 1. IP/文件限流：
    - 表：

@@ -187,7 +187,7 @@ Powdet 提供第二套 PoW 防爬机制，本仓库内 `powdet/` 目录为推荐
   - `FILESIZE_CACHE_TABLE`（默认 `FILESIZE_CACHE_TABLE`）  
   - `SIZE_TTL`  
 - 表创建控制：  
-  - `INIT_TABLES` – 仅保留兼容用途；PostgREST 模式下仍需先执行 `init.sql` 创建函数与表。  
+  - PostgREST 模式需先执行 `init.sql` 创建表与函数，Worker 不再尝试自动建表。  
 
 统一检查（`landing_unified_check`，见 `init.sql`）会在一次 RPC 内完成：
 - IP / 文件维度限流（`IP_LIMIT_TABLE` / `IP_FILE_LIMIT_TABLE`）  

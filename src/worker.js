@@ -1068,8 +1068,6 @@ const resolveConfig = (env = {}) => {
       }
     : null;
 
-  const initTables = parseBoolean(env.INIT_TABLES, false);
-
   return {
     token: env.TOKEN,
     workerAddresses: env.WORKER_ADDRESS_DOWNLOAD,
@@ -1159,7 +1157,6 @@ const resolveConfig = (env = {}) => {
     idleTimeoutRaw,
     idleTimeoutSeconds,
     idleTableName,
-    initTables,
     crypt: {
       prefix: cryptPrefix || '',
       includes: cryptIncludes,
