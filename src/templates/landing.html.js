@@ -20,11 +20,6 @@ export const htmlTemplate = `<!DOCTYPE html>
     <style>{{COMMON_CSS}}</style>
     <style id="theme-css">{{DEFAULT_THEME_CSS}}</style>
     <script src="https://cdn.jsdelivr.net/npm/dexie@3.2.4/dist/dexie.min.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/tweetnacl@1.0.3/nacl-fast.min.js" crossorigin="anonymous"></script>
-    <script
-      src="https://cdn.jsdelivr.net/gh/ImoutoHeaven/pow-bot-deterrent/static/pow-bot-deterrent.js"
-      defer
-    ></script>
   </head>
   <body>
     <div id="visual-layer" class="visual-layer"></div>
