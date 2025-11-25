@@ -947,38 +947,31 @@ const pageScript = buildRawString`
 
   const acquirePlaintextSink = async (options = {}) => {
     const { preferOpfs = true, existingHandle } = options || {};
-    const canUseFs = supportsFileSystemAccess() || Boolean(existingHandle);
-    if (canUseFs) {
+    const startSink = async (create, label) => {
       try {
-        const sink = createFsAccessSink();
+        const sink = create();
         await sink.start(options);
         return sink;
       } catch (error) {
-        if (error && error.name === 'AbortError') {
-          throw error;
-        }
-        console.warn('File System Access 不可用，尝试降级写入', error);
+        console.warn(label + ' 不可用，尝试其他方式', error);
+        return null;
       }
+    };
+
+    const canUseFs = supportsFileSystemAccess() || Boolean(existingHandle);
+    if (canUseFs) {
+      const fsSink = await startSink(createFsAccessSink, 'File System Access');
+      if (fsSink) return fsSink;
     }
 
     if (preferOpfs && supportsOPFS()) {
-      try {
-        const sink = createOpfsSink();
-        await sink.start(options);
-        return sink;
-      } catch (error) {
-        console.warn('OPFS 写入不可用，尝试其他方式', error);
-      }
+      const opfsSink = await startSink(createOpfsSink, 'OPFS 写入');
+      if (opfsSink) return opfsSink;
     }
 
     if (supportsStreamSaver()) {
-      try {
-        const sink = createStreamSaverSink();
-        await sink.start(options);
-        return sink;
-      } catch (error) {
-        console.warn('StreamSaver 初始化失败，回退到内存 Blob', error);
-      }
+      const streamSink = await startSink(createStreamSaverSink, 'StreamSaver 初始化');
+      if (streamSink) return streamSink;
     }
 
     const fallbackSink = createMemoryBlobSink();
