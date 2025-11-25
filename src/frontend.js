@@ -686,6 +686,257 @@ const pageScript = buildRawString`
       .map((b) => b.toString(16).padStart(2, '0'))
       .join('');
 
+  const supportsFileSystemAccess = () =>
+    typeof window !== 'undefined' && typeof window.showSaveFilePicker === 'function';
+
+  const supportsOPFS = () =>
+    typeof navigator !== 'undefined' &&
+    !!navigator.storage &&
+    typeof navigator.storage.getDirectory === 'function';
+
+  const supportsStreamSaver = () =>
+    typeof window !== 'undefined' &&
+    typeof window.streamSaver === 'object' &&
+    typeof window.streamSaver.createWriteStream === 'function';
+
+  const createFsAccessSink = () => {
+    let fileHandle = null;
+    let writable = null;
+    let targetName = '';
+
+    return {
+      type: 'fs',
+      get handle() {
+        return fileHandle;
+      },
+      get fileName() {
+        return targetName;
+      },
+      async start({ fileName, mimeType, existingHandle } = {}) {
+        targetName = fileName || 'download.bin';
+        fileHandle = existingHandle || null;
+        if (!fileHandle) {
+          const pickerOptions = {
+            suggestedName: targetName,
+          };
+          if (mimeType) {
+            const ext = targetName.includes('.') ? targetName.substring(targetName.lastIndexOf('.')) : '';
+            pickerOptions.types = [{ accept: { [mimeType]: ext ? [ext] : ['.bin'] } }];
+          }
+          fileHandle = await window.showSaveFilePicker(pickerOptions);
+        }
+        writable = await fileHandle.createWritable({ keepExistingData: false });
+      },
+      async write(chunk) {
+        if (!writable) {
+          throw new Error('fs sink not started');
+        }
+        await writable.write(chunk);
+      },
+      async finalize() {
+        if (writable) {
+          await writable.close();
+          writable = null;
+        }
+      },
+      async abort(reason) {
+        try {
+          if (writable && typeof writable.abort === 'function') {
+            await writable.abort(reason);
+          } else if (writable) {
+            await writable.close();
+          }
+        } catch (error) {
+          // ignore
+        } finally {
+          writable = null;
+        }
+      },
+    };
+  };
+
+  const createOpfsSink = () => {
+    let fileHandle = null;
+    let writable = null;
+    let targetName = '';
+
+    return {
+      type: 'opfs',
+      get handle() {
+        return fileHandle;
+      },
+      get fileName() {
+        return targetName;
+      },
+      async start({ fileName } = {}) {
+        targetName = fileName || 'download.bin';
+        const root = await navigator.storage.getDirectory();
+        fileHandle = await root.getFileHandle(targetName, { create: true });
+        writable = await fileHandle.createWritable({ keepExistingData: false });
+      },
+      async write(chunk) {
+        if (!writable) {
+          throw new Error('opfs sink not started');
+        }
+        await writable.write(chunk);
+      },
+      async finalize() {
+        if (writable) {
+          await writable.close();
+          writable = null;
+        }
+        if (fileHandle) {
+          try {
+            const file = await fileHandle.getFile();
+            const url = URL.createObjectURL(file);
+            const anchor = document.createElement('a');
+            anchor.href = url;
+            anchor.download = targetName || 'download.bin';
+            document.body.appendChild(anchor);
+            anchor.click();
+            document.body.removeChild(anchor);
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+          } catch (error) {
+            console.warn('触发 OPFS 下载失败', error);
+          }
+        }
+      },
+      async abort(reason) {
+        try {
+          if (writable && typeof writable.abort === 'function') {
+            await writable.abort(reason);
+          } else if (writable) {
+            await writable.close();
+          }
+        } catch (error) {
+          // ignore
+        } finally {
+          writable = null;
+        }
+      },
+    };
+  };
+
+  const createStreamSaverSink = () => {
+    let writer = null;
+    let targetName = '';
+
+    return {
+      type: 'stream',
+      get fileName() {
+        return targetName;
+      },
+      async start({ fileName, sizeHint } = {}) {
+        targetName = fileName || 'download.bin';
+        const options = {};
+        if (Number.isFinite(sizeHint) && sizeHint > 0) {
+          options.size = sizeHint;
+        }
+        const stream = window.streamSaver.createWriteStream(targetName, options);
+        writer = stream.getWriter();
+      },
+      async write(chunk) {
+        if (!writer) {
+          throw new Error('stream sink not started');
+        }
+        await writer.write(chunk);
+      },
+      async finalize() {
+        if (writer) {
+          await writer.close();
+          writer = null;
+        }
+      },
+      async abort(reason) {
+        try {
+          if (writer) {
+            await writer.abort(reason);
+          }
+        } catch (error) {
+          // ignore
+        } finally {
+          writer = null;
+        }
+      },
+    };
+  };
+
+  const createMemoryBlobSink = () => {
+    const chunks = [];
+    let targetName = '';
+    let mimeType = 'application/octet-stream';
+
+    return {
+      type: 'memory',
+      chunks,
+      get fileName() {
+        return targetName;
+      },
+      async start({ fileName, mimeType: hint } = {}) {
+        targetName = fileName || 'download.bin';
+        mimeType = hint || mimeType;
+      },
+      async write(chunk) {
+        chunks.push(chunk);
+      },
+      async finalize() {
+        const blob = new Blob(chunks, { type: mimeType || 'application/octet-stream' });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = targetName || 'download.bin';
+        document.body.appendChild(anchor);
+        anchor.click();
+        document.body.removeChild(anchor);
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      },
+      async abort() {
+        chunks.length = 0;
+      },
+    };
+  };
+
+  const acquirePlaintextSink = async (options = {}) => {
+    const { preferOpfs = true, existingHandle } = options || {};
+    const canUseFs = supportsFileSystemAccess() || Boolean(existingHandle);
+    if (canUseFs) {
+      try {
+        const sink = createFsAccessSink();
+        await sink.start(options);
+        return sink;
+      } catch (error) {
+        if (error && error.name === 'AbortError') {
+          throw error;
+        }
+        console.warn('File System Access 不可用，尝试降级写入', error);
+      }
+    }
+
+    if (preferOpfs && supportsOPFS()) {
+      try {
+        const sink = createOpfsSink();
+        await sink.start(options);
+        return sink;
+      } catch (error) {
+        console.warn('OPFS 写入不可用，尝试其他方式', error);
+      }
+    }
+
+    if (supportsStreamSaver()) {
+      try {
+        const sink = createStreamSaverSink();
+        await sink.start(options);
+        return sink;
+      } catch (error) {
+        console.warn('StreamSaver 初始化失败，回退到内存 Blob', error);
+      }
+    }
+
+    const fallbackSink = createMemoryBlobSink();
+    await fallbackSink.start(options);
+    return fallbackSink;
+  };
+
   const BYTES_PER_MB = 1024 * 1024;
   const MIN_SEGMENT_SIZE_MB = 2;
   const MAX_SEGMENT_SIZE_MB = 48;
@@ -1144,6 +1395,13 @@ const pageScript = buildRawString`
           const { plain } = await worker.runJob(currentIndex, payload);
           pendingResults.set(currentIndex, plain);
           scheduleFlush();
+          while (
+            pendingResults.size > workerCount * 2 &&
+            !flushError &&
+            !shouldCancel()
+          ) {
+            await flushChain;
+          }
         } catch (error) {
           flushError = error instanceof Error ? error : new Error(String(error));
           throw flushError;
@@ -2337,69 +2595,59 @@ const pageScript = buildRawString`
     const ensureWriter = async () => {
       if (state.writer) return;
       const key = state.cacheKey;
-      if (key) {
-        const persistedHandle = await getPersistedWriterHandle(key);
-        if (persistedHandle && typeof persistedHandle.createWritable === 'function') {
+      const persistedHandle = key ? await getPersistedWriterHandle(key) : null;
+      const sink = await acquirePlaintextSink({
+        fileName: state.fileName || 'download.bin',
+        sizeHint: state.totalSize,
+        mimeType: 'application/octet-stream',
+        existingHandle: persistedHandle || undefined,
+        preferOpfs: true,
+      });
+      setWriter(sink);
+      if (cancelBtn) cancelBtn.disabled = false;
+
+      if (sink.type === 'fs' || sink.type === 'opfs') {
+        const handle = sink.handle || persistedHandle || null;
+        state.writerHandle = handle;
+        if (key && handle) {
           try {
-            const writable = await persistedHandle.createWritable({ keepExistingData: false });
-            setWriter({ type: 'fs', handle: persistedHandle, writable, fallback: [] });
-            state.writerHandle = persistedHandle;
-            state.writerKey = key;
-            if (cancelBtn) cancelBtn.disabled = false;
-            log('已复用上次的保存位置：' + (persistedHandle.name || state.fileName));
-            return;
-          } catch (error) {
-            console.warn('复用文件句柄失败，改为重新选择', error);
-            await deleteWriterHandle(key);
-          }
-        }
-      }
-      if ('showSaveFilePicker' in window) {
-        try {
-          const handle = await window.showSaveFilePicker({
-            suggestedName: state.fileName || 'download.bin',
-            types: [{ description: 'Binary file', accept: { 'application/octet-stream': ['.bin'] } }],
-          });
-          const writable = await handle.createWritable({ keepExistingData: false });
-          setWriter({ type: 'fs', handle, writable, fallback: [] });
-          state.writerHandle = handle;
-          if (key) {
             await saveWriterHandle(key, handle);
             state.writerKey = key;
+          } catch (error) {
+            console.warn('持久化写入句柄失败', error);
           }
-          if (cancelBtn) cancelBtn.disabled = false;
-          log('已选择保存位置：' + (handle.name || state.fileName));
-          return;
-        } catch (error) {
-          log('文件系统访问不可用，改为浏览器下载。原因：' + (error && error.message ? error.message : '未知'));
         }
+        const name = (handle && handle.name) || sink.fileName || state.fileName;
+        const messagePrefix = persistedHandle ? '已复用保存位置' : '已选择保存位置';
+        log(messagePrefix + '：' + (name || 'download.bin'));
+        return;
       }
-      setWriter({ type: 'memory', chunks: [] });
+
       state.writerHandle = null;
       state.writerKey = '';
+      if (sink.type === 'stream') {
+        log('使用流式保存（StreamSaver），避免占用内存');
+      } else {
+        log('当前环境不支持文件系统写入，改为内存下载');
+      }
     };
 
     const writeChunk = async (chunk) => {
       if (!state.writer) {
         throw new Error('writer 未初始化');
       }
-      if (state.writer.type === 'fs') {
+      try {
+        await state.writer.write(chunk);
+      } catch (error) {
         try {
-          await state.writer.writable.write(chunk);
-          return;
-        } catch (error) {
-          log('写入文件失败，切换为内存缓冲：' + (error && error.message ? error.message : '未知错误'));
-          if (state.writer.writable) {
-            try {
-              await state.writer.writable.abort();
-            } catch (abortError) {
-              console.warn('关闭写入器失败', abortError);
-            }
+          if (typeof state.writer.abort === 'function') {
+            await state.writer.abort(error);
           }
-          setWriter({ type: 'memory', chunks: [] });
+        } catch (abortError) {
+          console.warn('关闭写入器失败', abortError);
         }
+        throw error instanceof Error ? error : new Error(String(error));
       }
-      state.writer.chunks.push(chunk);
     };
 
     const cleanupSegmentsAfterFinalize = async () => {
@@ -2415,30 +2663,21 @@ const pageScript = buildRawString`
 
     const finalizeWriter = async () => {
       if (!state.writer) return;
-      if (state.writer.type === 'fs') {
-        try {
-          await state.writer.writable.close();
+      try {
+        await state.writer.finalize();
+        if (state.writer.type === 'fs' || state.writer.type === 'opfs') {
           log('文件已保存');
-        } catch (error) {
-          console.error('关闭文件写入器失败', error);
+        } else if (state.writer.type === 'stream') {
+          log('流式下载已完成');
+        } else {
+          log('已触发浏览器下载');
         }
+      } finally {
         setWriter(null);
+        state.writerHandle = null;
+        state.writerKey = '';
         await cleanupSegmentsAfterFinalize();
-        return;
       }
-      const blob = new Blob(state.writer.chunks, { type: 'application/octet-stream' });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = state.fileName || 'download.bin';
-      document.body.appendChild(anchor);
-      anchor.click();
-      document.body.removeChild(anchor);
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-      if (state.writer.chunks) state.writer.chunks.length = 0;
-      log('已触发浏览器下载');
-      setWriter(null);
-      await cleanupSegmentsAfterFinalize();
     };
 
     const decodeDownloadUrl = (download) => {
@@ -4170,77 +4409,45 @@ const pageScript = buildRawString`
     });
   };
 
-  let clientDecryptWriter = null;
+  let clientDecryptSink = null;
 
   const acquireClientDecryptWriter = async (suggestedName) => {
-    if (typeof window.showSaveFilePicker === 'function') {
-      try {
-        const handle = await window.showSaveFilePicker({
-          suggestedName: suggestedName || 'download.bin',
-          types: [{ description: 'Binary file', accept: { 'application/octet-stream': ['.bin'] } }],
-        });
-        const writable = await handle.createWritable({ keepExistingData: false });
-        clientDecryptWriter = { type: 'fs', handle, writable };
-
-        // 保存文件信息（FileSystem API 无法获取绝对路径，只能获取文件名）
-        clientDecryptUiState.writerType = 'fs';
-        clientDecryptUiState.saveFileName = handle.name || suggestedName || 'download.bin';
-        clientDecryptUiState.savePath = ''; // FileSystem API 无法获取路径
-        syncClientDecryptSavePath();
-
-        return clientDecryptWriter;
-      } catch (error) {
-        throw error;
-      }
-    }
-    clientDecryptWriter = { type: 'memory', chunks: [] };
-
-    // 保存内存模式信息
-    clientDecryptUiState.writerType = 'memory';
-    clientDecryptUiState.saveFileName = suggestedName || 'download.bin';
+    const targetName = suggestedName || 'download.bin';
+    const sink = await acquirePlaintextSink({
+      fileName: targetName,
+      sizeHint: clientDecryptor.getTotalSize(),
+      mimeType: 'application/octet-stream',
+    });
+    clientDecryptSink = sink;
+    clientDecryptUiState.writerType = sink.type;
+    clientDecryptUiState.saveFileName = sink.fileName || targetName;
     clientDecryptUiState.savePath = '';
     syncClientDecryptSavePath();
-
-    return clientDecryptWriter;
+    return sink;
   };
 
   const writeClientDecryptChunk = async (writer, chunk) => {
     if (!writer) throw new Error('writer 未初始化');
-    if (writer.type === 'fs') {
-      await writer.writable.write(chunk);
-      return;
-    }
-    writer.chunks.push(chunk);
+    await writer.write(chunk);
   };
 
-  const finalizeClientDecryptWriter = async (writer, fileName) => {
+  const finalizeClientDecryptWriter = async (writer) => {
     if (!writer) return;
-    if (writer.type === 'fs') {
-      await writer.writable.close();
-      clientDecryptWriter = null;
-      return;
-    }
-    const blob = new Blob(writer.chunks, { type: 'application/octet-stream' });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = fileName || 'download.bin';
-    document.body.appendChild(anchor);
-    anchor.click();
-    document.body.removeChild(anchor);
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-    clientDecryptWriter = null;
+    await writer.finalize();
+    clientDecryptSink = null;
   };
 
   const abortClientDecryptWriter = async (writer) => {
-    if (writer && writer.type === 'fs' && writer.writable) {
-      try {
-        await writer.writable.abort();
-      } catch (error) {
-        console.warn('终止文件写入失败', error);
+    if (!writer) return;
+    try {
+      if (typeof writer.abort === 'function') {
+        await writer.abort('aborted');
       }
+    } catch (error) {
+      console.warn('终止文件写入失败', error);
+    } finally {
+      clientDecryptSink = null;
     }
-    clientDecryptWriter = null;
   };
 
   const updateButtonState = () => {
@@ -5589,7 +5796,7 @@ const pageScript = buildRawString`
           await writeClientDecryptChunk(writer, chunk);
         },
       });
-      await finalizeClientDecryptWriter(writer, clientDecryptor.getFileName() || clientDecryptUiState.file.name);
+      await finalizeClientDecryptWriter(writer);
       clientDecryptUiState.completed = true;
       clientDecryptUiState.failed = false;
       syncClientDecryptControls();
@@ -5615,8 +5822,8 @@ const pageScript = buildRawString`
         updateClientDecryptStatusHint('error');
       }
       clientDecryptUiState.completed = false;
-      if (clientDecryptWriter) {
-        await abortClientDecryptWriter(clientDecryptWriter);
+      if (clientDecryptSink) {
+        await abortClientDecryptWriter(clientDecryptSink);
       }
     } finally {
       clientDecryptUiState.running = false;
@@ -5628,8 +5835,8 @@ const pageScript = buildRawString`
     if (!clientDecryptUiState.running) return;
     setStatus('正在取消解密...');
     clientDecryptor.cancel();
-    if (clientDecryptWriter) {
-      await abortClientDecryptWriter(clientDecryptWriter);
+    if (clientDecryptSink) {
+      await abortClientDecryptWriter(clientDecryptSink);
     }
   };
 
