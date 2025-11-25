@@ -691,6 +691,7 @@ const pageScript = buildRawString`
     disableOpfs: false,
     disableStream: false,
   };
+  const OPFS_TEMP_PREFIX = 'tmp-decrypt-';
 
   const activeBlobUrls = new Set();
   const trackBlobUrl = (url) => {
@@ -780,6 +781,14 @@ const pageScript = buildRawString`
           // ignore
         } finally {
           writable = null;
+          if (fileHandle && opfsName) {
+            try {
+              const root = await navigator.storage.getDirectory();
+              await root.removeEntry(opfsName, { recursive: false });
+            } catch (removeError) {
+              console.warn('删除 OPFS 临时文件失败', removeError);
+            }
+          }
         }
       },
     };
@@ -789,6 +798,7 @@ const pageScript = buildRawString`
     let fileHandle = null;
     let writable = null;
     let targetName = '';
+    let opfsName = '';
 
     return {
       type: 'opfs',
@@ -800,8 +810,9 @@ const pageScript = buildRawString`
       },
       async start({ fileName } = {}) {
         targetName = fileName || 'download.bin';
+        opfsName = OPFS_TEMP_PREFIX + Date.now() + '-' + targetName;
         const root = await navigator.storage.getDirectory();
-        fileHandle = await root.getFileHandle(targetName, { create: true });
+        fileHandle = await root.getFileHandle(opfsName, { create: true });
         writable = await fileHandle.createWritable({ keepExistingData: false });
       },
       async write(chunk) {
@@ -821,19 +832,21 @@ const pageScript = buildRawString`
             const url = URL.createObjectURL(file);
             trackBlobUrl(url);
             const anchor = document.createElement('a');
-            anchor.href = url;
-            anchor.download = targetName || 'download.bin';
-            document.body.appendChild(anchor);
-            anchor.click();
-            document.body.removeChild(anchor);
-            try {
-              const root = await navigator.storage.getDirectory();
-              await root.removeEntry(targetName, { recursive: false });
-            } catch (removeError) {
-              console.warn('删除 OPFS 临时文件失败', removeError);
+          anchor.href = url;
+          anchor.download = targetName || 'download.bin';
+          document.body.appendChild(anchor);
+          anchor.click();
+          document.body.removeChild(anchor);
+          try {
+            const root = await navigator.storage.getDirectory();
+            if (opfsName) {
+              await root.removeEntry(opfsName, { recursive: false });
             }
-          } catch (error) {
-            console.warn('触发 OPFS 下载失败', error);
+          } catch (removeError) {
+            console.warn('删除 OPFS 临时文件失败', removeError);
+          }
+        } catch (error) {
+          console.warn('触发 OPFS 下载失败', error);
           }
         }
       },
@@ -972,6 +985,28 @@ const pageScript = buildRawString`
     await fallbackSink.start(options);
     return fallbackSink;
   };
+
+  const cleanupOpfsTempFiles = async () => {
+    if (!supportsOPFS()) return;
+    try {
+      const root = await navigator.storage.getDirectory();
+      // OPFS entries is an async iterator of [name, handle]
+      // eslint-disable-next-line no-restricted-syntax
+      for await (const [name] of root.entries()) {
+        if (typeof name === 'string' && name.startsWith(OPFS_TEMP_PREFIX)) {
+          try {
+            await root.removeEntry(name, { recursive: false });
+          } catch (error) {
+            console.warn('清理 OPFS 临时文件失败', name, error);
+          }
+        }
+      }
+    } catch (error) {
+      console.warn('OPFS 清理过程失败', error);
+    }
+  };
+
+  cleanupOpfsTempFiles();
 
   const BYTES_PER_MB = 1024 * 1024;
   const MIN_SEGMENT_SIZE_MB = 2;
