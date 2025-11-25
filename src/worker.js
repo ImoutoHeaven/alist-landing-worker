@@ -651,7 +651,7 @@ const ensureRequiredEnv = (env) => {
   });
 };
 
-const resolveConfig = (env = {}) => {
+const resolveConfig = (env = {}, bootstrap = null) => {
   ensureRequiredEnv(env);
   const normalizeString = (value, defaultValue = '') => {
     if (value === undefined || value === null) return defaultValue;
@@ -661,9 +661,18 @@ const resolveConfig = (env = {}) => {
   };
   const rawToken = env.TOKEN;
   const normalizedToken = typeof rawToken === 'string' ? rawToken : String(rawToken || '');
-  const pageSecret = typeof env.PAGE_SECRET === 'string' && env.PAGE_SECRET.trim() !== ''
-    ? env.PAGE_SECRET.trim()
-    : normalizedToken;
+  const landingBootstrap = bootstrap && typeof bootstrap === 'object'
+    ? bootstrap.landing || null
+    : null;
+  if (!landingBootstrap) {
+    throw new Error('controller bootstrap.landing is required');
+  }
+  const pageSecret = typeof landingBootstrap.pageSecret === 'string' && landingBootstrap.pageSecret.trim() !== ''
+    ? landingBootstrap.pageSecret.trim()
+    : '';
+  if (!pageSecret) {
+    throw new Error('controller bootstrap.landing.pageSecret is required');
+  }
   const altchaEnabled = env.ALTCHA_ENABLED === 'true';
   const rawAltchaDifficulty = typeof env.ALTCHA_DIFFICULTY === 'string' ? env.ALTCHA_DIFFICULTY : '';
   const altchaDifficultyRange = parseAltchaDifficultyRange(
@@ -696,41 +705,38 @@ const resolveConfig = (env = {}) => {
     ALTCHA_MIN_UPGRADE_DEFAULT,
     altchaMaxExponent
   );
-  const underAttack = parseBoolean(env.UNDER_ATTACK, false);
-  const turnstileSiteKey = env.TURNSTILE_SITE_KEY ? String(env.TURNSTILE_SITE_KEY).trim() : '';
-  const turnstileSecretKey = env.TURNSTILE_SECRET_KEY ? String(env.TURNSTILE_SECRET_KEY).trim() : '';
+  const turnstileConfig = landingBootstrap.turnstile || {};
+  const underAttack = Boolean(turnstileConfig.enabled);
+  const turnstileSiteKey = typeof turnstileConfig.siteKey === 'string' ? turnstileConfig.siteKey.trim() : '';
+  const turnstileSecretKey = typeof turnstileConfig.secretKey === 'string' ? turnstileConfig.secretKey.trim() : '';
   if (underAttack && (!turnstileSiteKey || !turnstileSecretKey)) {
-    throw new Error('environment variables TURNSTILE_SITE_KEY and TURNSTILE_SECRET_KEY are required when UNDER_ATTACK is true');
+    throw new Error('controller landing.turnstile.siteKey and secretKey are required when turnstile.enabled is true');
   }
-  let turnstileTokenBindingEnabled = parseBoolean(env.TURNSTILE_TOKEN_BINDING, true);
-  const rawTurnstileTokenTTL = env.TURNSTILE_TOKEN_TTL && typeof env.TURNSTILE_TOKEN_TTL === 'string'
-    ? env.TURNSTILE_TOKEN_TTL.trim()
-    : '10m';
-  let turnstileTokenTTLSeconds = parseWindowTime(rawTurnstileTokenTTL);
-  if (turnstileTokenTTLSeconds <= 0) {
+  let turnstileTokenBindingEnabled = turnstileConfig.tokenBinding !== false;
+  let turnstileTokenTTLSeconds = Number(turnstileConfig.tokenTTLSeconds);
+  if (!Number.isFinite(turnstileTokenTTLSeconds) || turnstileTokenTTLSeconds <= 0) {
     turnstileTokenTTLSeconds = parseWindowTime('10m');
   }
-  const turnstileTokenTableName = env.TURNSTILE_TOKEN_TABLE && typeof env.TURNSTILE_TOKEN_TABLE === 'string'
-    ? env.TURNSTILE_TOKEN_TABLE.trim()
+  const turnstileTokenTTL = `${turnstileTokenTTLSeconds}s`;
+  const turnstileTokenTableName = typeof turnstileConfig.tokenTable === 'string' && turnstileConfig.tokenTable.trim()
+    ? turnstileConfig.tokenTable.trim()
     : 'TURNSTILE_TOKEN_BINDING';
-  const rawTurnstileCookieExpire = env.TURNSTILE_COOKIE_EXPIRE_TIME && typeof env.TURNSTILE_COOKIE_EXPIRE_TIME === 'string'
-    ? env.TURNSTILE_COOKIE_EXPIRE_TIME.trim()
-    : '';
-  let turnstileCookieExpireSeconds = parseWindowTime(rawTurnstileCookieExpire || '2m');
-  if (turnstileCookieExpireSeconds <= 0) {
+  let turnstileCookieExpireSeconds = Number(turnstileConfig.cookieExpireSeconds);
+  if (!Number.isFinite(turnstileCookieExpireSeconds) || turnstileCookieExpireSeconds <= 0) {
     turnstileCookieExpireSeconds = parseWindowTime('2m');
   }
-  const rawTurnstileExpectedAction = env.TURNSTILE_EXPECTED_ACTION && typeof env.TURNSTILE_EXPECTED_ACTION === 'string'
-    ? env.TURNSTILE_EXPECTED_ACTION.trim()
+  const rawTurnstileExpectedAction = typeof turnstileConfig.expectedAction === 'string'
+    ? turnstileConfig.expectedAction.trim()
     : '';
   const turnstileExpectedAction = rawTurnstileExpectedAction || 'download';
-  const turnstileEnforceAction = parseBoolean(env.TURNSTILE_ENFORCE_ACTION, true);
-  const parsedHostnameList = typeof env.TURNSTILE_ALLOWED_HOSTNAMES === 'string'
-    ? env.TURNSTILE_ALLOWED_HOSTNAMES.split(',').map((entry) => entry.trim()).filter((entry) => entry.length > 0)
+  const turnstileEnforceAction = turnstileConfig.enforceAction !== false;
+  const normalizedAllowedHostnames = Array.isArray(turnstileConfig.allowedHostnames)
+    ? turnstileConfig.allowedHostnames
+        .map((entry) => (typeof entry === 'string' ? entry.trim().toLowerCase() : ''))
+        .filter((entry) => entry.length > 0)
     : [];
-  const normalizedAllowedHostnames = parsedHostnameList.map((entry) => entry.toLowerCase());
   const hasAllowedHostnames = normalizedAllowedHostnames.length > 0;
-  const turnstileEnforceHostname = parseBoolean(env.TURNSTILE_ENFORCE_HOSTNAME, false) && hasAllowedHostnames;
+  const turnstileEnforceHostname = Boolean(turnstileConfig.enforceHostname) && hasAllowedHostnames;
 
   const powdetEnabled = parseBoolean(env.POWDET_ENABLED, false);
   const powdetBaseUrl = normalizeString(env.POWDET_BASE_URL);
@@ -1063,7 +1069,7 @@ const resolveConfig = (env = {}) => {
     turnstileSiteKey,
     turnstileSecretKey,
     turnstileTokenBindingEnabled,
-    turnstileTokenTTL: rawTurnstileTokenTTL,
+    turnstileTokenTTL,
     turnstileTokenTTLSeconds,
     turnstileTokenTableName,
     turnstileCookieExpireSeconds,
@@ -3985,19 +3991,23 @@ export default {
         return internalResponse;
       }
 
-      const config = resolveConfig(env || {});
-      // Create rate limiter instance based on DB_MODE
-      const rateLimiter = config.rateLimitEnabled ? createRateLimiter(config.dbMode) : null;
-
-      // 预拉取 controller bootstrap/decision，保持与 env 路径并行，后续可切换为唯一策略来源。
       let controllerState = null;
       try {
         controllerState = await fetchControllerState(request, env);
       } catch (error) {
         console.error('[controller] state fetch error:', error instanceof Error ? error.message : String(error));
       }
-      ctx.controllerState = controllerState;
 
+      if (!controllerState || !controllerState.bootstrap || !controllerState.decision) {
+        const origin = request.headers.get('origin') || '*';
+        return respondJson(origin, { code: 503, message: 'controller state unavailable' }, 503);
+      }
+
+      const config = resolveConfig(env || {}, controllerState.bootstrap);
+      // Create rate limiter instance based on DB_MODE
+      const rateLimiter = config.rateLimitEnabled ? createRateLimiter(config.dbMode) : null;
+
+      ctx.controllerState = controllerState;
       return await routeRequest(request, env, config, rateLimiter, ctx);
     } catch (error) {
       const origin = request.headers.get('origin') || '*';

@@ -21,13 +21,30 @@ type LandingCaptchaConfig struct {
 	DefaultCombo []string `yaml:"defaultCombo" json:"defaultCombo"`
 }
 
+// LandingTurnstileConfig holds Turnstile-related settings.
+type LandingTurnstileConfig struct {
+	Enabled             bool     `yaml:"enabled" json:"enabled"`
+	SiteKey             string   `yaml:"siteKey" json:"siteKey"`
+	SecretKey           string   `yaml:"secretKey" json:"secretKey"`
+	TokenBinding        bool     `yaml:"tokenBinding" json:"tokenBinding"`
+	TokenTTLSeconds     int      `yaml:"tokenTTLSeconds" json:"tokenTTLSeconds"`
+	TokenTable          string   `yaml:"tokenTable" json:"tokenTable"`
+	CookieExpireSeconds int      `yaml:"cookieExpireSeconds" json:"cookieExpireSeconds"`
+	ExpectedAction      string   `yaml:"expectedAction" json:"expectedAction"`
+	EnforceAction       bool     `yaml:"enforceAction" json:"enforceAction"`
+	EnforceHostname     bool     `yaml:"enforceHostname" json:"enforceHostname"`
+	AllowedHostnames    []string `yaml:"allowedHostnames" json:"allowedHostnames"`
+}
+
 // LandingConfig describes landing-side static configuration.
 type LandingConfig struct {
-	Captcha      LandingCaptchaConfig  `yaml:"captcha" json:"captcha"`
-	PathRules    DownloadPathRules     `yaml:"pathRules" json:"pathRules"`
-	FastRedirect bool                  `yaml:"fastRedirect" json:"fastRedirect"`
-	AutoRedirect bool                  `yaml:"autoRedirect" json:"autoRedirect"`
-	Extra        map[string]any        `yaml:",inline" json:"-"`
+	PageSecret   string                 `yaml:"pageSecret" json:"pageSecret"`
+	Captcha      LandingCaptchaConfig   `yaml:"captcha" json:"captcha"`
+	Turnstile    LandingTurnstileConfig `yaml:"turnstile" json:"turnstile"`
+	PathRules    DownloadPathRules      `yaml:"pathRules" json:"pathRules"`
+	FastRedirect bool                   `yaml:"fastRedirect" json:"fastRedirect"`
+	AutoRedirect bool                   `yaml:"autoRedirect" json:"autoRedirect"`
+	Extra        map[string]any         `yaml:",inline" json:"-"`
 }
 
 // DownloadPathRule describes a single path rule.
@@ -117,6 +134,28 @@ func (e *EnvConfig) validate(envName string) error {
 
 	if len(e.Landing.Captcha.DefaultCombo) == 0 {
 		e.Landing.Captcha.DefaultCombo = []string{"verify-altcha"}
+	}
+
+	if e.Landing.PageSecret == "" {
+		return fmt.Errorf("landing.pageSecret is required for env %s", envName)
+	}
+
+	if e.Landing.Turnstile.TokenTTLSeconds <= 0 {
+		e.Landing.Turnstile.TokenTTLSeconds = 600
+	}
+	if e.Landing.Turnstile.CookieExpireSeconds <= 0 {
+		e.Landing.Turnstile.CookieExpireSeconds = 120
+	}
+	if e.Landing.Turnstile.TokenTable == "" {
+		e.Landing.Turnstile.TokenTable = "TURNSTILE_TOKEN_BINDING"
+	}
+	if e.Landing.Turnstile.ExpectedAction == "" {
+		e.Landing.Turnstile.ExpectedAction = "download"
+	}
+	if e.Landing.Turnstile.Enabled {
+		if e.Landing.Turnstile.SiteKey == "" || e.Landing.Turnstile.SecretKey == "" {
+			return fmt.Errorf("landing.turnstile.siteKey/secretKey are required for env %s when turnstile.enabled is true", envName)
+		}
 	}
 
 	return nil

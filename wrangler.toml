@@ -13,7 +13,7 @@ persist = true
 # [vars]
 # TOKEN = "your-hmac-token"
 # WORKER_ADDRESS_DOWNLOAD = "https://worker1.example.com,https://worker2.example.com"
-# UNDER_ATTACK = "false"
+# # Turnstile/UNDER_ATTACK 由 controller landing.turnstile 下发，以下 TURNSTILE_* 环境变量已弃用。
 # # 路径/跳转策略（FAST_REDIRECT/AUTO_REDIRECT 以及 BLACKLIST/WHITELIST/EXCEPT）由 controller 下发，不在 wrangler 配置。
 # TURNSTILE_SITE_KEY = ""
 # TURNSTILE_SECRET_KEY = ""
@@ -171,11 +171,12 @@ persist = true
 #                                          # ALTCHA official recommends 20-60min, but we use 3min
 #                                          # because tokens are only for signing download links
 #
-# PAGE_SECRET = ""                         # ALTCHA HMAC signing key (optional)
-#                                          # Default: Uses TOKEN value if not set
-#                                          # Recommended: Use different key from TOKEN for defense in depth
-#                                          # Format: Any string (e.g., random hex, UUID)
-#                                          # Example: "altcha-hmac-secret-key-2024"
+# PAGE_SECRET 由 controller landing.pageSecret 下发，wrangler 不再读取，以下字段说明仅供参考：
+# # PAGE_SECRET = ""                       # ALTCHA HMAC signing key (optional)
+# #                                        # Default: Uses TOKEN value if not set
+# #                                        # Recommended: Use different key from TOKEN for defense in depth
+# #                                        # Format: Any string (e.g., random hex, UUID)
+# #                                        # Example: "altcha-hmac-secret-key-2024"
 #
 # ALTCHA_TOKEN_BINDING_TABLE = "ALTCHA_TOKEN_LIST"  # ALTCHA Token 表名（Stateful 模式可自定义，默认 ALTCHA_TOKEN_LIST）
 #
@@ -224,6 +225,7 @@ persist = true
 # # - 463: ALTCHA token already used (stateful mode, replay attack detected)
 # # - 463: ALTCHA token filepath mismatch (stateful mode, different file)
 # #
+# # 注：PAGE_SECRET、UNDER_ATTACK、TURNSTILE_* 现由 controller 下发，以下示例仅供理解字段含义。
 # # Example Configuration (Stateless - No Database):
 # #   ALTCHA_ENABLED = "true"
 # #   ALTCHA_DIFFICULTY = "250000"

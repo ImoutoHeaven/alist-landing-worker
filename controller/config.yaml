@@ -11,8 +11,21 @@ envs:
       tokenHmacKeyId: "default"
       tokenHmacKey: "replace-with-hmac-key"
     landing:
+      pageSecret: "replace-with-page-secret"
       captcha:
         defaultCombo: ["verify-altcha"]
+      turnstile:
+        enabled: false
+        siteKey: ""
+        secretKey: ""
+        tokenBinding: true
+        tokenTTLSeconds: 600
+        tokenTable: "TURNSTILE_TOKEN_BINDING"
+        cookieExpireSeconds: 120
+        expectedAction: "download"
+        enforceAction: true
+        enforceHostname: false
+        allowedHostnames: []
       fastRedirect: false
       autoRedirect: false
       pathRules:
@@ -103,8 +116,21 @@ envs:
       tokenHmacKeyId: "default"
       tokenHmacKey: "replace-with-hmac-key"
     landing:
+      pageSecret: "replace-with-page-secret"
       captcha:
         defaultCombo: ["verify-altcha"]
+      turnstile:
+        enabled: false
+        siteKey: ""
+        secretKey: ""
+        tokenBinding: true
+        tokenTTLSeconds: 600
+        tokenTable: "TURNSTILE_TOKEN_BINDING"
+        cookieExpireSeconds: 120
+        expectedAction: "download"
+        enforceAction: true
+        enforceHostname: false
+        allowedHostnames: []
       fastRedirect: false
       autoRedirect: false
       pathRules:
