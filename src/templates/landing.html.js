@@ -20,6 +20,12 @@ export const htmlTemplate = `<!DOCTYPE html>
     <style>{{COMMON_CSS}}</style>
     <style id="theme-css">{{DEFAULT_THEME_CSS}}</style>
     <script src="https://cdn.jsdelivr.net/npm/dexie@3.2.4/dist/dexie.min.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/streamsaver@2.0.6/StreamSaver.min.js" crossorigin="anonymous"></script>
+    <script>
+      if (window.streamSaver && !window.streamSaver.mitm) {
+        window.streamSaver.mitm = 'https://cdn.jsdelivr.net/npm/streamsaver@2.0.6/mitm.html';
+      }
+    </script>
   </head>
   <body>
     <div id="visual-layer" class="visual-layer"></div>
