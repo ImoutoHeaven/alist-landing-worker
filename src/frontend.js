@@ -686,15 +686,25 @@ const pageScript = buildRawString`
       .map((b) => b.toString(16).padStart(2, '0'))
       .join('');
 
+  window.__sinkDebug = window.__sinkDebug || {
+    disableFs: false,
+    disableOpfs: false,
+    disableStream: false,
+  };
+
   const supportsFileSystemAccess = () =>
-    typeof window !== 'undefined' && typeof window.showSaveFilePicker === 'function';
+    !window.__sinkDebug.disableFs &&
+    typeof window !== 'undefined' &&
+    typeof window.showSaveFilePicker === 'function';
 
   const supportsOPFS = () =>
+    !window.__sinkDebug.disableOpfs &&
     typeof navigator !== 'undefined' &&
     !!navigator.storage &&
     typeof navigator.storage.getDirectory === 'function';
 
   const supportsStreamSaver = () =>
+    !window.__sinkDebug.disableStream &&
     typeof window !== 'undefined' &&
     typeof window.streamSaver === 'object' &&
     typeof window.streamSaver.createWriteStream === 'function';
