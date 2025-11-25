@@ -26,6 +26,17 @@ envs:
         enforceAction: true
         enforceHostname: false
         allowedHostnames: []
+      altcha:
+        enabled: true
+        baseDifficultyMin: 250000
+        baseDifficultyMax: 250000
+        tokenExpireSeconds: 180
+        tokenTable: "ALTCHA_TOKEN_LIST"
+        difficultyWindowSeconds: 30
+        difficultyResetSeconds: 120
+        maxBlockSeconds: 120
+        maxExponent: 10
+        minUpgradeExponent: 3
       fastRedirect: false
       autoRedirect: false
       pathRules:
@@ -46,6 +57,14 @@ envs:
         except: []
       powdet:
         enabled: false
+        baseUrl: ""
+        staticBaseUrl: ""
+        token: ""
+        table: "POW_CHALLENGE_TICKET"
+        difficultyTable: "POWDET_DIFFICULTY_STATE"
+        expireSeconds: 180
+        clockSkewSeconds: 60
+        maxWindowSeconds: 600
       idle:
         table: "landing_idle"
     download:
@@ -131,6 +150,17 @@ envs:
         enforceAction: true
         enforceHostname: false
         allowedHostnames: []
+      altcha:
+        enabled: true
+        baseDifficultyMin: 250000
+        baseDifficultyMax: 250000
+        tokenExpireSeconds: 180
+        tokenTable: "ALTCHA_TOKEN_LIST"
+        difficultyWindowSeconds: 30
+        difficultyResetSeconds: 120
+        maxBlockSeconds: 120
+        maxExponent: 10
+        minUpgradeExponent: 3
       fastRedirect: false
       autoRedirect: false
       pathRules:
@@ -152,7 +182,13 @@ envs:
       powdet:
         enabled: true
         baseUrl: "https://powdet.example.com"
+        staticBaseUrl: ""
         token: "replace-with-powdet-token"
+        table: "POW_CHALLENGE_TICKET"
+        difficultyTable: "POWDET_DIFFICULTY_STATE"
+        expireSeconds: 180
+        clockSkewSeconds: 60
+        maxWindowSeconds: 600
       idle:
         table: "landing_idle"
     download:

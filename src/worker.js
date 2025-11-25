@@ -673,35 +673,39 @@ const resolveConfig = (env = {}, bootstrap = null) => {
   if (!pageSecret) {
     throw new Error('controller bootstrap.landing.pageSecret is required');
   }
-  const altchaEnabled = env.ALTCHA_ENABLED === 'true';
-  const rawAltchaDifficulty = typeof env.ALTCHA_DIFFICULTY === 'string' ? env.ALTCHA_DIFFICULTY : '';
-  const altchaDifficultyRange = parseAltchaDifficultyRange(
-    rawAltchaDifficulty || String(ALTCHA_DEFAULT_BASE_DIFFICULTY)
-  );
-  const altchaDifficultyStatic = altchaDifficultyRange.baseMin;
-  const rawAltchaTokenExpire = typeof env.ALTCHA_TOKEN_EXPIRE === 'string' ? env.ALTCHA_TOKEN_EXPIRE.trim() : '';
-  let altchaTokenExpire = parseWindowTime(rawAltchaTokenExpire || '3m');
-  if (!Number.isFinite(altchaTokenExpire) || altchaTokenExpire <= 0) {
-    altchaTokenExpire = parseWindowTime('3m');
+  const altchaConfig = landingBootstrap.altcha && typeof landingBootstrap.altcha === 'object'
+    ? landingBootstrap.altcha
+    : null;
+  if (!altchaConfig) {
+    throw new Error('controller bootstrap.landing.altcha is required');
   }
-  const altchaTokenTable = env.ALTCHA_TOKEN_BINDING_TABLE && typeof env.ALTCHA_TOKEN_BINDING_TABLE === 'string'
-    ? env.ALTCHA_TOKEN_BINDING_TABLE.trim()
-    : '';
-  const altchaTableName = altchaTokenTable || 'ALTCHA_TOKEN_LIST';
-  const altchaDifficultyWindowSeconds = parseDurationToSeconds(env.ALTCHA_DIFFICULTY_WINDOW, 30);
-  const altchaDifficultyResetSeconds = parseDurationToSeconds(env.ALTCHA_DIFFICULTY_RESET, 120);
-  const altchaDifficultyBlockSeconds = parseDurationToSeconds(env.ALTCHA_MAX_BLOCK_TIME, 120);
-  const altchaMaxMultiplierRaw =
-    typeof env.ALTCHA_MAX_MULTIPLIER === 'string' ? env.ALTCHA_MAX_MULTIPLIER : '';
+  const altchaEnabled = Boolean(altchaConfig.enabled);
+  const altchaBaseMin = normalizeDifficultyRangeValue(
+    Number.isFinite(Number(altchaConfig.baseDifficultyMin)) ? Number(altchaConfig.baseDifficultyMin) : altchaConfig.baseDifficultyMin,
+    ALTCHA_DEFAULT_BASE_DIFFICULTY
+  );
+  const altchaBaseMax = normalizeDifficultyRangeValue(
+    Number.isFinite(Number(altchaConfig.baseDifficultyMax)) ? Number(altchaConfig.baseDifficultyMax) : altchaBaseMin,
+    altchaBaseMin
+  );
+  const altchaDifficultyRange = {
+    baseMin: altchaBaseMin,
+    baseMax: altchaBaseMax >= altchaBaseMin ? altchaBaseMax : altchaBaseMin,
+  };
+  const altchaDifficultyStatic = altchaDifficultyRange.baseMin;
+  const altchaTokenExpire = parseDurationToSeconds(altchaConfig.tokenExpireSeconds, parseWindowTime('3m'));
+  const altchaTableName = typeof altchaConfig.tokenTable === 'string' && altchaConfig.tokenTable.trim()
+    ? altchaConfig.tokenTable.trim()
+    : 'ALTCHA_TOKEN_LIST';
+  const altchaDifficultyWindowSeconds = parseDurationToSeconds(altchaConfig.difficultyWindowSeconds, 30);
+  const altchaDifficultyResetSeconds = parseDurationToSeconds(altchaConfig.difficultyResetSeconds, 120);
+  const altchaDifficultyBlockSeconds = parseDurationToSeconds(altchaConfig.maxBlockSeconds, 120);
   const altchaMaxExponent = parseMaxExponent(
-    altchaMaxMultiplierRaw || String(ALTCHA_MAX_EXPONENT_FALLBACK),
+    altchaConfig.maxExponent ?? altchaConfig.maxMultiplier ?? ALTCHA_MAX_EXPONENT_FALLBACK,
     ALTCHA_MAX_EXPONENT_FALLBACK
   );
-  const rawAltchaMinUpgradeMultiplier = typeof env.ALTCHA_MIN_UPGRADE_MULTIPLIER === 'string'
-    ? env.ALTCHA_MIN_UPGRADE_MULTIPLIER
-    : '3x';
   const altchaMinUpgradeExponent = parseMinUpgradeExponent(
-    rawAltchaMinUpgradeMultiplier || `${ALTCHA_MIN_UPGRADE_DEFAULT}x`,
+    altchaConfig.minUpgradeExponent ?? altchaConfig.minUpgradeMultiplier ?? `${ALTCHA_MIN_UPGRADE_DEFAULT}x`,
     ALTCHA_MIN_UPGRADE_DEFAULT,
     altchaMaxExponent
   );
@@ -738,31 +742,39 @@ const resolveConfig = (env = {}, bootstrap = null) => {
   const hasAllowedHostnames = normalizedAllowedHostnames.length > 0;
   const turnstileEnforceHostname = Boolean(turnstileConfig.enforceHostname) && hasAllowedHostnames;
 
-  const powdetEnabled = parseBoolean(env.POWDET_ENABLED, false);
-  const powdetBaseUrl = normalizeString(env.POWDET_BASE_URL);
-  const powdetStaticBaseUrl = normalizeString(env.POWDET_STATIC_BASE_URL);
-  const powdetApiToken = normalizeString(env.POWDET_API_TOKEN);
-  const powdetTableName = normalizeString(env.POWDET_TABLE_NAME, 'POW_CHALLENGE_TICKET');
-  const powdetExpireSeconds = parseDurationToSeconds(env.POWDET_EXPIRE_SECONDS, 180);
-  const powdetClockSkewSeconds = parseDurationToSeconds(env.POWDET_CLOCK_SKEW_SECONDS, 60);
-  const powdetMaxWindowSeconds = parseDurationToSeconds(env.POWDET_MAX_WINDOW_SECONDS, 600);
-  let powdetStaticLevel = parseInteger(env.POWDET_STATIC_LEVEL, NaN);
+  const powdetConfig = landingBootstrap.powdet && typeof landingBootstrap.powdet === 'object'
+    ? landingBootstrap.powdet
+    : {};
+  const powdetEnabled = Boolean(powdetConfig.enabled);
+  const powdetBaseUrl = normalizeString(powdetConfig.baseUrl);
+  const powdetStaticBaseUrl = normalizeString(powdetConfig.staticBaseUrl);
+  const powdetApiToken = normalizeString(powdetConfig.token);
+  const powdetTableName = normalizeString(powdetConfig.table, 'POW_CHALLENGE_TICKET');
+  const powdetDifficultyTableName = normalizeString(powdetConfig.difficultyTable, POWDET_DIFFICULTY_TABLE);
+  const powdetExpireSeconds = parseDurationToSeconds(powdetConfig.expireSeconds, 180);
+  const powdetClockSkewSeconds = parseDurationToSeconds(powdetConfig.clockSkewSeconds, 60);
+  const powdetMaxWindowSeconds = parseDurationToSeconds(powdetConfig.maxWindowSeconds, 600);
+  let powdetStaticLevel = Number.isFinite(powdetConfig.staticLevel)
+    ? Number(powdetConfig.staticLevel)
+    : parseInteger(powdetConfig.staticLevel, NaN);
   if (!Number.isFinite(powdetStaticLevel)) {
     powdetStaticLevel = NaN;
   }
   let powdetDynamic = null;
-  if (parseBoolean(env.POWDET_DYNAMIC_ENABLED, false)) {
+  if (powdetConfig.dynamic && typeof powdetConfig.dynamic === 'object') {
     powdetDynamic = {
-      windowSeconds: parseDurationToSeconds(env.POWDET_DYNAMIC_WINDOW_SECONDS, 60),
-      resetSeconds: parseDurationToSeconds(env.POWDET_DYNAMIC_RESET_SECONDS, 300),
-      blockSeconds: parseDurationToSeconds(env.POWDET_DYNAMIC_BLOCK_SECONDS, 300),
-      baseLevelMin: parseInteger(env.POWDET_BASE_LEVEL_MIN, 12),
-      baseLevelMax: parseInteger(env.POWDET_BASE_LEVEL_MAX, 20),
-      levelStep: Math.max(1, parseInteger(env.POWDET_LEVEL_STEP, 1)),
-      maxLevel: Math.max(0, parseInteger(env.POWDET_MAX_LEVEL, 4)),
+      windowSeconds: parseDurationToSeconds(powdetConfig.dynamic.windowSeconds, 60),
+      resetSeconds: parseDurationToSeconds(powdetConfig.dynamic.resetSeconds, 300),
+      blockSeconds: parseDurationToSeconds(powdetConfig.dynamic.blockSeconds, 300),
+      baseLevelMin: parseInteger(powdetConfig.dynamic.baseLevelMin, 12),
+      baseLevelMax: parseInteger(powdetConfig.dynamic.baseLevelMax, 20),
+      levelStep: Math.max(1, parseInteger(powdetConfig.dynamic.levelStep, 1)),
+      maxLevel: Math.max(0, parseInteger(powdetConfig.dynamic.maxLevel, 4)),
     };
   }
-  const powdetDifficultyTableName = 'POWDET_DIFFICULTY_STATE';
+  if (powdetEnabled && (!powdetBaseUrl || !powdetApiToken)) {
+    throw new Error('controller bootstrap.landing.powdet.baseUrl and token are required when powdet.enabled is true');
+  }
 
   // Parse prefix lists (comma-separated)
   const parsePrefixList = (value) => {
@@ -1184,11 +1196,11 @@ const verifyTurnstileToken = async (secretKey, token, remoteIP) => {
   };
 };
 
-const fetchPowdetChallenge = async (env, difficultyLevel) => {
-  const base = String(env.POWDET_BASE_URL || '').trim();
-  const token = String(env.POWDET_API_TOKEN || '').trim();
+const fetchPowdetChallenge = async (config, difficultyLevel) => {
+  const base = String(config.powdetBaseUrl || '').trim();
+  const token = String(config.powdetApiToken || '').trim();
   if (!base || !token) {
-    throw new Error('POWDET_BASE_URL and POWDET_API_TOKEN are required when POWDET is enabled');
+    throw new Error('powdet baseUrl and token are required when POWDET is enabled');
   }
   const url = new URL('/GetChallenges', base);
   url.searchParams.set('difficultyLevel', String(Number.isFinite(difficultyLevel) ? difficultyLevel : 1));
@@ -1210,11 +1222,11 @@ const fetchPowdetChallenge = async (env, difficultyLevel) => {
   return arr[0];
 };
 
-const verifyPowdet = async (env, challenge, nonce) => {
-  const base = String(env.POWDET_BASE_URL || '').trim();
-  const token = String(env.POWDET_API_TOKEN || '').trim();
+const verifyPowdet = async (config, challenge, nonce) => {
+  const base = String(config.powdetBaseUrl || '').trim();
+  const token = String(config.powdetApiToken || '').trim();
   if (!base || !token) {
-    throw new Error('POWDET_BASE_URL and POWDET_API_TOKEN are required when POWDET is enabled');
+    throw new Error('powdet baseUrl and token are required when POWDET is enabled');
   }
   const url = new URL('/Verify', base);
   url.searchParams.set('challenge', String(challenge || ''));
@@ -2630,7 +2642,7 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
       return respondJson(origin, { code: 463, message: 'powdet binding mismatch' }, 403);
     }
 
-    const powVerify = await verifyPowdet(env, payloadChallenge, payloadNonce);
+    const powVerify = await verifyPowdet(config, payloadChallenge, payloadNonce);
     if (!powVerify.ok) {
       const message = powVerify.message || 'powdet verification failed';
       return respondJson(origin, { code: 463, message }, 403);
@@ -3920,7 +3932,7 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
       const pathHash = decodedChallengePath ? await sha256Hash(decodedChallengePath) : '';
       const ipRangeHash = powdetScopeForChallenge?.ipRange ? await sha256Hash(powdetScopeForChallenge.ipRange) : '';
       const randomStr = generateNonce(32);
-      const challenge = await fetchPowdetChallenge(env, powdetDifficultyLevel);
+      const challenge = await fetchPowdetChallenge(config, powdetDifficultyLevel);
       const bindingPayload = {
         ipRangeHash,
         pathHash,
