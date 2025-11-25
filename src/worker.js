@@ -19,6 +19,11 @@ import { renderLandingPage } from './frontend.js';
 import { createRateLimiter } from './ratelimit/factory.js';
 import { createCacheManager } from './cache/factory.js';
 import { unifiedCheck } from './unified-check.js';
+import { handleInternalApiIfAny } from './internal-api.js';
+import { fetchControllerState } from './controller-adapter.js';
+import { BootstrapDO } from './do/bootstrap-do.js';
+import { DecisionDO } from './do/decision-do.js';
+import { MetricsDO } from './do/metrics-do.js';
 
 const REQUIRED_ENV = ['TOKEN', 'WORKER_ADDRESS_DOWNLOAD'];
 
@@ -692,7 +697,6 @@ const resolveConfig = (env = {}) => {
     altchaMaxExponent
   );
   const underAttack = parseBoolean(env.UNDER_ATTACK, false);
-  const autoRedirect = parseBoolean(env.AUTO_REDIRECT, false);
   const turnstileSiteKey = env.TURNSTILE_SITE_KEY ? String(env.TURNSTILE_SITE_KEY).trim() : '';
   const turnstileSecretKey = env.TURNSTILE_SECRET_KEY ? String(env.TURNSTILE_SECRET_KEY).trim() : '';
   if (underAttack && (!turnstileSiteKey || !turnstileSecretKey)) {
@@ -759,47 +763,6 @@ const resolveConfig = (env = {}) => {
     if (!value || typeof value !== 'string') return [];
     return value.split(',').map(p => p.trim()).filter(p => p.length > 0);
   };
-
-  // Validate action value
-  const validateAction = (action, paramName) => {
-    const normalized = ensureValidActionValue(action, paramName || 'ACTION');
-    return normalized || '';
-  };
-
-  const blacklistPrefixes = parsePrefixList(env.BLACKLIST_PREFIX);
-  const whitelistPrefixes = parsePrefixList(env.WHITELIST_PREFIX);
-  const exceptPrefixes = parsePrefixList(env.EXCEPT_PREFIX);
-  const blacklistDirIncludes = parsePrefixList(env.BLACKLIST_DIR_INCLUDES);
-  const blacklistNameIncludes = parsePrefixList(env.BLACKLIST_NAME_INCLUDES);
-  const blacklistPathIncludes = parsePrefixList(env.BLACKLIST_PATH_INCLUDES);
-  const whitelistDirIncludes = parsePrefixList(env.WHITELIST_DIR_INCLUDES);
-  const whitelistNameIncludes = parsePrefixList(env.WHITELIST_NAME_INCLUDES);
-  const whitelistPathIncludes = parsePrefixList(env.WHITELIST_PATH_INCLUDES);
-  const exceptDirIncludes = parsePrefixList(env.EXCEPT_DIR_INCLUDES);
-  const exceptNameIncludes = parsePrefixList(env.EXCEPT_NAME_INCLUDES);
-  const exceptPathIncludes = parsePrefixList(env.EXCEPT_PATH_INCLUDES);
-  const blacklistAction = validateAction(env.BLACKLIST_ACTION, 'BLACKLIST_ACTION');
-  const whitelistAction = validateAction(env.WHITELIST_ACTION, 'WHITELIST_ACTION');
-
-  // Parse except action (format: {action}-except)
-  let exceptAction = '';
-  const hasExceptRules =
-    exceptPrefixes.length > 0 ||
-    exceptDirIncludes.length > 0 ||
-    exceptNameIncludes.length > 0 ||
-    exceptPathIncludes.length > 0;
-  if (env.EXCEPT_ACTION && typeof env.EXCEPT_ACTION === 'string') {
-    const rawExceptAction = env.EXCEPT_ACTION.trim().toLowerCase();
-    if (rawExceptAction && hasExceptRules) {
-      // Validate format: must end with '-except'
-      if (!rawExceptAction.endsWith('-except')) {
-        throw new Error('EXCEPT_ACTION must be in format "{action}-except" (e.g., "block-except")');
-      }
-      const actionPart = rawExceptAction.slice(0, -7);
-
-      exceptAction = ensureValidActionValue(actionPart, 'EXCEPT_ACTION') || '';
-    }
-  }
 
   const cryptPrefix = normalizeString(env.CRYPT_PREFIX);
   const cryptIncludes = parsePrefixList(env.CRYPT_INCLUDES);
@@ -1076,8 +1039,6 @@ const resolveConfig = (env = {}) => {
     ipv4Only: parseBoolean(env.IPV4_ONLY, false),
     signSecret: env.SIGN_SECRET && env.SIGN_SECRET.trim() !== '' ? env.SIGN_SECRET : env.TOKEN,
     underAttack,
-    autoRedirect,
-    fastRedirect: parseBoolean(env.FAST_REDIRECT, false),
     altchaEnabled,
     altchaDifficulty: altchaDifficultyStatic,
     altchaDifficultyStatic,
@@ -1112,21 +1073,6 @@ const resolveConfig = (env = {}) => {
     turnstileAllowedHostnames: normalizedAllowedHostnames,
     turnstileAllowedHostnamesSet: new Set(normalizedAllowedHostnames),
     cleanupPercentage,
-    blacklistPrefixes,
-    whitelistPrefixes,
-    blacklistDirIncludes,
-    blacklistNameIncludes,
-    blacklistPathIncludes,
-    whitelistDirIncludes,
-    whitelistNameIncludes,
-    whitelistPathIncludes,
-    blacklistAction,
-    whitelistAction,
-    exceptPrefixes,
-    exceptDirIncludes,
-    exceptNameIncludes,
-    exceptPathIncludes,
-    exceptAction,
     // Rate limit configuration
     dbMode,
     rateLimitEnabled,
@@ -2107,144 +2053,6 @@ async function writeIdleInitialRecord(ctx, config) {
   }
 }
 
-const checkPathListAction = (path, config) => {
-  let decodedPath;
-  try {
-    decodedPath = decodeURIComponent(path);
-  } catch (error) {
-    // If path cannot be decoded, use as-is
-    decodedPath = path;
-  }
-
-  const lastSlashIndex = decodedPath.lastIndexOf('/');
-  const dirPath = lastSlashIndex > 0 ? decodedPath.substring(0, lastSlashIndex) : '';
-  const fileName = lastSlashIndex >= 0 ? decodedPath.substring(lastSlashIndex + 1) : decodedPath;
-
-  // Check blacklist first (higher priority)
-  if (config.blacklistPrefixes.length > 0 && config.blacklistAction) {
-    for (const prefix of config.blacklistPrefixes) {
-      if (decodedPath.startsWith(prefix)) {
-        return ensureValidActionValue(config.blacklistAction);
-      }
-    }
-  }
-
-  if (config.blacklistAction) {
-    if (config.blacklistDirIncludes.length > 0) {
-      for (const keyword of config.blacklistDirIncludes) {
-        if (dirPath.includes(keyword)) {
-          return ensureValidActionValue(config.blacklistAction);
-        }
-      }
-    }
-
-    if (config.blacklistNameIncludes.length > 0) {
-      for (const keyword of config.blacklistNameIncludes) {
-        if (fileName.includes(keyword)) {
-          return ensureValidActionValue(config.blacklistAction);
-        }
-      }
-    }
-
-    if (config.blacklistPathIncludes.length > 0) {
-      for (const keyword of config.blacklistPathIncludes) {
-        if (decodedPath.includes(keyword)) {
-          return ensureValidActionValue(config.blacklistAction);
-        }
-      }
-    }
-  }
-
-  // Check whitelist second
-  if (config.whitelistPrefixes.length > 0 && config.whitelistAction) {
-    for (const prefix of config.whitelistPrefixes) {
-      if (decodedPath.startsWith(prefix)) {
-        return ensureValidActionValue(config.whitelistAction);
-      }
-    }
-  }
-
-  if (config.whitelistAction) {
-    if (config.whitelistDirIncludes.length > 0) {
-      for (const keyword of config.whitelistDirIncludes) {
-        if (dirPath.includes(keyword)) {
-          return ensureValidActionValue(config.whitelistAction);
-        }
-      }
-    }
-
-    if (config.whitelistNameIncludes.length > 0) {
-      for (const keyword of config.whitelistNameIncludes) {
-        if (fileName.includes(keyword)) {
-          return ensureValidActionValue(config.whitelistAction);
-        }
-      }
-    }
-
-    if (config.whitelistPathIncludes.length > 0) {
-      for (const keyword of config.whitelistPathIncludes) {
-        if (decodedPath.includes(keyword)) {
-          return ensureValidActionValue(config.whitelistAction);
-        }
-      }
-    }
-  }
-
-  // Check except third (inverse logic)
-  const hasExceptRules =
-    config.exceptPrefixes.length > 0 ||
-    config.exceptDirIncludes.length > 0 ||
-    config.exceptNameIncludes.length > 0 ||
-    config.exceptPathIncludes.length > 0;
-
-  if (config.exceptAction && hasExceptRules) {
-    let matchesExceptRule = false;
-
-    if (config.exceptPrefixes.length > 0) {
-      for (const prefix of config.exceptPrefixes) {
-        if (decodedPath.startsWith(prefix)) {
-          matchesExceptRule = true;
-          break;
-        }
-      }
-    }
-
-    if (!matchesExceptRule && config.exceptDirIncludes.length > 0) {
-      for (const keyword of config.exceptDirIncludes) {
-        if (dirPath.includes(keyword)) {
-          matchesExceptRule = true;
-          break;
-        }
-      }
-    }
-
-    if (!matchesExceptRule && config.exceptNameIncludes.length > 0) {
-      for (const keyword of config.exceptNameIncludes) {
-        if (fileName.includes(keyword)) {
-          matchesExceptRule = true;
-          break;
-        }
-      }
-    }
-
-    if (!matchesExceptRule && config.exceptPathIncludes.length > 0) {
-      for (const keyword of config.exceptPathIncludes) {
-        if (decodedPath.includes(keyword)) {
-          matchesExceptRule = true;
-          break;
-        }
-      }
-    }
-
-    if (!matchesExceptRule) {
-      return ensureValidActionValue(config.exceptAction);
-    }
-  }
-
-  // No match - undefined action
-  return null;
-};
-
 const isCryptPath = (decodedPath, cryptConfig) => {
   if (!decodedPath || typeof decodedPath !== 'string' || !cryptConfig) {
     return false;
@@ -2277,6 +2085,67 @@ const parseClientBehavior = (action) => {
   return {
     forceWebDownloader: tokens.has('verify-web-download') || tokens.has('pass-web-download'),
     forceClientDecrypt: tokens.has('verify-decrypt') || tokens.has('pass-decrypt'),
+  };
+};
+
+const normalizeLandingCaptchaCombo = (landingDecision) => {
+  const rawCombo = landingDecision && Array.isArray(landingDecision.captchaCombo) ? landingDecision.captchaCombo : [];
+  const normalized = [];
+  const seen = new Set();
+  for (const entry of rawCombo) {
+    const token = typeof entry === 'string' ? entry.trim().toLowerCase() : '';
+    if (!token) {
+      continue;
+    }
+    if (!VALID_ACTIONS_SET.has(token)) {
+      console.warn(`[controller] unsupported captchaCombo token '${entry}' ignored`);
+      continue;
+    }
+    if (!seen.has(token)) {
+      normalized.push(token);
+      seen.add(token);
+    }
+  }
+  if (normalized.length === 0) {
+    normalized.push('verify-altcha');
+  }
+  return normalized;
+};
+
+const buildLandingDecisionContext = (landingDecision, config) => {
+  if (!landingDecision) {
+    return null;
+  }
+
+  const normalizedActions = normalizeLandingCaptchaCombo(landingDecision);
+  const actionString = normalizedActions.join(',');
+  const actionTokens = extractActionTokens(actionString);
+  const parsedNeeds = parseVerificationNeeds(actionString, config);
+  const behavior = parseClientBehavior(actionString);
+
+  const forceWeb = actionTokens.has('pass-web');
+  const forceRedirect = actionTokens.has('pass-server');
+  const fastRedirect = typeof landingDecision.fastRedirect === 'boolean'
+    ? landingDecision.fastRedirect
+    : false;
+  const autoRedirect = typeof landingDecision.autoRedirect === 'boolean'
+    ? landingDecision.autoRedirect
+    : false;
+  const blockReason = landingDecision.blockReason
+    ? String(landingDecision.blockReason)
+    : (actionTokens.has('block') ? 'access denied' : null);
+
+  return {
+    actionString,
+    actionTokens,
+    parsedNeeds,
+    forceWebDownloader: behavior.forceWebDownloader,
+    forceClientDecrypt: behavior.forceClientDecrypt,
+    forceWeb,
+    forceRedirect,
+    fastRedirect,
+    autoRedirect,
+    blockReason,
   };
 };
 
@@ -2368,16 +2237,22 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
   }
 
   // Check blacklist/whitelist
-  const action = checkPathListAction(decodedPath, config);
-  const actionTokens = extractActionTokens(action);
-  const parsedNeeds = parseVerificationNeeds(action, config);
-
-  // Handle block action
-  if (parsedNeeds.blocked || actionTokens.has('block')) {
-    return respondJson(origin, { code: 403, message: 'access denied' }, 403);
+  const landingDecision = ctx?.controllerState?.decision?.landing;
+  const landingCtx = buildLandingDecisionContext(landingDecision, config);
+  if (!landingCtx) {
+    return respondJson(origin, { code: 503, message: 'controller decision unavailable' }, 503);
+  }
+  if (landingCtx.blockReason) {
+    return respondJson(origin, { code: 403, message: landingCtx.blockReason }, 403);
   }
 
-  const { forceWebDownloader, forceClientDecrypt } = parseClientBehavior(action);
+  const actionTokens = landingCtx.actionTokens;
+  const parsedNeeds = landingCtx.parsedNeeds;
+
+  const forceWebDownloader = landingCtx.forceWebDownloader;
+  const forceClientDecrypt = landingCtx.forceClientDecrypt;
+  const forceWeb = landingCtx.forceWeb;
+  const forceRedirect = landingCtx.forceRedirect;
   const isCrypt = isCryptPath(decodedPath, config.crypt);
   let derivedFileName = '';
   if (decodedPath && decodedPath !== '/') {
@@ -2387,15 +2262,9 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
     }
   }
 
-  let needAltcha = config.altchaEnabled;
-  let needTurnstile = config.underAttack;
-  let needPowdet = config.powdetEnabled;
-
-  if (action) {
-    needAltcha = parsedNeeds.needAltcha;
-    needTurnstile = parsedNeeds.needTurnstile;
-    needPowdet = parsedNeeds.needPowdet;
-  }
+  let needAltcha = parsedNeeds.needAltcha;
+  let needTurnstile = parsedNeeds.needTurnstile;
+  let needPowdet = parsedNeeds.needPowdet;
 
   let altchaScope = clientIP
     ? await computeAltchaIpScope(clientIP, config.ipv4Suffix, config.ipv6Suffix)
@@ -3667,13 +3536,13 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
   const sign = url.searchParams.get('sign') || '';
 
   // Check blacklist/whitelist
-  const action = checkPathListAction(url.pathname, config);
-  const actionTokens = extractActionTokens(action);
-  const parsedNeeds = parseVerificationNeeds(action, config);
-
-  // Handle block action
-  if (parsedNeeds.blocked || actionTokens.has('block')) {
-    return respondJson(request.headers.get('origin') || '*', { code: 403, message: 'access denied' }, 403);
+  const landingDecision = ctx?.controllerState?.decision?.landing;
+  const landingCtx = buildLandingDecisionContext(landingDecision, config);
+  if (!landingCtx) {
+    return respondJson(request.headers.get('origin') || '*', { code: 503, message: 'controller decision unavailable' }, 503);
+  }
+  if (landingCtx.blockReason) {
+    return respondJson(request.headers.get('origin') || '*', { code: 403, message: landingCtx.blockReason }, 403);
   }
 
   let decodedPath = '';
@@ -3683,22 +3552,18 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
     return respondJson(origin, { code: 400, message: 'invalid path encoding' }, 400);
   }
 
-  const { forceWebDownloader, forceClientDecrypt } = parseClientBehavior(action);
+  const actionTokens = landingCtx.actionTokens;
+  const parsedNeeds = landingCtx.parsedNeeds;
+  const { forceWebDownloader, forceClientDecrypt } = landingCtx;
   const isCrypt = isCryptPath(decodedPath, config.crypt);
 
   // Determine behavior based on action
-  const forceWeb = actionTokens.has('pass-web');
-  const forceRedirect = actionTokens.has('pass-server');
+  const forceWeb = landingCtx.forceWeb;
+  const forceRedirect = landingCtx.forceRedirect;
 
-  let needAltcha = config.altchaEnabled;
-  let needTurnstile = config.underAttack;
-  let needPowdet = config.powdetEnabled;
-
-  if (action) {
-    needAltcha = parsedNeeds.needAltcha;
-    needTurnstile = parsedNeeds.needTurnstile;
-    needPowdet = parsedNeeds.needPowdet;
-  }
+  let needAltcha = parsedNeeds.needAltcha;
+  let needTurnstile = parsedNeeds.needTurnstile;
+  let needPowdet = parsedNeeds.needPowdet;
 
   const needsVerification = needAltcha || needTurnstile || needPowdet;
   const needWebDownloader =
@@ -3708,7 +3573,7 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
 
   const fastRedirectCandidate =
     !needWebDownloader && !needClientDecrypt &&
-    (forceRedirect || (config.fastRedirect && !forceWeb && !needsVerification));
+    (forceRedirect || (landingCtx.fastRedirect && !forceWeb && !needsVerification));
   const shouldRedirect = fastRedirectCandidate;
 
   const verifyResult = await verifySignature(config.signSecret, decodedPath, sign);
@@ -4078,7 +3943,7 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
     turnstileBinding: turnstileBindingPayload,
     powdetChallenge: powdetChallengePayload,
     powdetStaticBase,
-    autoRedirect: config.autoRedirect,
+    autoRedirect: landingCtx.autoRedirect,
     webDownloader: needWebDownloader,
     isCryptPath: isCrypt,
     webDownloaderConfig: {
@@ -4110,12 +3975,28 @@ const routeRequest = async (request, env, config, rateLimiter, ctx) => {
   return handleFileRequest(request, env, config, rateLimiter, ctx);
 };
 
+export { BootstrapDO, DecisionDO, MetricsDO };
+
 export default {
   async fetch(request, env, ctx) {
-    const config = resolveConfig(env || {});
     try {
+      const internalResponse = await handleInternalApiIfAny(request, env, ctx);
+      if (internalResponse) {
+        return internalResponse;
+      }
+
+      const config = resolveConfig(env || {});
       // Create rate limiter instance based on DB_MODE
       const rateLimiter = config.rateLimitEnabled ? createRateLimiter(config.dbMode) : null;
+
+      // 预拉取 controller bootstrap/decision，保持与 env 路径并行，后续可切换为唯一策略来源。
+      let controllerState = null;
+      try {
+        controllerState = await fetchControllerState(request, env);
+      } catch (error) {
+        console.error('[controller] state fetch error:', error instanceof Error ? error.message : String(error));
+      }
+      ctx.controllerState = controllerState;
 
       return await routeRequest(request, env, config, rateLimiter, ctx);
     } catch (error) {

@@ -1,0 +1,185 @@
+apiToken: "replace-with-controller-api-token"
+bootstrapVersion: "bootstrap-2025-11-25"
+rulesVersion: "decision-2025-11-25"
+
+envs:
+  staging:
+    common:
+      alistBaseUrl: "https://alist-staging.example.com"
+      alistAuthHeaders:
+        Authorization: "Bearer staging-alist-token"
+      tokenHmacKeyId: "default"
+      tokenHmacKey: "replace-with-hmac-key"
+    landing:
+      captcha:
+        defaultCombo: ["verify-altcha"]
+      fastRedirect: false
+      autoRedirect: false
+      pathRules:
+        blacklist:
+          - name: "landing_block_admin"
+            prefix: ["/admin", "/internal"]
+            dirIncludes: []
+            nameIncludes: []
+            pathIncludes: []
+            action: ["block"]
+        whitelist:
+          - name: "landing_public"
+            prefix: ["/public", "/share"]
+            dirIncludes: []
+            nameIncludes: []
+            pathIncludes: []
+            action: ["pass-asis"]
+        except: []
+      powdet:
+        enabled: false
+      idle:
+        table: "landing_idle"
+    download:
+      address: "https://alist-staging.example.com"
+      db:
+        mode: "custom-pg-rest"
+        postgrestUrl: "https://postgrest-staging.example.com"
+        cacheTable: "download_cache"
+        ipRateLimitTable: "download_ip_ratelimit"
+        throttleTable: "download_throttle"
+        lastActiveTable: "download_last_active"
+        slotPoolTable: "upstream_slot_pool"
+      fairQueue:
+        enabled: true
+        backend: "slot-handler"
+        slotHandlerUrl: "https://slot-handler-staging.example.com"
+        slotHandlerAuthKey: "replace-with-slot-handler-key"
+        profiles:
+          default:
+            maxWaitMs: 120000
+            maxSlotPerHost: 8
+            maxSlotPerIp: 3
+            maxWaitersPerIp: 8
+          strict:
+            maxWaitMs: 90000
+            maxSlotPerHost: 4
+            maxSlotPerIp: 2
+            maxWaitersPerIp: 4
+      throttleProfiles:
+        default:
+          windowMs: 60000
+          observeWindowMs: 60000
+          minSampleCount: 50
+          errorRatio:
+            num: 3
+            den: 50
+          consecutiveErrors: 2
+          protectHttpCodes: [429, 499, 500, 502, 503, 504]
+      originBindingDefault: "asn,iprange"
+      pathRules:
+        blacklist:
+          - name: "block_admin"
+            prefix: ["/admin", "/internal"]
+            dirIncludes: []
+            nameIncludes: []
+            pathIncludes: []
+            action: ["block"]
+        whitelist:
+          - name: "public_share"
+            prefix: ["/share"]
+            dirIncludes: []
+            nameIncludes: []
+            pathIncludes: ["/share"]
+            action: ["skip-origin"]
+        except:
+          - name: "public_share_passthrough"
+            prefix: ["/share/public"]
+            dirIncludes: []
+            nameIncludes: []
+            pathIncludes: []
+            action: ["asis"]
+
+  prod:
+    common:
+      alistBaseUrl: "https://alist.example.com"
+      alistAuthHeaders:
+        Authorization: "Bearer prod-alist-token"
+      tokenHmacKeyId: "default"
+      tokenHmacKey: "replace-with-hmac-key"
+    landing:
+      captcha:
+        defaultCombo: ["verify-altcha"]
+      fastRedirect: false
+      autoRedirect: false
+      pathRules:
+        blacklist:
+          - name: "landing_block_admin"
+            prefix: ["/admin", "/internal"]
+            dirIncludes: []
+            nameIncludes: []
+            pathIncludes: []
+            action: ["block"]
+        whitelist:
+          - name: "landing_public"
+            prefix: ["/public", "/share"]
+            dirIncludes: []
+            nameIncludes: []
+            pathIncludes: []
+            action: ["pass-asis"]
+        except: []
+      powdet:
+        enabled: true
+        baseUrl: "https://powdet.example.com"
+        token: "replace-with-powdet-token"
+      idle:
+        table: "landing_idle"
+    download:
+      address: "https://alist.example.com"
+      db:
+        mode: "custom-pg-rest"
+        postgrestUrl: "https://postgrest.example.com"
+        cacheTable: "download_cache"
+        ipRateLimitTable: "download_ip_ratelimit"
+        throttleTable: "download_throttle"
+        lastActiveTable: "download_last_active"
+        slotPoolTable: "upstream_slot_pool"
+      fairQueue:
+        enabled: true
+        backend: "slot-handler"
+        slotHandlerUrl: "https://slot-handler.example.com"
+        slotHandlerAuthKey: "replace-with-slot-handler-key"
+        profiles:
+          default:
+            maxWaitMs: 120000
+            maxSlotPerHost: 8
+            maxSlotPerIp: 3
+            maxWaitersPerIp: 8
+      throttleProfiles:
+        default:
+          windowMs: 60000
+          observeWindowMs: 60000
+          minSampleCount: 50
+          errorRatio:
+            num: 3
+            den: 50
+          consecutiveErrors: 2
+          protectHttpCodes: [429, 499, 500, 502, 503, 504]
+      originBindingDefault: "asn,iprange"
+      pathRules:
+        blacklist:
+          - name: "block_admin"
+            prefix: ["/admin", "/internal"]
+            dirIncludes: []
+            nameIncludes: []
+            pathIncludes: []
+            action: ["block"]
+        whitelist:
+          - name: "public_share"
+            prefix: ["/share"]
+            dirIncludes: []
+            nameIncludes: []
+            pathIncludes: ["/share"]
+            action: ["skip-origin"]
+        except:
+          - name: "public_share_passthrough"
+            prefix: ["/share/public"]
+            dirIncludes: []
+            nameIncludes: []
+            pathIncludes: []
+            action: ["asis"]

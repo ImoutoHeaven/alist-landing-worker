@@ -14,13 +14,7 @@ persist = true
 # TOKEN = "your-hmac-token"
 # WORKER_ADDRESS_DOWNLOAD = "https://worker1.example.com,https://worker2.example.com"
 # UNDER_ATTACK = "false"
-# FAST_REDIRECT = "false"
-# AUTO_REDIRECT = "false"          # Auto-redirect to download URL after verification
-#                                   # Default: "false" (show landing page with download button)
-#                                   # When "true": Immediately redirect (302) to download URL after
-#                                   #              ALTCHA/Turnstile verification completes
-#                                   # When "false": Show landing page, user must click download button
-#                                   # Use case: Direct download links vs. user-confirmation page
+# # 路径/跳转策略（FAST_REDIRECT/AUTO_REDIRECT 以及 BLACKLIST/WHITELIST/EXCEPT）由 controller 下发，不在 wrangler 配置。
 # TURNSTILE_SITE_KEY = ""
 # TURNSTILE_SECRET_KEY = ""
 #
@@ -307,66 +301,8 @@ persist = true
 # MIN_ALLOWED_BANDWIDTH = "10"            # Minimum allowed download bandwidth (Mbps)
 # MIN_DURATION_TIME = "1h"                # Minimum expiry duration for generated links (supports h/m/s suffix)
 # MAX_DURATION_TIME = "4h"               # Optional: cap download link lifetime (supports h/m/s suffix, e.g. "4h", "1d")
-# # ACTION 可选值（verify-pow / verify-both 已移除）:
-# # - block: 返回 403
-# # - verify-altcha: 仅要求 ALTCHA 验证
-# # - verify-turn: 仅要求 Turnstile 验证
-# # - verify-powdet: 仅要求 pow-bot-deterrent 验证
-# #   可用逗号组合任意验证项，例如 verify-altcha,verify-powdet 或 verify-altcha,verify-turn,verify-powdet
-# # - pass-web: 跳过验证，强制渲染 landing page
-# # - pass-server: 跳过验证，强制 302 重定向
-# # - pass-asis: 跳过验证，遵循 FAST_REDIRECT 配置
-#
-# BLACKLIST_PREFIX = "/private,/admin"
-# BLACKLIST_ACTION = "block"
-# WHITELIST_PREFIX = "/public,/shared"
-# WHITELIST_ACTION = "pass-asis"
-# EXCEPT_PREFIX = "/guest,/public"
-# EXCEPT_ACTION = "block-except"   # 支持所有 ACTION 值 + "-except" 后缀（如 block-except, verify-altcha-except, verify-turn-except, verify-powdet-except, pass-asis-except）
-#
-# # ⚠️ NEW: Path INCLUDES Matching (Match keywords anywhere in path)
-# # In addition to PREFIX (startsWith) matching, you can now use INCLUDES (contains) matching
-# # Path is split into: dirPath (folder) + fileName (file name) + fullPath (complete path)
-# # Example: "/folder1/folder2/file.txt"
-# #   - dirPath: "/folder1/folder2"
-# #   - fileName: "file.txt"
-# #   - fullPath: "/folder1/folder2/file.txt"
-# #
-# # INCLUDES matching modes (comma-separated keywords, no spaces):
-# BLACKLIST_DIR_INCLUDES = "private,confidential,secret"     # Match folder path containing keywords
-# BLACKLIST_NAME_INCLUDES = "backup,bak,.tmp"                # Match file name containing keywords
-# BLACKLIST_PATH_INCLUDES = "temp,cache"                     # Match full path containing keywords
-# WHITELIST_DIR_INCLUDES = "public,shared"                   # Match folder path containing keywords
-# WHITELIST_NAME_INCLUDES = "readme,license"                 # Match file name containing keywords
-# WHITELIST_PATH_INCLUDES = "docs,assets"                    # Match full path containing keywords
-# EXCEPT_DIR_INCLUDES = "test,debug"                         # Match folder path containing keywords
-# EXCEPT_NAME_INCLUDES = "log,tmp"                           # Match file name containing keywords
-# EXCEPT_PATH_INCLUDES = "staging,dev"                       # Match full path containing keywords
-# #
-# # Union Logic (OR):
-# # - PREFIX and INCLUDES are evaluated together (any match triggers action)
-# # - Multiple keywords in INCLUDES are OR-ed (any keyword match triggers)
-# # Example: BLACKLIST_PREFIX="/admin" + BLACKLIST_DIR_INCLUDES="private,secret"
-# #   → Matches: /admin/file.txt (prefix) OR /test/private/file.txt (dir includes) OR /test/secret/file.txt (dir includes)
-# #
-# # Matching Examples:
-# # 1. BLACKLIST_DIR_INCLUDES = "private"
-# #    → Blocks: /test/private/file.txt (dirPath "/test/private" contains "private")
-# #    → Action: "block"
-# #
-# # 2. WHITELIST_NAME_INCLUDES = "readme"
-# #    → Matches: /docs/readme.md (fileName "readme.md" contains "readme")
-# #    → Action: "pass-asis" (or configured WHITELIST_ACTION)
-# #
-# # 3. BLACKLIST_PATH_INCLUDES = "temp"
-# #    → Blocks: /test/temp/file.txt (fullPath contains "temp")
-# #    → Blocks: /test/file_temp.txt (fullPath contains "temp")
-# #    → Action: "block"
-# #
-# # 4. EXCEPT_DIR_INCLUDES = "staging"
-# #    → Paths NOT containing "staging" in dirPath trigger EXCEPT_ACTION
-# #    → Example: /prod/file.txt → triggers "block-except" (blocks)
-# #    → Example: /staging/file.txt → no action (normal flow)
+# # 路径与验证策略（ACTION/BLACKLIST/WHITELIST/EXCEPT、AUTO_REDIRECT、FAST_REDIRECT）均由 controller `/bootstrap` + `/decision` 下发。
+# # wrangler 不再承载上述策略类配置，如需调整请修改 controller config 与决策逻辑。
 #
 # # Database Mode for IP Rate Limiting
 # # Options: "" (disable database integration) or "custom-pg-rest" (PostgreSQL + PostgREST)
