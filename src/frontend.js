@@ -692,6 +692,26 @@ const pageScript = buildRawString`
     disableStream: false,
   };
 
+  const activeBlobUrls = new Set();
+  const trackBlobUrl = (url) => {
+    if (url) {
+      activeBlobUrls.add(url);
+    }
+  };
+  const revokeTrackedBlobUrls = () => {
+    activeBlobUrls.forEach((url) => {
+      try {
+        URL.revokeObjectURL(url);
+      } catch (_error) {
+        // ignore
+      }
+    });
+    activeBlobUrls.clear();
+  };
+  if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    window.addEventListener('pagehide', revokeTrackedBlobUrls);
+  }
+
   const supportsFileSystemAccess = () =>
     !window.__sinkDebug.disableFs &&
     typeof window !== 'undefined' &&
@@ -799,13 +819,13 @@ const pageScript = buildRawString`
           try {
             const file = await fileHandle.getFile();
             const url = URL.createObjectURL(file);
+            trackBlobUrl(url);
             const anchor = document.createElement('a');
             anchor.href = url;
             anchor.download = targetName || 'download.bin';
             document.body.appendChild(anchor);
             anchor.click();
             document.body.removeChild(anchor);
-            setTimeout(() => URL.revokeObjectURL(url), 1000);
             try {
               const root = await navigator.storage.getDirectory();
               await root.removeEntry(targetName, { recursive: false });
@@ -898,13 +918,13 @@ const pageScript = buildRawString`
       async finalize() {
         const blob = new Blob(chunks, { type: mimeType || 'application/octet-stream' });
         const url = URL.createObjectURL(blob);
+        trackBlobUrl(url);
         const anchor = document.createElement('a');
         anchor.href = url;
         anchor.download = targetName || 'download.bin';
         document.body.appendChild(anchor);
         anchor.click();
         document.body.removeChild(anchor);
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
       },
       async abort() {
         chunks.length = 0;
