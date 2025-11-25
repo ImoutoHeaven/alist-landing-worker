@@ -806,6 +806,12 @@ const pageScript = buildRawString`
             anchor.click();
             document.body.removeChild(anchor);
             setTimeout(() => URL.revokeObjectURL(url), 1000);
+            try {
+              const root = await navigator.storage.getDirectory();
+              await root.removeEntry(targetName, { recursive: false });
+            } catch (removeError) {
+              console.warn('删除 OPFS 临时文件失败', removeError);
+            }
           } catch (error) {
             console.warn('触发 OPFS 下载失败', error);
           }
