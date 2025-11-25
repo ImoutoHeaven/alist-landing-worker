@@ -72,16 +72,33 @@ envs:
       db:
         mode: "custom-pg-rest"
         postgrestUrl: "https://postgrest-staging.example.com"
+        verifyHeader: ["X-Postgrest-Auth"]
+        verifySecret: ["replace-with-postgrest-secret"]
         cacheTable: "download_cache"
-        ipRateLimitTable: "download_ip_ratelimit"
-        throttleTable: "download_throttle"
+        linkTTLSeconds: 1800
+        cleanupPercentage: 1
+        idleTimeoutSeconds: 0
         lastActiveTable: "download_last_active"
-        slotPoolTable: "upstream_slot_pool"
+        rateLimit:
+          enabled: false
+          windowSeconds: 0
+          limit: 0
+          ipv4Suffix: "/32"
+          ipv6Suffix: "/60"
+          blockSeconds: 600
+          pgErrorHandle: "fail-closed"
+          tableName: "download_ip_ratelimit"
+          cleanupPercentage: 1
       fairQueue:
         enabled: true
         backend: "slot-handler"
+        hostPatterns: ["*.sharepoint.com"]
         slotHandlerUrl: "https://slot-handler-staging.example.com"
         slotHandlerAuthKey: "replace-with-slot-handler-key"
+        queueWaitTimeoutMs: 120000
+        slotHandlerTimeoutMs: 20000
+        perRequestTimeoutMs: 8000
+        maxAttemptsCap: 35
         profiles:
           default:
             maxWaitMs: 120000
@@ -95,14 +112,17 @@ envs:
             maxWaitersPerIp: 4
       throttleProfiles:
         default:
-          windowMs: 60000
-          observeWindowMs: 60000
+          hostPatterns: []
+          windowSeconds: 60
+          observeWindowSeconds: 60
+          errorRatioPercent: 6
+          consecutiveThreshold: 2
           minSampleCount: 50
-          errorRatio:
-            num: 3
-            den: 50
-          consecutiveErrors: 2
+          fastErrorRatioPercent: 60
+          fastMinSampleCount: 4
           protectHttpCodes: [429, 499, 500, 502, 503, 504]
+          cleanupPercentage: 1
+          tableName: "download_throttle"
       originBindingDefault: "asn,iprange"
       pathRules:
         blacklist:
@@ -196,16 +216,33 @@ envs:
       db:
         mode: "custom-pg-rest"
         postgrestUrl: "https://postgrest.example.com"
+        verifyHeader: ["X-Postgrest-Auth"]
+        verifySecret: ["replace-with-postgrest-secret"]
         cacheTable: "download_cache"
-        ipRateLimitTable: "download_ip_ratelimit"
-        throttleTable: "download_throttle"
+        linkTTLSeconds: 1800
+        cleanupPercentage: 1
+        idleTimeoutSeconds: 0
         lastActiveTable: "download_last_active"
-        slotPoolTable: "upstream_slot_pool"
+        rateLimit:
+          enabled: false
+          windowSeconds: 0
+          limit: 0
+          ipv4Suffix: "/32"
+          ipv6Suffix: "/60"
+          blockSeconds: 600
+          pgErrorHandle: "fail-closed"
+          tableName: "download_ip_ratelimit"
+          cleanupPercentage: 1
       fairQueue:
         enabled: true
         backend: "slot-handler"
+        hostPatterns: ["*.sharepoint.com"]
         slotHandlerUrl: "https://slot-handler.example.com"
         slotHandlerAuthKey: "replace-with-slot-handler-key"
+        queueWaitTimeoutMs: 120000
+        slotHandlerTimeoutMs: 20000
+        perRequestTimeoutMs: 8000
+        maxAttemptsCap: 35
         profiles:
           default:
             maxWaitMs: 120000
@@ -214,14 +251,17 @@ envs:
             maxWaitersPerIp: 8
       throttleProfiles:
         default:
-          windowMs: 60000
-          observeWindowMs: 60000
+          hostPatterns: []
+          windowSeconds: 60
+          observeWindowSeconds: 60
+          errorRatioPercent: 6
+          consecutiveThreshold: 2
           minSampleCount: 50
-          errorRatio:
-            num: 3
-            den: 50
-          consecutiveErrors: 2
+          fastErrorRatioPercent: 60
+          fastMinSampleCount: 4
           protectHttpCodes: [429, 499, 500, 502, 503, 504]
+          cleanupPercentage: 1
+          tableName: "download_throttle"
       originBindingDefault: "asn,iprange"
       pathRules:
         blacklist:

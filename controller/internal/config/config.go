@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -26,6 +27,23 @@ const (
 	defaultPowdetDifficultyTable    = "POWDET_DIFFICULTY_STATE"
 	defaultPowdetTicketTable        = "POW_CHALLENGE_TICKET"
 	defaultAltchaTokenBindingTable  = "ALTCHA_TOKEN_LIST"
+	defaultDownloadLinkTTLSeconds   = 1800
+	defaultDownloadCleanupPercent   = 1.0
+	defaultDownloadIdleTimeout      = 0
+	defaultRateLimitIPv4Suffix      = "/32"
+	defaultRateLimitIPv6Suffix      = "/60"
+	defaultRateLimitBlockSeconds    = 600
+	defaultThrottleObserveWindow    = 60
+	defaultThrottleWindowSeconds    = 60
+	defaultThrottleConsecutive      = 4
+	defaultThrottleMinSampleCount   = 8
+	defaultThrottleFastSampleCount  = 4
+	defaultThrottleErrorRatioPct    = 20
+	defaultThrottleFastErrorRatio   = 60
+	defaultFairQueueWaitMs          = 15000
+	defaultSlotHandlerTimeoutMs     = 20000
+	defaultSlotHandlerPerReqTimeout = 8000
+	defaultSlotHandlerAttemptsCap   = 35
 )
 
 // CommonConfig holds shared upstream and auth settings.
@@ -126,15 +144,81 @@ type DownloadPathRules struct {
 	Except    []DownloadPathRule `yaml:"except" json:"except"`
 }
 
+// DownloadRateLimitConfig describes database-backed rate limit settings.
+type DownloadRateLimitConfig struct {
+	Enabled           bool    `yaml:"enabled" json:"enabled"`
+	WindowSeconds     int     `yaml:"windowSeconds" json:"windowSeconds"`
+	Limit             int     `yaml:"limit" json:"limit"`
+	IPv4Suffix        string  `yaml:"ipv4Suffix" json:"ipv4Suffix"`
+	IPv6Suffix        string  `yaml:"ipv6Suffix" json:"ipv6Suffix"`
+	BlockSeconds      int     `yaml:"blockSeconds" json:"blockSeconds"`
+	PgErrorHandle     string  `yaml:"pgErrorHandle" json:"pgErrorHandle"`
+	TableName         string  `yaml:"tableName" json:"tableName"`
+	CleanupPercentage float64 `yaml:"cleanupPercentage" json:"cleanupPercentage"`
+}
+
+// DownloadDBConfig collects PostgREST access and cache settings.
+type DownloadDBConfig struct {
+	Mode               string                  `yaml:"mode" json:"mode"`
+	PostgrestURL       string                  `yaml:"postgrestUrl" json:"postgrestUrl"`
+	VerifyHeader       []string                `yaml:"verifyHeader" json:"verifyHeader"`
+	VerifySecret       []string                `yaml:"verifySecret" json:"verifySecret"`
+	CacheTable         string                  `yaml:"cacheTable" json:"cacheTable"`
+	LinkTTLSeconds     int                     `yaml:"linkTTLSeconds" json:"linkTTLSeconds"`
+	CleanupPercentage  float64                 `yaml:"cleanupPercentage" json:"cleanupPercentage"`
+	IdleTimeoutSeconds int                     `yaml:"idleTimeoutSeconds" json:"idleTimeoutSeconds"`
+	LastActiveTable    string                  `yaml:"lastActiveTable" json:"lastActiveTable"`
+	RateLimit          DownloadRateLimitConfig `yaml:"rateLimit" json:"rateLimit"`
+	Extra              map[string]any          `yaml:",inline" json:"-"`
+}
+
+// DownloadThrottleProfile defines throttle v2 parameters.
+type DownloadThrottleProfile struct {
+	HostPatterns          []string `yaml:"hostPatterns" json:"hostPatterns"`
+	WindowSeconds         int      `yaml:"windowSeconds" json:"windowSeconds"`
+	ObserveWindowSeconds  int      `yaml:"observeWindowSeconds" json:"observeWindowSeconds"`
+	ErrorRatioPercent     int      `yaml:"errorRatioPercent" json:"errorRatioPercent"`
+	ConsecutiveThreshold  int      `yaml:"consecutiveThreshold" json:"consecutiveThreshold"`
+	MinSampleCount        int      `yaml:"minSampleCount" json:"minSampleCount"`
+	FastErrorRatioPercent int      `yaml:"fastErrorRatioPercent" json:"fastErrorRatioPercent"`
+	FastMinSampleCount    int      `yaml:"fastMinSampleCount" json:"fastMinSampleCount"`
+	ProtectHTTPCodes      []int    `yaml:"protectHttpCodes" json:"protectHttpCodes"`
+	CleanupPercentage     float64  `yaml:"cleanupPercentage" json:"cleanupPercentage"`
+	TableName             string   `yaml:"tableName" json:"tableName"`
+}
+
+// DownloadFairQueueProfile sets per-profile slot caps.
+type DownloadFairQueueProfile struct {
+	MaxWaitMs       int `yaml:"maxWaitMs" json:"maxWaitMs"`
+	MaxSlotPerHost  int `yaml:"maxSlotPerHost" json:"maxSlotPerHost"`
+	MaxSlotPerIP    int `yaml:"maxSlotPerIp" json:"maxSlotPerIp"`
+	MaxWaitersPerIP int `yaml:"maxWaitersPerIp" json:"maxWaitersPerIp"`
+}
+
+// DownloadFairQueueConfig controls slot-handler integration.
+type DownloadFairQueueConfig struct {
+	Enabled              bool                                `yaml:"enabled" json:"enabled"`
+	Backend              string                              `yaml:"backend" json:"backend"`
+	HostPatterns         []string                            `yaml:"hostPatterns" json:"hostPatterns"`
+	SlotHandlerURL       string                              `yaml:"slotHandlerUrl" json:"slotHandlerUrl"`
+	SlotHandlerAuthKey   string                              `yaml:"slotHandlerAuthKey" json:"slotHandlerAuthKey"`
+	QueueWaitTimeoutMs   int                                 `yaml:"queueWaitTimeoutMs" json:"queueWaitTimeoutMs"`
+	SlotHandlerTimeoutMs int                                 `yaml:"slotHandlerTimeoutMs" json:"slotHandlerTimeoutMs"`
+	PerRequestTimeoutMs  int                                 `yaml:"perRequestTimeoutMs" json:"perRequestTimeoutMs"`
+	MaxAttemptsCap       int                                 `yaml:"maxAttemptsCap" json:"maxAttemptsCap"`
+	Profiles             map[string]DownloadFairQueueProfile `yaml:"profiles" json:"profiles"`
+	Extra                map[string]any                      `yaml:",inline" json:"-"`
+}
+
 // DownloadConfig collects download-side strategy and upstream config.
 type DownloadConfig struct {
-	Address              string                 `yaml:"address" json:"address"`
-	DB                   map[string]any         `yaml:"db" json:"db"`
-	FairQueue            map[string]any         `yaml:"fairQueue" json:"fairQueue"`
-	ThrottleProfiles     map[string]any         `yaml:"throttleProfiles" json:"throttleProfiles"`
-	OriginBindingDefault string                 `yaml:"originBindingDefault" json:"originBindingDefault"`
-	PathRules            DownloadPathRules      `yaml:"pathRules" json:"pathRules"`
-	Extra                map[string]interface{} `yaml:",inline" json:"-"`
+	Address              string                             `yaml:"address" json:"address"`
+	DB                   DownloadDBConfig                   `yaml:"db" json:"db"`
+	FairQueue            DownloadFairQueueConfig            `yaml:"fairQueue" json:"fairQueue"`
+	ThrottleProfiles     map[string]DownloadThrottleProfile `yaml:"throttleProfiles" json:"throttleProfiles"`
+	OriginBindingDefault string                             `yaml:"originBindingDefault" json:"originBindingDefault"`
+	PathRules            DownloadPathRules                  `yaml:"pathRules" json:"pathRules"`
+	Extra                map[string]interface{}             `yaml:",inline" json:"-"`
 }
 
 // EnvConfig represents one environment such as prod or staging.
@@ -237,6 +321,10 @@ func (e *EnvConfig) validate(envName string) error {
 		}
 	}
 
+	if err := e.Download.ensureDefaults(envName); err != nil {
+		return fmt.Errorf("download config invalid for env %s: %w", envName, err)
+	}
+
 	return nil
 }
 
@@ -330,4 +418,217 @@ func (c *LandingPowdetConfig) ensureDefaults() error {
 	}
 
 	return nil
+}
+
+func (d *DownloadConfig) ensureDefaults(envName string) error {
+	if d.Address == "" {
+		return fmt.Errorf("download.address is required for env %s", envName)
+	}
+
+	if err := d.DB.ensureDefaults(envName); err != nil {
+		return err
+	}
+
+	if err := d.ensureThrottleProfiles(); err != nil {
+		return err
+	}
+
+	if err := d.FairQueue.ensureDefaults(envName); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (d *DownloadConfig) ensureThrottleProfiles() error {
+	if d.ThrottleProfiles == nil {
+		d.ThrottleProfiles = map[string]DownloadThrottleProfile{}
+	}
+
+	if _, ok := d.ThrottleProfiles["default"]; !ok {
+		d.ThrottleProfiles["default"] = DownloadThrottleProfile{}
+	}
+
+	for name, profile := range d.ThrottleProfiles {
+		profile.ensureDefaults()
+		d.ThrottleProfiles[name] = profile
+	}
+
+	return nil
+}
+
+func (d *DownloadDBConfig) ensureDefaults(envName string) error {
+	if d.Mode != "" && d.Mode != "custom-pg-rest" {
+		return fmt.Errorf("download.db.mode must be \"\" or \"custom-pg-rest\" for env %s", envName)
+	}
+
+	if d.CacheTable == "" {
+		d.CacheTable = "download_cache"
+	}
+	if d.LinkTTLSeconds <= 0 {
+		d.LinkTTLSeconds = defaultDownloadLinkTTLSeconds
+	}
+	if d.CleanupPercentage < 0 {
+		d.CleanupPercentage = defaultDownloadCleanupPercent
+	}
+	if d.IdleTimeoutSeconds < 0 {
+		d.IdleTimeoutSeconds = defaultDownloadIdleTimeout
+	}
+	if d.LastActiveTable == "" {
+		d.LastActiveTable = "download_last_active"
+	}
+
+	d.RateLimit.ensureDefaults()
+	if d.RateLimit.TableName == "" {
+		d.RateLimit.TableName = "download_ip_ratelimit"
+	}
+	if d.RateLimit.CleanupPercentage <= 0 {
+		d.RateLimit.CleanupPercentage = d.CleanupPercentage
+	}
+
+	if d.Mode == "custom-pg-rest" {
+		if d.PostgrestURL == "" {
+			return fmt.Errorf("download.db.postgrestUrl is required for env %s when mode=custom-pg-rest", envName)
+		}
+		if len(d.VerifyHeader) == 0 || len(d.VerifySecret) == 0 {
+			return fmt.Errorf("download.db.verifyHeader/verifySecret are required for env %s when mode=custom-pg-rest", envName)
+		}
+		if len(d.VerifyHeader) != len(d.VerifySecret) {
+			return fmt.Errorf("download.db.verifyHeader and verifySecret must have the same length for env %s", envName)
+		}
+
+		if d.RateLimit.Enabled && (d.RateLimit.Limit <= 0 || d.RateLimit.WindowSeconds <= 0) {
+			return fmt.Errorf("download.db.rateLimit requires positive windowSeconds and limit for env %s", envName)
+		}
+	}
+
+	if d.Mode == "" {
+		d.RateLimit.Enabled = false
+	}
+
+	return nil
+}
+
+func (r *DownloadRateLimitConfig) ensureDefaults() {
+	if r.IPv4Suffix == "" {
+		r.IPv4Suffix = defaultRateLimitIPv4Suffix
+	}
+	if r.IPv6Suffix == "" {
+		r.IPv6Suffix = defaultRateLimitIPv6Suffix
+	}
+	if r.BlockSeconds <= 0 {
+		r.BlockSeconds = defaultRateLimitBlockSeconds
+	}
+	if r.CleanupPercentage < 0 {
+		r.CleanupPercentage = defaultDownloadCleanupPercent
+	}
+	r.PgErrorHandle = normalizePgErrorHandle(r.PgErrorHandle)
+	if !r.Enabled || r.Limit <= 0 || r.WindowSeconds <= 0 {
+		r.Enabled = false
+	}
+}
+
+func (p *DownloadThrottleProfile) ensureDefaults() {
+	if p.WindowSeconds <= 0 {
+		p.WindowSeconds = defaultThrottleWindowSeconds
+	}
+	if p.ObserveWindowSeconds <= 0 {
+		p.ObserveWindowSeconds = defaultThrottleObserveWindow
+	}
+	if p.ErrorRatioPercent <= 0 {
+		p.ErrorRatioPercent = defaultThrottleErrorRatioPct
+	}
+	if p.FastErrorRatioPercent <= 0 {
+		p.FastErrorRatioPercent = defaultThrottleFastErrorRatio
+	}
+	if p.FastErrorRatioPercent < p.ErrorRatioPercent {
+		p.FastErrorRatioPercent = p.ErrorRatioPercent
+	}
+	if p.ConsecutiveThreshold <= 0 {
+		p.ConsecutiveThreshold = defaultThrottleConsecutive
+	}
+	if p.MinSampleCount <= 0 {
+		p.MinSampleCount = defaultThrottleMinSampleCount
+	}
+	if p.FastMinSampleCount < 0 {
+		p.FastMinSampleCount = defaultThrottleFastSampleCount
+	}
+	if len(p.ProtectHTTPCodes) == 0 {
+		p.ProtectHTTPCodes = []int{429, 499, 500, 502, 503, 504}
+	}
+	if p.CleanupPercentage < 0 {
+		p.CleanupPercentage = defaultDownloadCleanupPercent
+	}
+	if p.TableName == "" {
+		p.TableName = "download_throttle"
+	}
+}
+
+func (f *DownloadFairQueueProfile) ensureDefaults(fallbackWait int) {
+	if f.MaxWaitMs <= 0 {
+		if fallbackWait > 0 {
+			f.MaxWaitMs = fallbackWait
+		} else {
+			f.MaxWaitMs = defaultFairQueueWaitMs
+		}
+	}
+	if f.MaxSlotPerHost <= 0 {
+		f.MaxSlotPerHost = 8
+	}
+	if f.MaxSlotPerIP <= 0 {
+		f.MaxSlotPerIP = 3
+	}
+	if f.MaxWaitersPerIP <= 0 {
+		f.MaxWaitersPerIP = 8
+	}
+}
+
+func (f *DownloadFairQueueConfig) ensureDefaults(envName string) error {
+	if f.QueueWaitTimeoutMs <= 0 {
+		f.QueueWaitTimeoutMs = defaultFairQueueWaitMs
+	}
+	if f.SlotHandlerTimeoutMs <= 0 {
+		f.SlotHandlerTimeoutMs = defaultSlotHandlerTimeoutMs
+	}
+	if f.PerRequestTimeoutMs <= 0 {
+		f.PerRequestTimeoutMs = defaultSlotHandlerPerReqTimeout
+	}
+	if f.MaxAttemptsCap <= 0 {
+		f.MaxAttemptsCap = defaultSlotHandlerAttemptsCap
+	}
+	if f.Backend == "" {
+		f.Backend = "slot-handler"
+	}
+	if f.Profiles == nil {
+		f.Profiles = map[string]DownloadFairQueueProfile{}
+	}
+	if _, ok := f.Profiles["default"]; !ok {
+		f.Profiles["default"] = DownloadFairQueueProfile{}
+	}
+	for name, profile := range f.Profiles {
+		profile.ensureDefaults(f.QueueWaitTimeoutMs)
+		f.Profiles[name] = profile
+	}
+
+	if f.Enabled {
+		if len(f.HostPatterns) == 0 {
+			return fmt.Errorf("download.fairQueue.hostPatterns is required for env %s when fairQueue.enabled is true", envName)
+		}
+		if f.SlotHandlerURL == "" {
+			return fmt.Errorf("download.fairQueue.slotHandlerUrl is required for env %s when fairQueue.enabled is true", envName)
+		}
+	}
+
+	return nil
+}
+
+func normalizePgErrorHandle(raw string) string {
+	switch strings.ToLower(raw) {
+	case "fail-open":
+		return "fail-open"
+	case "fail-closed":
+		return "fail-closed"
+	default:
+		return "fail-closed"
+	}
 }
