@@ -2680,6 +2680,21 @@ const pageScript = buildRawString`
       }
     };
 
+    const abortWriter = async (reason) => {
+      if (!state.writer) return;
+      try {
+        if (typeof state.writer.abort === 'function') {
+          await state.writer.abort(reason);
+        }
+      } catch (error) {
+        console.warn('取消时关闭 writer 失败', error);
+      } finally {
+        setWriter(null);
+        state.writerHandle = null;
+        state.writerKey = '';
+      }
+    };
+
     const decodeDownloadUrl = (download) => {
       if (download.urlBase64) {
         try {
@@ -3330,6 +3345,7 @@ const pageScript = buildRawString`
       });
       state.abortControllers = new Set();
       setStatus('正在取消下载...');
+      await abortWriter('cancelled');
     };
 
     const pauseDownload = () => {
