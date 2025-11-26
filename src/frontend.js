@@ -691,7 +691,16 @@ const pageScript = buildRawString`
     disableOpfs: false,
     disableStream: false,
   };
-  const OPFS_TEMP_PREFIX = 'tmp-decrypt-';
+  const OPFS_TEMP_PREFIX = 'tmp_crypt_';
+
+  const makeOpfsTempName = (logicalName) => {
+    const base = logicalName && logicalName.trim() ? logicalName : 'download';
+    const safeBase = base.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 40);
+    const uuid =
+      (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' && crypto.randomUUID()) ||
+      `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    return `${OPFS_TEMP_PREFIX}${safeBase}_${uuid}.bin`;
+  };
 
   const activeBlobUrls = new Set();
   const trackBlobUrl = (url) => {
@@ -709,9 +718,39 @@ const pageScript = buildRawString`
     });
     activeBlobUrls.clear();
   };
-  if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
-    window.addEventListener('pagehide', revokeTrackedBlobUrls);
-  }
+
+  const activeOpfsTempFiles = new Set();
+  const trackOpfsTempFile = (name) => {
+    if (name) {
+      activeOpfsTempFiles.add(name);
+    }
+  };
+
+  const cleanupOpfsTempFiles = async () => {
+    if (!activeOpfsTempFiles.size) return;
+    if (
+      typeof navigator === 'undefined' ||
+      !navigator.storage ||
+      typeof navigator.storage.getDirectory !== 'function'
+    ) {
+      activeOpfsTempFiles.clear();
+      return;
+    }
+    try {
+      const root = await navigator.storage.getDirectory();
+      for (const name of activeOpfsTempFiles) {
+        try {
+          await root.removeEntry(name, { recursive: false });
+        } catch (error) {
+          console.warn('删除 OPFS 临时文件失败', name, error);
+        }
+      }
+    } catch (error) {
+      console.warn('获取 OPFS 根目录失败，无法清理 OPFS 临时文件', error);
+    } finally {
+      activeOpfsTempFiles.clear();
+    }
+  };
 
   const supportsFileSystemAccess = () =>
     !window.__sinkDebug.disableFs &&
@@ -729,6 +768,13 @@ const pageScript = buildRawString`
     typeof window !== 'undefined' &&
     typeof window.streamSaver === 'object' &&
     typeof window.streamSaver.createWriteStream === 'function';
+
+  if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    window.addEventListener('pagehide', () => {
+      revokeTrackedBlobUrls();
+      cleanupOpfsTempFiles();
+    });
+  }
 
   const createFsAccessSink = () => {
     let fileHandle = null;
@@ -781,14 +827,6 @@ const pageScript = buildRawString`
           // ignore
         } finally {
           writable = null;
-          if (fileHandle && opfsName) {
-            try {
-              const root = await navigator.storage.getDirectory();
-              await root.removeEntry(opfsName, { recursive: false });
-            } catch (removeError) {
-              console.warn('删除 OPFS 临时文件失败', removeError);
-            }
-          }
         }
       },
     };
@@ -810,10 +848,11 @@ const pageScript = buildRawString`
       },
       async start({ fileName } = {}) {
         targetName = fileName || 'download.bin';
-        opfsName = OPFS_TEMP_PREFIX + Date.now() + '-' + targetName;
+        opfsName = makeOpfsTempName(targetName || 'download.bin');
         const root = await navigator.storage.getDirectory();
         fileHandle = await root.getFileHandle(opfsName, { create: true });
         writable = await fileHandle.createWritable({ keepExistingData: false });
+        trackOpfsTempFile(opfsName);
       },
       async write(chunk) {
         if (!writable) {
@@ -826,28 +865,22 @@ const pageScript = buildRawString`
           await writable.close();
           writable = null;
         }
-        if (fileHandle) {
-          try {
-            const file = await fileHandle.getFile();
-            const url = URL.createObjectURL(file);
-            trackBlobUrl(url);
-            const anchor = document.createElement('a');
+        if (!fileHandle) return;
+        try {
+          const file = await fileHandle.getFile();
+          const url = URL.createObjectURL(file);
+          trackBlobUrl(url);
+          const anchor = document.createElement('a');
           anchor.href = url;
           anchor.download = targetName || 'download.bin';
           document.body.appendChild(anchor);
           anchor.click();
           document.body.removeChild(anchor);
-          try {
-            const root = await navigator.storage.getDirectory();
-            if (opfsName) {
-              await root.removeEntry(opfsName, { recursive: false });
-            }
-          } catch (removeError) {
-            console.warn('删除 OPFS 临时文件失败', removeError);
-          }
         } catch (error) {
           console.warn('触发 OPFS 下载失败', error);
-          }
+          throw error instanceof Error ? error : new Error(String(error));
+        } finally {
+          fileHandle = null;
         }
       },
       async abort(reason) {
@@ -978,28 +1011,6 @@ const pageScript = buildRawString`
     await fallbackSink.start(options);
     return fallbackSink;
   };
-
-  const cleanupOpfsTempFiles = async () => {
-    if (!supportsOPFS()) return;
-    try {
-      const root = await navigator.storage.getDirectory();
-      // OPFS entries is an async iterator of [name, handle]
-      // eslint-disable-next-line no-restricted-syntax
-      for await (const [name] of root.entries()) {
-        if (typeof name === 'string' && name.startsWith(OPFS_TEMP_PREFIX)) {
-          try {
-            await root.removeEntry(name, { recursive: false });
-          } catch (error) {
-            console.warn('清理 OPFS 临时文件失败', name, error);
-          }
-        }
-      }
-    } catch (error) {
-      console.warn('OPFS 清理过程失败', error);
-    }
-  };
-
-  cleanupOpfsTempFiles();
 
   const BYTES_PER_MB = 1024 * 1024;
   const MIN_SEGMENT_SIZE_MB = 2;
@@ -3338,6 +3349,7 @@ const pageScript = buildRawString`
         if (cancelBtn) cancelBtn.disabled = false;
         if (clearEnvBtn) clearEnvBtn.disabled = true;
         setStatus('开始下载，准备文件...');
+        let finalizeStarted = false;
         try {
           const autoRequeued = requeueFailedSegments({ silent: true });
           if (autoRequeued) {
@@ -3359,6 +3371,7 @@ const pageScript = buildRawString`
           } else {
             await writePlainSegments();
           }
+          finalizeStarted = true;
           await finalizeWriter();
           if (speedText) speedText.textContent = '--';
           setStatus('下载完成');
@@ -3368,7 +3381,11 @@ const pageScript = buildRawString`
             setStatus('下载已取消');
           } else {
             const message = error instanceof Error && error.message ? error.message : String(error || '未知错误');
-            setStatus('下载失败：' + message);
+            if (finalizeStarted) {
+              setStatus('解密成功但保存失败：' + message);
+            } else {
+              setStatus('下载失败：' + message);
+            }
             console.error(error);
           }
           throw error;
@@ -5854,6 +5871,7 @@ const pageScript = buildRawString`
     clientDecryptUiState.completed = false;
     clientDecryptUiState.failed = false;
     syncClientDecryptControls();
+    let finalizeStarted = false;
     try {
       resetClientDecryptProgress();
       setStatus('正在准备离线解密...');
@@ -5876,6 +5894,7 @@ const pageScript = buildRawString`
           await writeClientDecryptChunk(writer, chunk);
         },
       });
+      finalizeStarted = true;
       await finalizeClientDecryptWriter(writer);
       clientDecryptUiState.completed = true;
       clientDecryptUiState.failed = false;
@@ -5895,7 +5914,11 @@ const pageScript = buildRawString`
         clientDecryptUiState.savePath = '';
         syncClientDecryptSavePath();
       } else {
-        setStatus('解密失败：' + message);
+        if (finalizeStarted) {
+          setStatus('解密成功但保存失败：' + message);
+        } else {
+          setStatus('解密失败：' + message);
+        }
         console.error(error);
         clientDecryptUiState.failed = true;
         syncClientDecryptSavePath();
