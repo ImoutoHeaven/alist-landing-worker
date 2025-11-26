@@ -126,7 +126,9 @@ func (c *Controller) HandleDecision(w http.ResponseWriter, r *http.Request) {
 // HandleMetrics accepts metrics batches from controlled nodes.
 func (c *Controller) HandleMetrics(w http.ResponseWriter, r *http.Request) {
 	var req metricsRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	dec := json.NewDecoder(r.Body)
+	dec.UseNumber()
+	if err := dec.Decode(&req); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
