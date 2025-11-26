@@ -598,6 +598,7 @@ const pageScript = buildRawString`
   const parallelLimitInput = $('parallelLimitInput');
   const segmentSizeInput = $('segmentSizeInput');
   const ttfbTimeoutInput = $('ttfbTimeoutInput');
+  const saveModeSelect = $('saveModeSelect');
   const downloadBar = $('downloadBar');
   const decryptBar = $('decryptBar');
   const downloadText = $('downloadText');
@@ -2690,11 +2691,12 @@ const pageScript = buildRawString`
 
     const hydrateStoredSettings = async () => {
       try {
-        const [storedConnections, storedParallel, storedSegmentSize, storedTtfbTimeout] = await Promise.all([
+        const [storedConnections, storedParallel, storedSegmentSize, storedTtfbTimeout, storedSaveMode] = await Promise.all([
           loadConnectionSetting(),
           loadParallelSetting(),
           loadSegmentSizeSetting(),
           loadTtfbTimeoutSetting(),
+          loadSaveModeSetting(),
         ]);
         if (Number.isFinite(storedConnections)) {
           state.connectionLimit = storedConnections;
@@ -2721,6 +2723,12 @@ const pageScript = buildRawString`
           state.ttfbTimeoutRaw = String(state.ttfbTimeoutSeconds);
           if (ttfbTimeoutInput) {
             ttfbTimeoutInput.value = state.ttfbTimeoutRaw;
+          }
+        }
+        if (storedSaveMode) {
+          state.saveMode = storedSaveMode;
+          if (saveModeSelect) {
+            saveModeSelect.value = storedSaveMode;
           }
         }
       } catch (error) {
@@ -4122,6 +4130,7 @@ const pageScript = buildRawString`
       updateParallelLimit,
       updateSegmentSize,
       updateTtfbTimeout,
+      updateSaveMode,
       retryFailedSegments,
       clearStoredTasks,
     };
@@ -4456,6 +4465,7 @@ const pageScript = buildRawString`
       isFileSizeMatching: (size) => isFileSizeMatching(size),
       updateParallelLimit,
       updateSegmentSize,
+      updateSaveMode: (saveMode) => webDownloader.updateSaveMode(saveMode),
       getParallelism: () => state.decryptParallelism,
       getSegmentSizeMb: () => state.segmentSizeMb,
     };
@@ -6394,6 +6404,13 @@ const pageScript = buildRawString`
   if (ttfbTimeoutInput) {
     ttfbTimeoutInput.addEventListener('change', (event) => {
       webDownloader.updateTtfbTimeout(event.target.value);
+    });
+  }
+
+  if (saveModeSelect) {
+    saveModeSelect.addEventListener('change', (event) => {
+      webDownloader.updateSaveMode(event.target.value);
+      clientDecryptor.updateSaveMode(event.target.value);
     });
   }
 

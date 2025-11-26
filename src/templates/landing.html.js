@@ -125,6 +125,21 @@ export const htmlTemplate = `<!DOCTYPE html>
             </label>
             <input id="parallelLimitInput" class="retry-input" type="number" inputmode="numeric" autocomplete="off" min="1" max="32" value="6">
           </div>
+          <div class="config-section client-only">
+            <div class="config-section-title">保存方式</div>
+            <label class="retry-label" for="saveModeSelect">
+              保存策略
+              <span class="retry-hint">自动模式会根据浏览器能力选择最优方式</span>
+            </label>
+            <select id="saveModeSelect" class="retry-input">
+              <option value="auto">Auto（推荐）</option>
+              <option value="fs">FS（文件系统访问）</option>
+              <option value="opfs">OPFS（浏览器内临时文件）</option>
+              <option value="stream">Stream（StreamSaver）</option>
+              <option value="memstream">MemStream（内存流）</option>
+              <option value="memory">Memory（纯内存）</option>
+            </select>
+          </div>
           <div class="keygen-panel mode-shared">
             <h3>crypt keygen</h3>
             <p class="keygen-hint">仅供开发者使用 :)</p>
