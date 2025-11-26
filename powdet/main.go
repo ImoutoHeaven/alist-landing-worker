@@ -1,11 +1,14 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"math"
@@ -81,6 +84,30 @@ type runtimeMeta struct {
 	instanceID string
 }
 
+type metricsSnapshot struct {
+	Timestamp      int64
+	ConfigVersion  string
+	Counts         map[string]int64
+	ChallengeCache int
+	TokenCount     int
+}
+
+func (m metricsSnapshot) empty() bool {
+	return len(m.Counts) == 0 && m.ChallengeCache == 0 && m.TokenCount == 0
+}
+
+type metricsReporter struct {
+	env      controllerEnv
+	meta     runtimeMeta
+	client   *http.Client
+	interval time.Duration
+}
+
+type metricsCounters struct {
+	mu     sync.Mutex
+	counts map[string]int64
+}
+
 var config Config
 var configMu sync.RWMutex
 var argon2Parameters Argon2Parameters
@@ -90,6 +117,9 @@ var apiTokensFolder string
 var controllerSettings controllerEnv
 var internalAPIToken string
 var runtimeInfo runtimeMeta
+var metricsCollector *metricsCounters
+var metricsReporterInstance *metricsReporter
+var metricsLoopOnce sync.Once
 
 var currentChallengesGeneration = map[string]int{}
 var challenges = map[string]map[string]int{}
@@ -106,10 +136,13 @@ func main() {
 
 	loadRuntimeEnv()
 
+	metricsCollector = newMetricsCounters()
+
 	if err := readConfiguration(); err != nil {
 		log.Fatalf("failed to load configuration: %v", err)
 	}
 
+	startMetricsReporter()
 	registerInternalAPI()
 
 	requireMethod := func(method string) func(http.ResponseWriter, *http.Request) bool {
@@ -135,20 +168,24 @@ func main() {
 	requireToken := func(responseWriter http.ResponseWriter, request *http.Request) bool {
 		authorizationHeader := request.Header.Get("Authorization")
 		if !strings.HasPrefix(authorizationHeader, "Bearer ") {
+			metricsAdd("auth_missing_header")
 			http.Error(responseWriter, "401 Unauthorized: Authorization header is required and must start with 'Bearer '", http.StatusUnauthorized)
 			return true
 		}
 		token := strings.TrimPrefix(authorizationHeader, "Bearer ")
 		if token == "" {
+			metricsAdd("auth_missing_token")
 			http.Error(responseWriter, "401 Unauthorized: Authorization Bearer token is required", http.StatusUnauthorized)
 			return true
 		}
 		if !regexp.MustCompile("^[0-9a-f]{32}$").MatchString(token) {
+			metricsAdd("auth_invalid_format")
 			errorMsg := fmt.Sprintf("401 Unauthorized: Authorization Bearer token '%s' must be a 32 character hex string", token)
 			http.Error(responseWriter, errorMsg, http.StatusUnauthorized)
 			return true
 		}
 		if !tokenExists(token) {
+			metricsAdd("auth_unrecognized_token")
 			errorMsg := fmt.Sprintf("401 Unauthorized: Authorization Bearer token '%s' was in the right format, but it was unrecognized", token)
 			http.Error(responseWriter, errorMsg, http.StatusUnauthorized)
 			return true
@@ -218,6 +255,7 @@ func main() {
 		apiTokensCache.tokens[tokenHex] = struct{}{}
 		apiTokensCache.mu.Unlock()
 
+		metricsAdd("token_created")
 		fmt.Fprintf(responseWriter, "%s", tokenHex)
 
 		return true
@@ -252,6 +290,7 @@ func main() {
 			apiTokensCache.mu.Lock()
 			delete(apiTokensCache.tokens, token)
 			apiTokensCache.mu.Unlock()
+			metricsAdd("token_revoked")
 		}
 
 		responseWriter.Write([]byte("Revoked"))
@@ -267,6 +306,7 @@ func main() {
 		difficultyLevelString := requestQuery.Get("difficultyLevel")
 		difficultyLevel, err := strconv.Atoi(difficultyLevelString)
 		if err != nil {
+			metricsAdd("challenges_bad_request")
 			errorMessage := fmt.Sprintf(
 				"400 url param ?difficultyLevel=%s value could not be converted to an integer",
 				difficultyLevelString,
@@ -288,12 +328,14 @@ func main() {
 		challengesMu.Unlock()
 
 		cfg, argon := getRuntimeState()
+		metricsAdd("challenge_batches")
 
 		toReturn := make([]string, cfg.BatchSize)
 		for i := 0; i < cfg.BatchSize; i++ {
 			preimageBytes := make([]byte, 8)
 			_, err := rand.Read(preimageBytes)
 			if err != nil {
+				metricsAdd("challenges_generate_error")
 				log.Printf("read random bytes failed: %v", err)
 				http.Error(responseWriter, "500 internal server error", http.StatusInternalServerError)
 				return true
@@ -325,6 +367,7 @@ func main() {
 
 			challengeBytes, err := json.Marshal(challenge)
 			if err != nil {
+				metricsAdd("challenges_generate_error")
 				log.Printf("serialize challenge as json failed: %v", err)
 				http.Error(responseWriter, "500 internal server error", http.StatusInternalServerError)
 				return true
@@ -352,10 +395,13 @@ func main() {
 
 		responseBytes, err := json.Marshal(toReturn)
 		if err != nil {
+			metricsAdd("challenges_generate_error")
 			log.Printf("json marshal failed: %v", err)
 			http.Error(responseWriter, "500 internal server error", http.StatusInternalServerError)
 			return true
 		}
+
+		metricsAdd("challenges_generated", int64(len(toReturn)))
 
 		responseWriter.Write(responseBytes)
 
@@ -366,6 +412,7 @@ func main() {
 
 		// requireToken already validated the API Token, so we can just do this:
 		token := strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")
+		metricsAdd("verify_requests")
 
 		requestQuery := request.URL.Query()
 		challengeBase64 := requestQuery.Get("challenge")
@@ -376,6 +423,7 @@ func main() {
 		_, hasChallenge := tokenChallenges[challengeBase64]
 		if !hasAnyChallenges || !hasChallenge {
 			challengesMu.Unlock()
+			metricsAdd("verify_not_found")
 			errorMessage := fmt.Sprintf("404 challenge given by url param ?challenge=%s was not found", challengeBase64)
 			http.Error(responseWriter, errorMessage, http.StatusNotFound)
 			return true
@@ -386,6 +434,7 @@ func main() {
 		nonceBuffer := make([]byte, 8)
 		bytesWritten, err := hex.Decode(nonceBuffer, []byte(nonceHex))
 		if nonceHex == "" || err != nil {
+			metricsAdd("verify_bad_nonce")
 			errorMessage := fmt.Sprintf("400 bad request: nonce given by url param ?nonce=%s could not be hex decoded", nonceHex)
 			http.Error(responseWriter, errorMessage, http.StatusBadRequest)
 			return true
@@ -410,6 +459,7 @@ func main() {
 		preimageBytes := make([]byte, 8)
 		n, err := base64.StdEncoding.Decode(preimageBytes, []byte(challenge.Preimage))
 		if n != 8 || err != nil {
+			metricsAdd("verify_invalid_preimage")
 			log.Printf("invalid preimage %s: %v\n", challenge.Preimage, err)
 			http.Error(responseWriter, "500 invalid preimage", http.StatusInternalServerError)
 			return true
@@ -429,6 +479,7 @@ func main() {
 
 		log.Printf("endOfHash: %s <= Difficulty: %s", endOfHash, challenge.Difficulty)
 		if endOfHash > challenge.Difficulty {
+			metricsAdd("verify_fail")
 			errorMessage := fmt.Sprintf(
 				"400 bad request: nonce given by url param ?nonce=%s did not result in a hash that meets the required difficulty",
 				nonceHex,
@@ -437,6 +488,7 @@ func main() {
 			return true
 		}
 
+		metricsAdd("verify_ok")
 		responseWriter.WriteHeader(200)
 		responseWriter.Write([]byte("OK"))
 		return true
@@ -612,6 +664,198 @@ func (c controllerEnv) bootstrapURL() string {
 		prefix = "api/v0"
 	}
 	return strings.TrimSuffix(c.URL, "/") + "/" + prefix + "/bootstrap"
+}
+
+func (c controllerEnv) metricsURL() string {
+	prefix := strings.Trim(c.APIPrefix, "/")
+	if prefix == "" {
+		prefix = "api/v0"
+	}
+	return strings.TrimSuffix(c.URL, "/") + "/" + prefix + "/metrics"
+}
+
+func newMetricsCounters() *metricsCounters {
+	return &metricsCounters{counts: map[string]int64{}}
+}
+
+func (m *metricsCounters) inc(name string, delta int64) {
+	if m == nil || delta == 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.counts[name] += delta
+}
+
+func (m *metricsCounters) snapshotAndReset() map[string]int64 {
+	if m == nil {
+		return map[string]int64{}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	snapshot := make(map[string]int64, len(m.counts))
+	for k, v := range m.counts {
+		snapshot[k] = v
+	}
+	m.counts = map[string]int64{}
+	return snapshot
+}
+
+func metricsAdd(name string, delta ...int64) {
+	if metricsCollector == nil {
+		return
+	}
+	step := int64(1)
+	if len(delta) > 0 && delta[0] > 0 {
+		step = delta[0]
+	}
+	metricsCollector.inc(name, step)
+}
+
+func collectMetricsSnapshot() metricsSnapshot {
+	counts := map[string]int64{}
+	if metricsCollector != nil {
+		counts = metricsCollector.snapshotAndReset()
+	}
+
+	return metricsSnapshot{
+		Timestamp:      time.Now().UnixMilli(),
+		ConfigVersion:  currentConfigVersion(),
+		Counts:         counts,
+		ChallengeCache: countOutstandingChallenges(),
+		TokenCount:     countAPITokens(),
+	}
+}
+
+func countOutstandingChallenges() int {
+	challengesMu.RLock()
+	defer challengesMu.RUnlock()
+	total := 0
+	for _, tokenChallenges := range challenges {
+		total += len(tokenChallenges)
+	}
+	return total
+}
+
+func countAPITokens() int {
+	apiTokensCache.mu.RLock()
+	defer apiTokensCache.mu.RUnlock()
+	return len(apiTokensCache.tokens)
+}
+
+func startMetricsReporter() {
+	metricsLoopOnce.Do(func() {
+		reporter := newMetricsReporter(controllerSettings, runtimeInfo)
+		if reporter == nil {
+			return
+		}
+		metricsReporterInstance = reporter
+		go reporter.loop()
+	})
+}
+
+func newMetricsReporter(env controllerEnv, meta runtimeMeta) *metricsReporter {
+	if !env.enabled() {
+		return nil
+	}
+	if strings.TrimSpace(meta.env) == "" {
+		return nil
+	}
+	if strings.TrimSpace(env.URL) == "" || strings.TrimSpace(env.APIToken) == "" {
+		return nil
+	}
+	return &metricsReporter{
+		env:      env,
+		meta:     meta,
+		client:   &http.Client{Timeout: 10 * time.Second},
+		interval: 60 * time.Second,
+	}
+}
+
+func (m *metricsReporter) loop() {
+	if m == nil {
+		return
+	}
+	sendOnce := func() {
+		snap := collectMetricsSnapshot()
+		if snap.empty() {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if err := m.sendSnapshot(ctx, snap); err != nil {
+			log.Printf("metrics flush failed: %v", err)
+		}
+		cancel()
+	}
+
+	sendOnce()
+	ticker := time.NewTicker(m.interval)
+	defer ticker.Stop()
+	for range ticker.C {
+		sendOnce()
+	}
+}
+
+func (m *metricsReporter) sendSnapshot(ctx context.Context, snap metricsSnapshot) error {
+	if m == nil {
+		return nil
+	}
+	if strings.TrimSpace(m.meta.env) == "" {
+		return errors.New("env is required for metrics payload")
+	}
+
+	event := map[string]interface{}{
+		"type":           "powdet.snapshot",
+		"ts":             snap.Timestamp,
+		"configVersion":  snap.ConfigVersion,
+		"counts":         snap.Counts,
+		"challengeCache": snap.ChallengeCache,
+		"tokens":         snap.TokenCount,
+	}
+	if m.meta.appName != "" {
+		event["appName"] = m.meta.appName
+	}
+	if m.meta.appVersion != "" {
+		event["appVersion"] = m.meta.appVersion
+	}
+	if m.meta.role != "" {
+		event["role"] = m.meta.role
+	}
+	if m.meta.instanceID != "" {
+		event["instanceId"] = m.meta.instanceID
+	}
+
+	payload := map[string]interface{}{
+		"source":      "powdet",
+		"env":         m.meta.env,
+		"instance_id": m.meta.instanceID,
+		"events":      []map[string]interface{}{event},
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, m.env.metricsURL(), bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+m.env.APIToken)
+
+	resp, err := m.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return fmt.Errorf("controller metrics failed: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(data)))
+	}
+
+	return nil
 }
 
 func defaultString(value, fallback string) string {
@@ -883,20 +1127,38 @@ func handleInternalHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleInternalRefresh(w http.ResponseWriter, r *http.Request) {
+	metricsAdd("refresh_requests")
 	if err := readConfiguration(); err != nil {
 		log.Printf("refresh config failed: %v", err)
+		metricsAdd("refresh_failed")
 		http.Error(w, "refresh failed", http.StatusBadGateway)
 		return
 	}
+	metricsAdd("refresh_ok")
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func handleInternalFlush(w http.ResponseWriter, r *http.Request) {
+	metricsAdd("flush_requests")
+	snap := collectMetricsSnapshot()
+	if metricsReporterInstance != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if err := metricsReporterInstance.sendSnapshot(ctx, snap); err != nil {
+			log.Printf("flush metrics failed: %v", err)
+			metricsAdd("flush_failed")
+			cancel()
+			http.Error(w, "flush failed", http.StatusBadGateway)
+			return
+		}
+		cancel()
+	}
 	clearChallenges()
 	if err := loadAPITokens(); err != nil {
 		log.Printf("flush load API tokens failed: %v", err)
+		metricsAdd("flush_failed")
 		http.Error(w, "flush failed", http.StatusBadGateway)
 		return
 	}
+	metricsAdd("flush_ok")
 	w.WriteHeader(http.StatusNoContent)
 }
