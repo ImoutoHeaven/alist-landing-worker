@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"sync"
 
 	"controller/internal/config"
@@ -140,7 +141,7 @@ func (c *Controller) HandleMetrics(w http.ResponseWriter, r *http.Request) {
 
 	for _, raw := range req.Events {
 		evType, _ := raw["type"].(string)
-		ts, _ := raw["ts"].(float64)
+		ts := parseTimestamp(raw["ts"])
 
 		data := make(map[string]interface{}, len(raw))
 		for k, v := range raw {
@@ -234,6 +235,30 @@ func (c *Controller) currentEngine() *policy.Engine {
 	engine := c.Engine
 	c.mu.RUnlock()
 	return engine
+}
+
+func parseTimestamp(v any) int64 {
+	switch t := v.(type) {
+	case float64:
+		return int64(t)
+	case float32:
+		return int64(t)
+	case int64:
+		return t
+	case int32:
+		return int64(t)
+	case int:
+		return int64(t)
+	case json.Number:
+		if ts, err := t.Int64(); err == nil {
+			return ts
+		}
+	case string:
+		if ts, err := strconv.ParseInt(t, 10, 64); err == nil {
+			return ts
+		}
+	}
+	return 0
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
