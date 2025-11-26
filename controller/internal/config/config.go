@@ -55,6 +55,24 @@ const (
 	defaultLandingWebMaxConn        = 16
 	defaultLandingMinBandwidthMbps  = 10
 	defaultLandingMinDurationSec    = 3600
+	defaultSlotHandlerListen        = ":8080"
+	defaultSlotHandlerAuthHeader    = "X-FQ-Auth"
+	defaultSlotHandlerMaxWaitMs     = 20000
+	defaultSlotHandlerPollInterval  = 500
+	defaultSlotHandlerPollWindow    = 6000
+	defaultSlotHandlerMaxSlotHost   = 5
+	defaultSlotHandlerMaxSlotIP     = 1
+	defaultSlotHandlerMaxWaitHost   = 50
+	defaultSlotHandlerSessionIdle   = 90
+	defaultSlotHandlerZombieTimeout = 30
+	defaultSlotHandlerCleanupInt    = 1800
+	defaultSlotHandlerQueueDepthTTL = 20
+	defaultSlotHandlerCleanupDelay  = 5
+	defaultSlotHandlerThrottleFunc  = "download_check_throttle_protection"
+	defaultSlotHandlerRegisterFunc  = "download_register_fq_waiter"
+	defaultSlotHandlerReleaseWaiter = "download_release_fq_waiter"
+	defaultSlotHandlerTryAcquire    = "download_try_acquire_slot"
+	defaultSlotHandlerReleaseSlot   = "download_release_slot"
 )
 
 func boolPtr(v bool) *bool {
@@ -354,11 +372,125 @@ type DownloadConfig struct {
 	Extra                map[string]interface{}             `yaml:",inline" json:"-"`
 }
 
+// SlotHandlerAuthConfig guards slot-handler API.
+type SlotHandlerAuthConfig struct {
+	Enabled bool   `yaml:"enabled" json:"enabled"`
+	Header  string `yaml:"header" json:"header"`
+	Token   string `yaml:"token" json:"token"`
+}
+
+// SlotHandlerPostgrestConfig describes PostgREST backend settings.
+type SlotHandlerPostgrestConfig struct {
+	BaseURL    string `yaml:"baseUrl" json:"baseUrl"`
+	AuthHeader string `yaml:"authHeader" json:"authHeader"`
+}
+
+// SlotHandlerPostgresConfig holds direct Postgres connection info.
+type SlotHandlerPostgresConfig struct {
+	DSN string `yaml:"dsn" json:"dsn"`
+}
+
+// SlotHandlerBackendConfig selects PostgREST/Postgres.
+type SlotHandlerBackendConfig struct {
+	Mode      string                     `yaml:"mode" json:"mode"`
+	Postgrest SlotHandlerPostgrestConfig `yaml:"postgrest" json:"postgrest"`
+	Postgres  SlotHandlerPostgresConfig  `yaml:"postgres" json:"postgres"`
+	Extra     map[string]any             `yaml:",inline" json:"-"`
+}
+
+// SlotHandlerRPCConfig names fair queue RPC functions.
+type SlotHandlerRPCConfig struct {
+	ThrottleCheckFunc  string `yaml:"throttleCheckFunc" json:"throttleCheckFunc"`
+	RegisterWaiterFunc string `yaml:"registerWaiterFunc" json:"registerWaiterFunc"`
+	ReleaseWaiterFunc  string `yaml:"releaseWaiterFunc" json:"releaseWaiterFunc"`
+	TryAcquireFunc     string `yaml:"tryAcquireFunc" json:"tryAcquireFunc"`
+	ReleaseFunc        string `yaml:"releaseFunc" json:"releaseFunc"`
+}
+
+// SlotHandlerFairQueueCleanupConfig controls cleanup cadence.
+type SlotHandlerFairQueueCleanupConfig struct {
+	Enabled                    bool `yaml:"enabled" json:"enabled"`
+	IntervalSeconds            int  `yaml:"intervalSeconds" json:"intervalSeconds"`
+	QueueDepthZombieTtlSeconds int  `yaml:"queueDepthZombieTtlSeconds" json:"queueDepthZombieTtlSeconds"`
+	enabledSet                 bool `yaml:"-" json:"-"`
+	intervalSet                bool `yaml:"-" json:"-"`
+}
+
+// SlotHandlerFairQueueConfig matches slot-handler fair queue tuning.
+type SlotHandlerFairQueueConfig struct {
+	MaxWaitMs                  int64                             `yaml:"maxWaitMs" json:"maxWaitMs"`
+	PollIntervalMs             int64                             `yaml:"pollIntervalMs" json:"pollIntervalMs"`
+	PollWindowMs               int64                             `yaml:"pollWindowMs" json:"pollWindowMs"`
+	MinSlotHoldMs              int64                             `yaml:"minSlotHoldMs" json:"minSlotHoldMs"`
+	SmoothReleaseIntervalMs    *int64                            `yaml:"smoothReleaseIntervalMs" json:"smoothReleaseIntervalMs,omitempty"`
+	SessionIdleSeconds         int                               `yaml:"sessionIdleSeconds" json:"sessionIdleSeconds"`
+	MaxSlotPerHost             int                               `yaml:"maxSlotPerHost" json:"maxSlotPerHost"`
+	MaxSlotPerIP               int                               `yaml:"maxSlotPerIp" json:"maxSlotPerIp"`
+	MaxWaitersPerIP            int                               `yaml:"maxWaitersPerIp" json:"maxWaitersPerIp"`
+	MaxWaitersPerHost          int                               `yaml:"maxWaitersPerHost" json:"maxWaitersPerHost"`
+	ZombieTimeoutSeconds       int                               `yaml:"zombieTimeoutSeconds" json:"zombieTimeoutSeconds"`
+	IPCooldownSeconds          int                               `yaml:"ipCooldownSeconds" json:"ipCooldownSeconds"`
+	RPC                        SlotHandlerRPCConfig              `yaml:"rpc" json:"rpc"`
+	Cleanup                    SlotHandlerFairQueueCleanupConfig `yaml:"cleanup" json:"cleanup"`
+	DefaultGrantedCleanupDelay int                               `yaml:"defaultGrantedCleanupDelay" json:"defaultGrantedCleanupDelay"`
+	maxWaitersPerHostSet       bool                              `yaml:"-" json:"-"`
+}
+
+// SlotHandlerConfig is the slot-handler bootstrap payload.
+type SlotHandlerConfig struct {
+	Listen    string                     `yaml:"listen" json:"listen"`
+	LogLevel  string                     `yaml:"logLevel" json:"logLevel"`
+	Auth      SlotHandlerAuthConfig      `yaml:"auth" json:"auth"`
+	Backend   SlotHandlerBackendConfig   `yaml:"backend" json:"backend"`
+	FairQueue SlotHandlerFairQueueConfig `yaml:"fairQueue" json:"fairQueue"`
+	Extra     map[string]any             `yaml:",inline" json:"-"`
+}
+
+func (c *SlotHandlerFairQueueCleanupConfig) UnmarshalYAML(value *yaml.Node) error {
+	type raw SlotHandlerFairQueueCleanupConfig
+	var aux raw
+	if err := value.Decode(&aux); err != nil {
+		return err
+	}
+	*c = SlotHandlerFairQueueCleanupConfig(aux)
+	if value != nil && value.Kind == yaml.MappingNode {
+		for i := 0; i+1 < len(value.Content); i += 2 {
+			key := strings.TrimSpace(value.Content[i].Value)
+			switch key {
+			case "enabled":
+				c.enabledSet = true
+			case "intervalSeconds":
+				c.intervalSet = true
+			}
+		}
+	}
+	return nil
+}
+
+func (f *SlotHandlerFairQueueConfig) UnmarshalYAML(value *yaml.Node) error {
+	type raw SlotHandlerFairQueueConfig
+	var aux raw
+	if err := value.Decode(&aux); err != nil {
+		return err
+	}
+	*f = SlotHandlerFairQueueConfig(aux)
+	if value != nil && value.Kind == yaml.MappingNode {
+		for i := 0; i+1 < len(value.Content); i += 2 {
+			key := strings.TrimSpace(value.Content[i].Value)
+			if key == "maxWaitersPerHost" {
+				f.maxWaitersPerHostSet = true
+			}
+		}
+	}
+	return nil
+}
+
 // EnvConfig represents one environment such as prod or staging.
 type EnvConfig struct {
-	Common   CommonConfig   `yaml:"common" json:"common"`
-	Landing  LandingConfig  `yaml:"landing" json:"landing"`
-	Download DownloadConfig `yaml:"download" json:"download"`
+	Common      CommonConfig      `yaml:"common" json:"common"`
+	Landing     LandingConfig     `yaml:"landing" json:"landing"`
+	Download    DownloadConfig    `yaml:"download" json:"download"`
+	SlotHandler SlotHandlerConfig `yaml:"slotHandler" json:"slotHandler"`
 }
 
 // RootConfig is the full controller configuration.
@@ -431,6 +563,19 @@ func (e *EnvConfig) validate(envName string) error {
 
 	if err := e.Download.ensureDefaults(e.Common, envName); err != nil {
 		return fmt.Errorf("download config invalid for env %s: %w", envName, err)
+	}
+
+	if err := e.SlotHandler.ensureDefaults(envName); err != nil {
+		return fmt.Errorf("slotHandler config invalid for env %s: %w", envName, err)
+	}
+
+	if e.Download.FairQueue.Enabled {
+		if !e.SlotHandler.Auth.Enabled {
+			return fmt.Errorf("slotHandler.auth.enabled must be true for env %s when download.fairQueue.enabled is true", envName)
+		}
+		if strings.TrimSpace(e.Download.FairQueue.SlotHandlerAuthKey) != strings.TrimSpace(e.SlotHandler.Auth.Token) {
+			return fmt.Errorf("slotHandler.auth.token must match download.fairQueue.slotHandlerAuthKey for env %s", envName)
+		}
 	}
 
 	return nil
@@ -925,6 +1070,9 @@ func (f *DownloadFairQueueConfig) ensureDefaults(envName string) error {
 		if f.SlotHandlerURL == "" {
 			return fmt.Errorf("download.fairQueue.slotHandlerUrl is required for env %s when fairQueue.enabled is true", envName)
 		}
+		if strings.TrimSpace(f.SlotHandlerAuthKey) == "" {
+			return fmt.Errorf("download.fairQueue.slotHandlerAuthKey is required for env %s when fairQueue.enabled is true", envName)
+		}
 	}
 
 	return nil
@@ -952,6 +1100,121 @@ func (a *DownloadAuthConfig) ensureDefaults(common CommonConfig) {
 	if a.SignSecret == "" {
 		a.SignSecret = common.SignSecret
 	}
+}
+
+func (c *SlotHandlerFairQueueCleanupConfig) ensureDefaults() {
+	if !c.intervalSet || c.IntervalSeconds == 0 {
+		c.IntervalSeconds = defaultSlotHandlerCleanupInt
+	}
+	if c.QueueDepthZombieTtlSeconds <= 0 {
+		c.QueueDepthZombieTtlSeconds = defaultSlotHandlerQueueDepthTTL
+	}
+	if !c.enabledSet {
+		c.Enabled = true
+	}
+}
+
+func (f *SlotHandlerFairQueueConfig) ensureDefaults() error {
+	if f.MaxWaitMs <= 0 {
+		f.MaxWaitMs = defaultSlotHandlerMaxWaitMs
+	}
+	if f.PollIntervalMs <= 0 {
+		f.PollIntervalMs = defaultSlotHandlerPollInterval
+	}
+	if f.PollWindowMs <= 0 {
+		f.PollWindowMs = defaultSlotHandlerPollWindow
+	}
+	if f.MinSlotHoldMs < 0 {
+		f.MinSlotHoldMs = 0
+	}
+	if f.MaxSlotPerHost <= 0 {
+		f.MaxSlotPerHost = defaultSlotHandlerMaxSlotHost
+	}
+	if f.MaxSlotPerIP <= 0 {
+		f.MaxSlotPerIP = defaultSlotHandlerMaxSlotIP
+	}
+	if f.MaxWaitersPerIP < 0 {
+		f.MaxWaitersPerIP = 0
+	}
+	if !f.maxWaitersPerHostSet && f.MaxWaitersPerHost <= 0 {
+		f.MaxWaitersPerHost = defaultSlotHandlerMaxWaitHost
+	}
+	if f.SessionIdleSeconds <= 0 {
+		f.SessionIdleSeconds = defaultSlotHandlerSessionIdle
+	}
+	if f.ZombieTimeoutSeconds <= 0 {
+		f.ZombieTimeoutSeconds = defaultSlotHandlerZombieTimeout
+	}
+	if f.IPCooldownSeconds < 0 {
+		f.IPCooldownSeconds = 0
+	}
+	if f.DefaultGrantedCleanupDelay <= 0 {
+		f.DefaultGrantedCleanupDelay = defaultSlotHandlerCleanupDelay
+	}
+
+	if f.RPC.ThrottleCheckFunc == "" {
+		f.RPC.ThrottleCheckFunc = defaultSlotHandlerThrottleFunc
+	}
+	if f.RPC.RegisterWaiterFunc == "" {
+		f.RPC.RegisterWaiterFunc = defaultSlotHandlerRegisterFunc
+	}
+	if f.RPC.ReleaseWaiterFunc == "" {
+		f.RPC.ReleaseWaiterFunc = defaultSlotHandlerReleaseWaiter
+	}
+	if f.RPC.TryAcquireFunc == "" {
+		f.RPC.TryAcquireFunc = defaultSlotHandlerTryAcquire
+	}
+	if f.RPC.ReleaseFunc == "" {
+		f.RPC.ReleaseFunc = defaultSlotHandlerReleaseSlot
+	}
+
+	f.Cleanup.ensureDefaults()
+	return nil
+}
+
+func (b *SlotHandlerBackendConfig) ensureDefaults() error {
+	if b.Mode == "" {
+		b.Mode = "postgrest"
+	}
+
+	switch strings.ToLower(b.Mode) {
+	case "postgrest":
+		if strings.TrimSpace(b.Postgrest.BaseURL) == "" {
+			return fmt.Errorf("slotHandler.backend.postgrest.baseUrl is required when mode=postgrest")
+		}
+	case "postgres":
+		if strings.TrimSpace(b.Postgres.DSN) == "" {
+			return fmt.Errorf("slotHandler.backend.postgres.dsn is required when mode=postgres")
+		}
+	default:
+		return fmt.Errorf("slotHandler.backend.mode must be postgrest or postgres")
+	}
+
+	return nil
+}
+
+func (c *SlotHandlerConfig) ensureDefaults(envName string) error {
+	if c.Listen == "" {
+		c.Listen = defaultSlotHandlerListen
+	}
+	if c.LogLevel == "" {
+		c.LogLevel = "info"
+	}
+	if c.Auth.Header == "" {
+		c.Auth.Header = defaultSlotHandlerAuthHeader
+	}
+	if c.Auth.Enabled && strings.TrimSpace(c.Auth.Token) == "" {
+		return fmt.Errorf("slotHandler.auth.token is required for env %s when auth.enabled is true", envName)
+	}
+
+	if err := c.Backend.ensureDefaults(); err != nil {
+		return fmt.Errorf("slotHandler backend invalid for env %s: %w", envName, err)
+	}
+	if err := c.FairQueue.ensureDefaults(); err != nil {
+		return fmt.Errorf("slotHandler fairQueue invalid for env %s: %w", envName, err)
+	}
+
+	return nil
 }
 
 func normalizePgErrorHandle(raw string) string {
