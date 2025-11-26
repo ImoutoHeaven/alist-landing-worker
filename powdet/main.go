@@ -26,6 +26,16 @@ import (
 	"golang.org/x/crypto/argon2"
 )
 
+const (
+	defaultListenPort            = 2370
+	defaultBatchSize             = 1000
+	defaultDeprecateAfterBatches = 10
+	defaultArgonMemoryKiB        = 16384
+	defaultArgonIterations       = 2
+	defaultArgonParallelism      = 1
+	defaultArgonKeyLength        = 16
+)
+
 type Config struct {
 	ListenPort            int `json:"listen_port"`
 	BatchSize             int `json:"batch_size"`
@@ -34,6 +44,7 @@ type Config struct {
 	Argon2MemoryKiB   int `json:"argon2_memory_kib"`
 	Argon2Iterations  int `json:"argon2_iterations"`
 	Argon2Parallelism int `json:"argon2_parallelism"`
+	Argon2KeyLength   int `json:"argon2_key_length"`
 
 	AdminAPIToken string `json:"admin_api_token"`
 }
@@ -53,13 +64,36 @@ type Challenge struct {
 	DifficultyLevel int    `json:"dl"`
 }
 
+type controllerEnv struct {
+	URL        string
+	APIPrefix  string
+	APIToken   string
+	Env        string
+	Role       string
+	InstanceID string
+}
+
+type runtimeMeta struct {
+	appName    string
+	appVersion string
+	env        string
+	role       string
+	instanceID string
+}
+
 var config Config
-var appDirectory string
+var configMu sync.RWMutex
 var argon2Parameters Argon2Parameters
+var configVersion string
+var appDirectory string
+var apiTokensFolder string
+var controllerSettings controllerEnv
+var internalAPIToken string
+var runtimeInfo runtimeMeta
+
 var currentChallengesGeneration = map[string]int{}
 var challenges = map[string]map[string]int{}
 var challengesMu sync.RWMutex
-var apiTokensFolder string
 
 type tokenCache struct {
 	tokens map[string]struct{}
@@ -70,9 +104,13 @@ var apiTokensCache = tokenCache{tokens: map[string]struct{}{}}
 
 func main() {
 
-	var err error
+	loadRuntimeEnv()
 
-	apiTokensFolder := readConfiguration()
+	if err := readConfiguration(); err != nil {
+		log.Fatalf("failed to load configuration: %v", err)
+	}
+
+	registerInternalAPI()
 
 	requireMethod := func(method string) func(http.ResponseWriter, *http.Request) bool {
 		return func(responseWriter http.ResponseWriter, request *http.Request) bool {
@@ -86,7 +124,8 @@ func main() {
 	}
 
 	requireAdmin := func(responseWriter http.ResponseWriter, request *http.Request) bool {
-		if request.Header.Get("Authorization") != fmt.Sprintf("Bearer %s", config.AdminAPIToken) {
+		adminToken := strings.TrimSpace(currentConfig().AdminAPIToken)
+		if request.Header.Get("Authorization") != fmt.Sprintf("Bearer %s", adminToken) {
 			http.Error(responseWriter, "401 Unauthorized", http.StatusUnauthorized)
 			return true
 		}
@@ -248,8 +287,10 @@ func main() {
 		currentGeneration := currentChallengesGeneration[token]
 		challengesMu.Unlock()
 
-		toReturn := make([]string, config.BatchSize)
-		for i := 0; i < config.BatchSize; i++ {
+		cfg, argon := getRuntimeState()
+
+		toReturn := make([]string, cfg.BatchSize)
+		for i := 0; i < cfg.BatchSize; i++ {
 			preimageBytes := make([]byte, 8)
 			_, err := rand.Read(preimageBytes)
 			if err != nil {
@@ -277,10 +318,10 @@ func main() {
 				Difficulty:      difficulty,
 				DifficultyLevel: difficultyLevel,
 			}
-			challenge.MemoryKiB = argon2Parameters.MemoryKiB
-			challenge.Iterations = argon2Parameters.Iterations
-			challenge.Parallelism = argon2Parameters.Parallelism
-			challenge.KeyLength = argon2Parameters.KeyLength
+			challenge.MemoryKiB = argon.MemoryKiB
+			challenge.Iterations = argon.Iterations
+			challenge.Parallelism = argon.Parallelism
+			challenge.KeyLength = argon.KeyLength
 
 			challengeBytes, err := json.Marshal(challenge)
 			if err != nil {
@@ -298,7 +339,7 @@ func main() {
 		toRemove := []string{}
 		challengesMu.RLock()
 		for k, generation := range tokenChallenges {
-			if generation+config.DeprecateAfterBatches < currentGeneration {
+			if generation+cfg.DeprecateAfterBatches < currentGeneration {
 				toRemove = append(toRemove, k)
 			}
 		}
@@ -417,9 +458,10 @@ func main() {
 	// Backward compatibility for older paths
 	http.Handle("/pow-bot-deterrent-static/", http.StripPrefix("/pow-bot-deterrent-static/", http.FileServer(http.Dir("./static/"))))
 
-	log.Printf("💥  PoW! Bot Deterrent server listening on port %d", config.ListenPort)
+	cfg := currentConfig()
+	log.Printf("💥  PoW! Bot Deterrent server listening on port %d (configVersion=%s)", cfg.ListenPort, currentConfigVersion())
 
-	err = http.ListenAndServe(fmt.Sprintf(":%d", config.ListenPort), nil)
+	err := http.ListenAndServe(fmt.Sprintf(":%d", cfg.ListenPort), nil)
 
 	// if got this far it means server crashed!
 	panic(err)
@@ -524,69 +566,337 @@ func tokenExists(token string) bool {
 	return ok
 }
 
-func readConfiguration() string {
-	apiTokensFolder = locateAPITokensFolder()
-	appDirectory = filepath.Dir(apiTokensFolder)
-	configJsonPath := filepath.Join(appDirectory, "config.json")
-	err := configlite.ReadConfiguration(configJsonPath, "POW_BOT_DETERRENT", []string{}, reflect.ValueOf(&config))
+func currentConfig() Config {
+	configMu.RLock()
+	cfg := config
+	configMu.RUnlock()
+	return cfg
+}
+
+func currentArgonParams() Argon2Parameters {
+	configMu.RLock()
+	params := argon2Parameters
+	configMu.RUnlock()
+	return params
+}
+
+func currentConfigVersion() string {
+	configMu.RLock()
+	version := configVersion
+	configMu.RUnlock()
+	return version
+}
+
+func getRuntimeState() (Config, Argon2Parameters) {
+	configMu.RLock()
+	cfg := config
+	params := argon2Parameters
+	configMu.RUnlock()
+	return cfg, params
+}
+
+func (c controllerEnv) role() string {
+	if strings.TrimSpace(c.Role) == "" {
+		return "powdet"
+	}
+	return c.Role
+}
+
+func (c controllerEnv) enabled() bool {
+	return strings.TrimSpace(c.URL) != "" && strings.TrimSpace(c.APIToken) != "" && strings.TrimSpace(c.Env) != ""
+}
+
+func (c controllerEnv) bootstrapURL() string {
+	prefix := strings.Trim(c.APIPrefix, "/")
+	if prefix == "" {
+		prefix = "api/v0"
+	}
+	return strings.TrimSuffix(c.URL, "/") + "/" + prefix + "/bootstrap"
+}
+
+func defaultString(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
+}
+
+func clearChallenges() {
+	challengesMu.Lock()
+	currentChallengesGeneration = map[string]int{}
+	challenges = map[string]map[string]int{}
+	challengesMu.Unlock()
+}
+
+func applyConfig(cfg Config, version string) error {
+	normalized, params, err := normalizeConfig(cfg)
 	if err != nil {
-		panic(errors.Wrap(err, "ReadConfiguration returned"))
+		return err
 	}
 
-	errors := []string{}
-	if config.ListenPort == 0 {
-		config.ListenPort = 2370
+	configMu.Lock()
+	config = normalized
+	argon2Parameters = params
+	if strings.TrimSpace(version) == "" {
+		configVersion = "local-config"
+	} else {
+		configVersion = version
 	}
-	if config.BatchSize == 0 {
-		config.BatchSize = 1000
-	}
-	if config.DeprecateAfterBatches == 0 {
-		config.DeprecateAfterBatches = 10
-	}
-	if config.Argon2MemoryKiB == 0 {
-		config.Argon2MemoryKiB = 16384
-	}
-	if config.Argon2Iterations == 0 {
-		config.Argon2Iterations = 2
-	}
-	if config.Argon2Parallelism == 0 {
-		config.Argon2Parallelism = 1
-	}
-	if config.AdminAPIToken == "" {
-		errors = append(errors, "the POW_BOT_DETERRENT_ADMIN_API_TOKEN environment variable is required")
+	configMu.Unlock()
+	return nil
+}
+
+func normalizeConfig(cfg Config) (Config, Argon2Parameters, error) {
+	cfg.ListenPort = intOrDefault(cfg.ListenPort, defaultListenPort)
+	cfg.BatchSize = intOrDefault(cfg.BatchSize, defaultBatchSize)
+	cfg.DeprecateAfterBatches = intOrDefault(cfg.DeprecateAfterBatches, defaultDeprecateAfterBatches)
+	cfg.Argon2MemoryKiB = intOrDefault(cfg.Argon2MemoryKiB, defaultArgonMemoryKiB)
+	cfg.Argon2Iterations = intOrDefault(cfg.Argon2Iterations, defaultArgonIterations)
+	cfg.Argon2Parallelism = intOrDefault(cfg.Argon2Parallelism, defaultArgonParallelism)
+	cfg.Argon2KeyLength = intOrDefault(cfg.Argon2KeyLength, defaultArgonKeyLength)
+
+	if strings.TrimSpace(cfg.AdminAPIToken) == "" {
+		return cfg, Argon2Parameters{}, fmt.Errorf("the POW_BOT_DETERRENT_ADMIN_API_TOKEN environment variable is required")
 	}
 
-	if len(errors) > 0 {
-		log.Fatalln("💥 PoW Bot Deterrent can't start because there are configuration issues:")
-		log.Fatalln(strings.Join(errors, "\n"))
+	params := Argon2Parameters{
+		MemoryKiB:   cfg.Argon2MemoryKiB,
+		Iterations:  cfg.Argon2Iterations,
+		Parallelism: cfg.Argon2Parallelism,
+		KeyLength:   cfg.Argon2KeyLength,
 	}
 
-	argon2Parameters = Argon2Parameters{
-		MemoryKiB:   config.Argon2MemoryKiB,
-		Iterations:  config.Argon2Iterations,
-		Parallelism: config.Argon2Parallelism,
-		KeyLength:   16,
-	}
+	return cfg, params, nil
+}
 
-	log.Println("💥 PoW Bot Deterrent starting up with config:")
-	configToLogBytes, _ := json.MarshalIndent(config, "", "  ")
+func logEffectiveConfig(cfg Config, version string) {
+	log.Printf("💥 PoW Bot Deterrent starting up with config (version=%s):", version)
+	configToLogBytes, _ := json.MarshalIndent(cfg, "", "  ")
 	configToLogString := regexp.MustCompile(
 		`("admin_api_token": ")[^"]+(",)`,
 	).ReplaceAllString(
 		string(configToLogBytes),
 		"$1******$2",
 	)
-	configToLogString = regexp.MustCompile(
-		`("imap_password": ")[^"]+(",?)`,
-	).ReplaceAllString(
-		configToLogString,
-		"$1******$2",
-	)
 	log.Println(configToLogString)
+}
 
-	if err := loadAPITokens(); err != nil {
-		log.Fatalf("failed to load API tokens from %s: %v", apiTokensFolder, err)
+func loadRuntimeEnv() {
+	controllerSettings = controllerEnv{
+		URL:        os.Getenv("CONTROLLER_URL"),
+		APIPrefix:  os.Getenv("CONTROLLER_API_PREFIX"),
+		APIToken:   os.Getenv("CONTROLLER_API_TOKEN"),
+		Env:        os.Getenv("ENV"),
+		Role:       os.Getenv("ROLE"),
+		InstanceID: os.Getenv("INSTANCE_ID"),
 	}
 
-	return apiTokensFolder
+	if strings.TrimSpace(controllerSettings.APIPrefix) == "" {
+		controllerSettings.APIPrefix = "/api/v0"
+	}
+
+	internalAPIToken = os.Getenv("INTERNAL_API_TOKEN")
+	role := controllerSettings.role()
+	runtimeInfo = runtimeMeta{
+		appName:    defaultString(os.Getenv("APP_NAME"), "powdet"),
+		appVersion: os.Getenv("APP_VERSION"),
+		env:        defaultString(controllerSettings.Env, "local"),
+		role:       role,
+		instanceID: defaultString(controllerSettings.InstanceID, role+"-local"),
+	}
+}
+
+func readConfiguration() error {
+	apiTokensFolder = locateAPITokensFolder()
+	appDirectory = filepath.Dir(apiTokensFolder)
+
+	var cfg Config
+	var version string
+	var err error
+
+	useController := strings.TrimSpace(controllerSettings.URL) != "" || strings.TrimSpace(controllerSettings.APIToken) != "" || strings.TrimSpace(controllerSettings.Env) != ""
+	if useController && !controllerSettings.enabled() {
+		return fmt.Errorf("controller settings incomplete: require CONTROLLER_URL, CONTROLLER_API_TOKEN, and ENV")
+	}
+
+	if controllerSettings.enabled() {
+		cfg, version, err = fetchConfigFromController(controllerSettings)
+	} else {
+		cfg, version, err = loadConfigFromFile(filepath.Join(appDirectory, "config.json"))
+	}
+	if err != nil {
+		if controllerSettings.enabled() {
+			return fmt.Errorf("fetch controller config: %w", err)
+		}
+		return fmt.Errorf("load local config: %w", err)
+	}
+
+	if err := applyConfig(cfg, version); err != nil {
+		return err
+	}
+
+	logEffectiveConfig(cfg, version)
+
+	if err := loadAPITokens(); err != nil {
+		return fmt.Errorf("failed to load API tokens from %s: %w", apiTokensFolder, err)
+	}
+
+	clearChallenges()
+
+	return nil
+}
+
+func intOrDefault(v int, fallback int) int {
+	if v <= 0 {
+		return fallback
+	}
+	return v
+}
+
+func loadConfigFromFile(path string) (Config, string, error) {
+	var cfg Config
+	if err := configlite.ReadConfiguration(path, "POW_BOT_DETERRENT", []string{}, reflect.ValueOf(&cfg)); err != nil {
+		return cfg, "", errors.Wrap(err, "ReadConfiguration returned")
+	}
+	return cfg, "local-config", nil
+}
+
+func fetchConfigFromController(ctrl controllerEnv) (Config, string, error) {
+	if !ctrl.enabled() {
+		return Config{}, "", fmt.Errorf("controller settings incomplete")
+	}
+
+	instanceID := ctrl.InstanceID
+	if strings.TrimSpace(instanceID) == "" {
+		instanceID = ctrl.role() + "-local"
+	}
+
+	payload := map[string]interface{}{
+		"role":        ctrl.role(),
+		"env":         ctrl.Env,
+		"instance_id": instanceID,
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return Config{}, "", err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, ctrl.bootstrapURL(), strings.NewReader(string(body)))
+	if err != nil {
+		return Config{}, "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+ctrl.APIToken)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return Config{}, "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		data, _ := ioutil.ReadAll(resp.Body)
+		return Config{}, "", fmt.Errorf("controller bootstrap failed: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(data)))
+	}
+
+	var parsed struct {
+		ConfigVersion string `json:"configVersion"`
+		Powdet        *struct {
+			Enabled               bool `json:"enabled"`
+			ListenPort            int  `json:"listenPort"`
+			BatchSize             int  `json:"batchSize"`
+			DeprecateAfterBatches int  `json:"deprecateAfterBatches"`
+			Argon2                struct {
+				MemoryKiB   int `json:"memoryKiB"`
+				Iterations  int `json:"iterations"`
+				Parallelism int `json:"parallelism"`
+				KeyLength   int `json:"keyLength"`
+			} `json:"argon2"`
+			AdminAPIToken string `json:"adminApiToken"`
+		} `json:"powdet"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return Config{}, "", err
+	}
+
+	if parsed.Powdet == nil {
+		return Config{}, "", fmt.Errorf("controller bootstrap missing powdet config")
+	}
+	if !parsed.Powdet.Enabled {
+		return Config{}, "", fmt.Errorf("powdet config is disabled from controller")
+	}
+
+	cfg := Config{
+		ListenPort:            parsed.Powdet.ListenPort,
+		BatchSize:             parsed.Powdet.BatchSize,
+		DeprecateAfterBatches: parsed.Powdet.DeprecateAfterBatches,
+		Argon2MemoryKiB:       parsed.Powdet.Argon2.MemoryKiB,
+		Argon2Iterations:      parsed.Powdet.Argon2.Iterations,
+		Argon2Parallelism:     parsed.Powdet.Argon2.Parallelism,
+		Argon2KeyLength:       parsed.Powdet.Argon2.KeyLength,
+		AdminAPIToken:         parsed.Powdet.AdminAPIToken,
+	}
+
+	return cfg, parsed.ConfigVersion, nil
+}
+
+func registerInternalAPI() {
+	http.HandleFunc("/api/v0/health", internalAuth(handleInternalHealth))
+	http.HandleFunc("/api/v0/refresh", internalAuth(handleInternalRefresh))
+	http.HandleFunc("/api/v0/flush", internalAuth(handleInternalFlush))
+}
+
+func internalAuth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if strings.TrimSpace(internalAPIToken) == "" {
+			http.NotFound(w, r)
+			return
+		}
+		auth := r.Header.Get("Authorization")
+		if !strings.HasPrefix(auth, "Bearer ") {
+			http.NotFound(w, r)
+			return
+		}
+		token := strings.TrimPrefix(auth, "Bearer ")
+		if token != internalAPIToken {
+			http.NotFound(w, r)
+			return
+		}
+		next(w, r)
+	}
+}
+
+func handleInternalHealth(w http.ResponseWriter, r *http.Request) {
+	headers := w.Header()
+	headers.Set("X-App-Name", runtimeInfo.appName)
+	headers.Set("X-App-Version", runtimeInfo.appVersion)
+	headers.Set("X-Env", runtimeInfo.env)
+	headers.Set("X-Role", runtimeInfo.role)
+	headers.Set("X-Instance-Id", runtimeInfo.instanceID)
+	if version := currentConfigVersion(); version != "" {
+		headers.Set("X-Config-Version", version)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func handleInternalRefresh(w http.ResponseWriter, r *http.Request) {
+	if err := readConfiguration(); err != nil {
+		log.Printf("refresh config failed: %v", err)
+		http.Error(w, "refresh failed", http.StatusBadGateway)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func handleInternalFlush(w http.ResponseWriter, r *http.Request) {
+	clearChallenges()
+	if err := loadAPITokens(); err != nil {
+		log.Printf("flush load API tokens failed: %v", err)
+		http.Error(w, "flush failed", http.StatusBadGateway)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

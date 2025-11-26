@@ -26,6 +26,13 @@ const (
 	defaultPowdetMaxLevel           = 4
 	defaultPowdetDifficultyTable    = "POWDET_DIFFICULTY_STATE"
 	defaultPowdetTicketTable        = "POW_CHALLENGE_TICKET"
+	defaultPowdetListenPort         = 2370
+	defaultPowdetBatchSize          = 1000
+	defaultPowdetDeprecateBatches   = 10
+	defaultPowdetArgonMemoryKiB     = 16384
+	defaultPowdetArgonIterations    = 2
+	defaultPowdetArgonParallelism   = 1
+	defaultPowdetArgonKeyLength     = 16
 	defaultAltchaTokenBindingTable  = "ALTCHA_TOKEN_LIST"
 	defaultDownloadLinkTTLSeconds   = 1800
 	defaultDownloadCleanupPercent   = 1.0
@@ -266,6 +273,25 @@ type LandingConfig struct {
 	Extra                map[string]any             `yaml:",inline" json:"-"`
 }
 
+// PowdetServiceArgonConfig describes argon2 parameters for powdet service.
+type PowdetServiceArgonConfig struct {
+	MemoryKiB   int `yaml:"memoryKiB" json:"memoryKiB"`
+	Iterations  int `yaml:"iterations" json:"iterations"`
+	Parallelism int `yaml:"parallelism" json:"parallelism"`
+	KeyLength   int `yaml:"keyLength" json:"keyLength"`
+}
+
+// PowdetServiceConfig holds controller-managed powdet settings.
+type PowdetServiceConfig struct {
+	Enabled               bool                     `yaml:"enabled" json:"enabled"`
+	ListenPort            int                      `yaml:"listenPort" json:"listenPort"`
+	BatchSize             int                      `yaml:"batchSize" json:"batchSize"`
+	DeprecateAfterBatches int                      `yaml:"deprecateAfterBatches" json:"deprecateAfterBatches"`
+	Argon2                PowdetServiceArgonConfig `yaml:"argon2" json:"argon2"`
+	AdminAPIToken         string                   `yaml:"adminApiToken" json:"adminApiToken"`
+	Extra                 map[string]any           `yaml:",inline" json:"-"`
+}
+
 // DownloadPathRule describes a single path rule.
 type DownloadPathRule struct {
 	Name         string   `yaml:"name" json:"name"`
@@ -487,10 +513,11 @@ func (f *SlotHandlerFairQueueConfig) UnmarshalYAML(value *yaml.Node) error {
 
 // EnvConfig represents one environment such as prod or staging.
 type EnvConfig struct {
-	Common      CommonConfig      `yaml:"common" json:"common"`
-	Landing     LandingConfig     `yaml:"landing" json:"landing"`
-	Download    DownloadConfig    `yaml:"download" json:"download"`
-	SlotHandler SlotHandlerConfig `yaml:"slotHandler" json:"slotHandler"`
+	Common      CommonConfig        `yaml:"common" json:"common"`
+	Landing     LandingConfig       `yaml:"landing" json:"landing"`
+	Download    DownloadConfig      `yaml:"download" json:"download"`
+	Powdet      PowdetServiceConfig `yaml:"powdet" json:"powdet"`
+	SlotHandler SlotHandlerConfig   `yaml:"slotHandler" json:"slotHandler"`
 }
 
 // RootConfig is the full controller configuration.
@@ -563,6 +590,10 @@ func (e *EnvConfig) validate(envName string) error {
 
 	if err := e.Download.ensureDefaults(e.Common, envName); err != nil {
 		return fmt.Errorf("download config invalid for env %s: %w", envName, err)
+	}
+
+	if err := e.Powdet.ensureDefaults(envName); err != nil {
+		return fmt.Errorf("powdet config invalid for env %s: %w", envName, err)
 	}
 
 	if err := e.SlotHandler.ensureDefaults(envName); err != nil {
@@ -1100,6 +1131,35 @@ func (a *DownloadAuthConfig) ensureDefaults(common CommonConfig) {
 	if a.SignSecret == "" {
 		a.SignSecret = common.SignSecret
 	}
+}
+
+func (p *PowdetServiceConfig) ensureDefaults(envName string) error {
+	if p.ListenPort == 0 {
+		p.ListenPort = defaultPowdetListenPort
+	}
+	if p.BatchSize <= 0 {
+		p.BatchSize = defaultPowdetBatchSize
+	}
+	if p.DeprecateAfterBatches <= 0 {
+		p.DeprecateAfterBatches = defaultPowdetDeprecateBatches
+	}
+	if p.Argon2.MemoryKiB <= 0 {
+		p.Argon2.MemoryKiB = defaultPowdetArgonMemoryKiB
+	}
+	if p.Argon2.Iterations <= 0 {
+		p.Argon2.Iterations = defaultPowdetArgonIterations
+	}
+	if p.Argon2.Parallelism <= 0 {
+		p.Argon2.Parallelism = defaultPowdetArgonParallelism
+	}
+	if p.Argon2.KeyLength <= 0 {
+		p.Argon2.KeyLength = defaultPowdetArgonKeyLength
+	}
+	if p.Enabled && strings.TrimSpace(p.AdminAPIToken) == "" {
+		return fmt.Errorf("powdet.adminApiToken is required for env %s when powdet.enabled is true", envName)
+	}
+
+	return nil
 }
 
 func (c *SlotHandlerFairQueueCleanupConfig) ensureDefaults() {

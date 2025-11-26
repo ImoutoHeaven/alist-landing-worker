@@ -198,6 +198,17 @@ envs:
             nameIncludes: []
             pathIncludes: []
             action: ["asis"]
+    powdet:
+      enabled: true
+      listenPort: 2370
+      batchSize: 1000
+      deprecateAfterBatches: 10
+      argon2:
+        memoryKiB: 16384
+        iterations: 2
+        parallelism: 1
+        keyLength: 16
+      adminApiToken: "replace-with-admin-token"
     slotHandler:
       listen: ":8080"
       logLevel: "info"
@@ -427,6 +438,17 @@ envs:
             nameIncludes: []
             pathIncludes: []
             action: ["asis"]
+    powdet:
+      enabled: true
+      listenPort: 2370
+      batchSize: 1000
+      deprecateAfterBatches: 10
+      argon2:
+        memoryKiB: 16384
+        iterations: 2
+        parallelism: 1
+        keyLength: 16
+      adminApiToken: "replace-with-admin-token"
     slotHandler:
       listen: ":8080"
       logLevel: "info"

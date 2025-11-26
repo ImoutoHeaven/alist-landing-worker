@@ -31,12 +31,13 @@ type bootstrapRequest struct {
 }
 
 type bootstrapResponse struct {
-	ConfigVersion string                    `json:"configVersion"`
-	TTLSeconds    int                       `json:"ttlSeconds"`
-	Common        config.CommonConfig       `json:"common"`
-	Landing       config.LandingConfig      `json:"landing"`
-	Download      config.DownloadConfig     `json:"download"`
-	SlotHandler   *config.SlotHandlerConfig `json:"slotHandler,omitempty"`
+	ConfigVersion string                      `json:"configVersion"`
+	TTLSeconds    int                         `json:"ttlSeconds"`
+	Common        config.CommonConfig         `json:"common"`
+	Landing       config.LandingConfig        `json:"landing"`
+	Download      config.DownloadConfig       `json:"download"`
+	Powdet        *config.PowdetServiceConfig `json:"powdet,omitempty"`
+	SlotHandler   *config.SlotHandlerConfig   `json:"slotHandler,omitempty"`
 }
 
 type decisionRequest struct {
@@ -82,6 +83,9 @@ func (c *Controller) HandleBootstrap(w http.ResponseWriter, r *http.Request) {
 		Download:      envCfg.Download,
 	}
 
+	if req.Role == "powdet" {
+		resp.Powdet = &envCfg.Powdet
+	}
 	if req.Role == "slot-handler" {
 		resp.SlotHandler = &envCfg.SlotHandler
 	}
