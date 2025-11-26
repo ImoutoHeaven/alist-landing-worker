@@ -137,6 +137,18 @@ type LandingCacheConfig struct {
 	CleanupPercentage float64 `yaml:"cleanupPercentage" json:"cleanupPercentage"`
 }
 
+func (c *LandingCacheConfig) UnmarshalYAML(value *yaml.Node) error {
+	type raw LandingCacheConfig
+	aux := raw{
+		CleanupPercentage: -1,
+	}
+	if err := value.Decode(&aux); err != nil {
+		return err
+	}
+	*c = LandingCacheConfig(aux)
+	return nil
+}
+
 // LandingRateLimitConfig describes landing-side rate limit parameters.
 type LandingRateLimitConfig struct {
 	Enabled           bool    `yaml:"enabled" json:"enabled"`
@@ -154,6 +166,18 @@ type LandingRateLimitConfig struct {
 	CleanupPercentage float64 `yaml:"cleanupPercentage" json:"cleanupPercentage"`
 }
 
+func (r *LandingRateLimitConfig) UnmarshalYAML(value *yaml.Node) error {
+	type raw LandingRateLimitConfig
+	aux := raw{
+		CleanupPercentage: -1,
+	}
+	if err := value.Decode(&aux); err != nil {
+		return err
+	}
+	*r = LandingRateLimitConfig(aux)
+	return nil
+}
+
 // LandingDBConfig holds PostgREST and rate limit configuration.
 type LandingDBConfig struct {
 	Mode               string                 `yaml:"mode" json:"mode"`
@@ -165,6 +189,18 @@ type LandingDBConfig struct {
 	IdleTable          string                 `yaml:"idleTable" json:"idleTable"`
 	IdleTimeoutSeconds int                    `yaml:"idleTimeoutSeconds" json:"idleTimeoutSeconds"`
 	CleanupPercentage  float64                `yaml:"cleanupPercentage" json:"cleanupPercentage"`
+}
+
+func (c *LandingDBConfig) UnmarshalYAML(value *yaml.Node) error {
+	type raw LandingDBConfig
+	aux := raw{
+		CleanupPercentage: -1,
+	}
+	if err := value.Decode(&aux); err != nil {
+		return err
+	}
+	*c = LandingDBConfig(aux)
+	return nil
 }
 
 // LandingCryptConfig captures crypt-related controls.
@@ -564,7 +600,7 @@ func (d *LandingDBConfig) ensureDefaults(envName string) error {
 		return fmt.Errorf("landing.db.mode must be \"\" or \"custom-pg-rest\" for env %s", envName)
 	}
 
-	if d.CleanupPercentage <= 0 {
+	if d.CleanupPercentage < 0 {
 		d.CleanupPercentage = defaultLandingCleanupPercent
 	}
 
@@ -602,12 +638,11 @@ func (c *LandingCacheConfig) ensureDefaults(fallbackCleanup float64) {
 	if c.SizeTTLSeconds <= 0 {
 		c.SizeTTLSeconds = defaultLandingCacheTTLSeconds
 	}
-	if c.CleanupPercentage <= 0 {
-		if fallbackCleanup > 0 {
-			c.CleanupPercentage = fallbackCleanup
-		} else {
-			c.CleanupPercentage = defaultLandingCleanupPercent
-		}
+	if c.CleanupPercentage < 0 {
+		c.CleanupPercentage = fallbackCleanup
+	}
+	if c.CleanupPercentage < 0 {
+		c.CleanupPercentage = defaultLandingCleanupPercent
 	}
 }
 
@@ -636,12 +671,11 @@ func (r *LandingRateLimitConfig) ensureDefaults(fallbackCleanup float64) {
 	if r.FileTableName == "" {
 		r.FileTableName = "IP_FILE_LIMIT_TABLE"
 	}
-	if r.CleanupPercentage <= 0 {
-		if fallbackCleanup > 0 {
-			r.CleanupPercentage = fallbackCleanup
-		} else {
-			r.CleanupPercentage = defaultLandingCleanupPercent
-		}
+	if r.CleanupPercentage < 0 {
+		r.CleanupPercentage = fallbackCleanup
+	}
+	if r.CleanupPercentage < 0 {
+		r.CleanupPercentage = defaultLandingCleanupPercent
 	}
 	r.PgErrorHandle = normalizePgErrorHandle(r.PgErrorHandle)
 	if !r.Enabled || r.Limit <= 0 || r.WindowSeconds <= 0 {

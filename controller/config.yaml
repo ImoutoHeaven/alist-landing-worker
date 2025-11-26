@@ -74,7 +74,7 @@ envs:
         postgrestUrl: "https://postgrest-staging.example.com"
         verifyHeader: ["X-Postgrest-Auth"]
         verifySecret: ["replace-with-postgrest-secret"]
-        cleanupPercentage: 5
+        cleanupPercentage: 5 # set to 0 to disable landing-side cleanup
         cache:
           tableName: "FILESIZE_CACHE_TABLE"
           sizeTTLSeconds: 86400
@@ -270,7 +270,7 @@ envs:
         postgrestUrl: "https://postgrest.example.com"
         verifyHeader: ["X-Postgrest-Auth"]
         verifySecret: ["replace-with-postgrest-secret"]
-        cleanupPercentage: 5
+        cleanupPercentage: 5 # set to 0 to disable landing-side cleanup
         cache:
           tableName: "FILESIZE_CACHE_TABLE"
           sizeTTLSeconds: 86400
