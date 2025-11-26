@@ -1064,6 +1064,9 @@ const pageScript = buildRawString`
     };
   };
 
+  // 默认占位，实际实现会在 webDownloader 初始化后注入
+  let markCapabilityBroken = async () => {};
+
   const safeCreateSink = async (mode, options) => {
     const factoryMap = {
       fs: createFsAccessSink,
@@ -2084,7 +2087,7 @@ const pageScript = buildRawString`
       }
     };
 
-    const markCapabilityBroken = async (name) => {
+    const markCapabilityBrokenImpl = async (name) => {
       const fieldMap = {
         fs: 'fsBroken',
         opfs: 'opfsBroken',
@@ -2118,6 +2121,8 @@ const pageScript = buildRawString`
         console.warn('标记 capability broken 失败', error);
       }
     };
+
+    markCapabilityBroken = markCapabilityBrokenImpl;
 
     const initCapabilitiesState = async () => {
       const caps = await loadSiteCapabilitiesFromDexie();
