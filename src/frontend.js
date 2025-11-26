@@ -698,8 +698,8 @@ const pageScript = buildRawString`
     const safeBase = base.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 40);
     const uuid =
       (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' && crypto.randomUUID()) ||
-      `${Date.now()}_${Math.random().toString(16).slice(2)}`;
-    return `${OPFS_TEMP_PREFIX}${safeBase}_${uuid}.bin`;
+      Date.now() + '_' + Math.random().toString(16).slice(2);
+    return OPFS_TEMP_PREFIX + safeBase + '_' + uuid + '.bin';
   };
 
   const activeBlobUrls = new Set();
