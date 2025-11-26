@@ -67,8 +67,49 @@ envs:
         expireSeconds: 180
         clockSkewSeconds: 60
         maxWindowSeconds: 600
-      idle:
-        table: "landing_idle"
+      db:
+        mode: "custom-pg-rest"
+        postgrestUrl: "https://postgrest-staging.example.com"
+        verifyHeader: ["X-Postgrest-Auth"]
+        verifySecret: ["replace-with-postgrest-secret"]
+        cleanupPercentage: 5
+        cache:
+          tableName: "FILESIZE_CACHE_TABLE"
+          sizeTTLSeconds: 86400
+          cleanupPercentage: 5
+        rateLimit:
+          enabled: false
+          windowSeconds: 60
+          limit: 0
+          ipv4Suffix: "/32"
+          ipv6Suffix: "/60"
+          blockSeconds: 600
+          pgErrorHandle: "fail-closed"
+          fileWindowSeconds: 60
+          fileLimit: 0
+          fileBlockSeconds: 240
+          tableName: "IP_LIMIT_TABLE"
+          fileTableName: "IP_FILE_LIMIT_TABLE"
+          cleanupPercentage: 5
+        idleTable: "landing_idle"
+        idleTimeoutSeconds: 0
+      crypt:
+        prefix: ""
+        includes: []
+        encryptionMode: "crypt"
+        fileHeaderSize: 32
+        blockHeaderSize: 16
+        blockDataSize: 65536
+        dataKey: ""
+      webDownloader:
+        enabled: false
+        maxConnections: 16
+      clientDecryptEnabled: false
+      additional:
+        appendAdditional: true
+        minBandwidthMbps: 10
+        minDurationSeconds: 3600
+        maxDurationSeconds: 0
     download:
       address: "https://alist-staging.example.com"
       auth:
@@ -220,8 +261,49 @@ envs:
         expireSeconds: 180
         clockSkewSeconds: 60
         maxWindowSeconds: 600
-      idle:
-        table: "landing_idle"
+      db:
+        mode: "custom-pg-rest"
+        postgrestUrl: "https://postgrest.example.com"
+        verifyHeader: ["X-Postgrest-Auth"]
+        verifySecret: ["replace-with-postgrest-secret"]
+        cleanupPercentage: 5
+        cache:
+          tableName: "FILESIZE_CACHE_TABLE"
+          sizeTTLSeconds: 86400
+          cleanupPercentage: 5
+        rateLimit:
+          enabled: false
+          windowSeconds: 60
+          limit: 0
+          ipv4Suffix: "/32"
+          ipv6Suffix: "/60"
+          blockSeconds: 600
+          pgErrorHandle: "fail-closed"
+          fileWindowSeconds: 60
+          fileLimit: 0
+          fileBlockSeconds: 240
+          tableName: "IP_LIMIT_TABLE"
+          fileTableName: "IP_FILE_LIMIT_TABLE"
+          cleanupPercentage: 5
+        idleTable: "landing_idle"
+        idleTimeoutSeconds: 0
+      crypt:
+        prefix: ""
+        includes: []
+        encryptionMode: "crypt"
+        fileHeaderSize: 32
+        blockHeaderSize: 16
+        blockDataSize: 65536
+        dataKey: ""
+      webDownloader:
+        enabled: false
+        maxConnections: 16
+      clientDecryptEnabled: false
+      additional:
+        appendAdditional: true
+        minBandwidthMbps: 10
+        minDurationSeconds: 3600
+        maxDurationSeconds: 0
     download:
       address: "https://alist.example.com"
       auth:

@@ -44,6 +44,17 @@ const (
 	defaultSlotHandlerTimeoutMs     = 20000
 	defaultSlotHandlerPerReqTimeout = 8000
 	defaultSlotHandlerAttemptsCap   = 35
+	defaultLandingCleanupPercent    = 5.0
+	defaultLandingCacheTTLSeconds   = 86400
+	defaultLandingFileWindowSeconds = 60
+	defaultLandingFileBlockSeconds  = 240
+	defaultLandingIdleTimeout       = 0
+	defaultLandingCryptFileHeader   = 32
+	defaultLandingCryptBlockHeader  = 16
+	defaultLandingCryptBlockData    = 64 * 1024
+	defaultLandingWebMaxConn        = 16
+	defaultLandingMinBandwidthMbps  = 10
+	defaultLandingMinDurationSec    = 3600
 )
 
 func boolPtr(v bool) *bool {
@@ -119,18 +130,85 @@ type LandingPowdetConfig struct {
 	Dynamic          *LandingPowdetDynamicConfig `yaml:"dynamic" json:"dynamic"`
 }
 
+// LandingCacheConfig controls filesize cache settings.
+type LandingCacheConfig struct {
+	TableName         string  `yaml:"tableName" json:"tableName"`
+	SizeTTLSeconds    int     `yaml:"sizeTTLSeconds" json:"sizeTTLSeconds"`
+	CleanupPercentage float64 `yaml:"cleanupPercentage" json:"cleanupPercentage"`
+}
+
+// LandingRateLimitConfig describes landing-side rate limit parameters.
+type LandingRateLimitConfig struct {
+	Enabled           bool    `yaml:"enabled" json:"enabled"`
+	WindowSeconds     int     `yaml:"windowSeconds" json:"windowSeconds"`
+	Limit             int     `yaml:"limit" json:"limit"`
+	IPv4Suffix        string  `yaml:"ipv4Suffix" json:"ipv4Suffix"`
+	IPv6Suffix        string  `yaml:"ipv6Suffix" json:"ipv6Suffix"`
+	BlockSeconds      int     `yaml:"blockSeconds" json:"blockSeconds"`
+	PgErrorHandle     string  `yaml:"pgErrorHandle" json:"pgErrorHandle"`
+	FileWindowSeconds int     `yaml:"fileWindowSeconds" json:"fileWindowSeconds"`
+	FileLimit         int     `yaml:"fileLimit" json:"fileLimit"`
+	FileBlockSeconds  int     `yaml:"fileBlockSeconds" json:"fileBlockSeconds"`
+	TableName         string  `yaml:"tableName" json:"tableName"`
+	FileTableName     string  `yaml:"fileTableName" json:"fileTableName"`
+	CleanupPercentage float64 `yaml:"cleanupPercentage" json:"cleanupPercentage"`
+}
+
+// LandingDBConfig holds PostgREST and rate limit configuration.
+type LandingDBConfig struct {
+	Mode               string                 `yaml:"mode" json:"mode"`
+	PostgrestURL       string                 `yaml:"postgrestUrl" json:"postgrestUrl"`
+	VerifyHeader       []string               `yaml:"verifyHeader" json:"verifyHeader"`
+	VerifySecret       []string               `yaml:"verifySecret" json:"verifySecret"`
+	Cache              LandingCacheConfig     `yaml:"cache" json:"cache"`
+	RateLimit          LandingRateLimitConfig `yaml:"rateLimit" json:"rateLimit"`
+	IdleTable          string                 `yaml:"idleTable" json:"idleTable"`
+	IdleTimeoutSeconds int                    `yaml:"idleTimeoutSeconds" json:"idleTimeoutSeconds"`
+	CleanupPercentage  float64                `yaml:"cleanupPercentage" json:"cleanupPercentage"`
+}
+
+// LandingCryptConfig captures crypt-related controls.
+type LandingCryptConfig struct {
+	Prefix          string   `yaml:"prefix" json:"prefix"`
+	Includes        []string `yaml:"includes" json:"includes"`
+	EncryptionMode  string   `yaml:"encryptionMode" json:"encryptionMode"`
+	FileHeaderSize  int      `yaml:"fileHeaderSize" json:"fileHeaderSize"`
+	BlockHeaderSize int      `yaml:"blockHeaderSize" json:"blockHeaderSize"`
+	BlockDataSize   int      `yaml:"blockDataSize" json:"blockDataSize"`
+	DataKey         string   `yaml:"dataKey" json:"dataKey"`
+}
+
+// LandingWebDownloaderConfig holds web downloader knobs.
+type LandingWebDownloaderConfig struct {
+	Enabled        bool `yaml:"enabled" json:"enabled"`
+	MaxConnections int  `yaml:"maxConnections" json:"maxConnections"`
+}
+
+// LandingAdditionalConfig groups misc landing behavior toggles.
+type LandingAdditionalConfig struct {
+	AppendAdditional   bool `yaml:"appendAdditional" json:"appendAdditional"`
+	MinBandwidthMbps   int  `yaml:"minBandwidthMbps" json:"minBandwidthMbps"`
+	MinDurationSeconds int  `yaml:"minDurationSeconds" json:"minDurationSeconds"`
+	MaxDurationSeconds int  `yaml:"maxDurationSeconds" json:"maxDurationSeconds"`
+}
+
 // LandingConfig describes landing-side static configuration.
 type LandingConfig struct {
-	PageSecret   string                 `yaml:"pageSecret" json:"pageSecret"`
-	Captcha      LandingCaptchaConfig   `yaml:"captcha" json:"captcha"`
-	Turnstile    LandingTurnstileConfig `yaml:"turnstile" json:"turnstile"`
-	Altcha       LandingAltchaConfig    `yaml:"altcha" json:"altcha"`
-	Powdet       LandingPowdetConfig    `yaml:"powdet" json:"powdet"`
-	PathRules    DownloadPathRules      `yaml:"pathRules" json:"pathRules"`
-	FastRedirect bool                   `yaml:"fastRedirect" json:"fastRedirect"`
-	AutoRedirect bool                   `yaml:"autoRedirect" json:"autoRedirect"`
-	IPv4Only     bool                   `yaml:"ipv4Only" json:"ipv4Only"`
-	Extra        map[string]any         `yaml:",inline" json:"-"`
+	PageSecret           string                     `yaml:"pageSecret" json:"pageSecret"`
+	Captcha              LandingCaptchaConfig       `yaml:"captcha" json:"captcha"`
+	Turnstile            LandingTurnstileConfig     `yaml:"turnstile" json:"turnstile"`
+	Altcha               LandingAltchaConfig        `yaml:"altcha" json:"altcha"`
+	Powdet               LandingPowdetConfig        `yaml:"powdet" json:"powdet"`
+	PathRules            DownloadPathRules          `yaml:"pathRules" json:"pathRules"`
+	FastRedirect         bool                       `yaml:"fastRedirect" json:"fastRedirect"`
+	AutoRedirect         bool                       `yaml:"autoRedirect" json:"autoRedirect"`
+	IPv4Only             bool                       `yaml:"ipv4Only" json:"ipv4Only"`
+	DB                   LandingDBConfig            `yaml:"db" json:"db"`
+	Crypt                LandingCryptConfig         `yaml:"crypt" json:"crypt"`
+	WebDownloader        LandingWebDownloaderConfig `yaml:"webDownloader" json:"webDownloader"`
+	ClientDecryptEnabled bool                       `yaml:"clientDecryptEnabled" json:"clientDecryptEnabled"`
+	Additional           LandingAdditionalConfig    `yaml:"additional" json:"additional"`
+	Extra                map[string]any             `yaml:",inline" json:"-"`
 }
 
 // DownloadPathRule describes a single path rule.
@@ -310,45 +388,8 @@ func (e *EnvConfig) validate(envName string) error {
 		e.Landing.Captcha.DefaultCombo = []string{"verify-altcha"}
 	}
 
-	e.Landing.ensureDefaults()
-
-	if e.Landing.PageSecret == "" {
-		return fmt.Errorf("landing.pageSecret is required for env %s", envName)
-	}
-
-	if e.Landing.Turnstile.TokenTTLSeconds <= 0 {
-		e.Landing.Turnstile.TokenTTLSeconds = 600
-	}
-	if e.Landing.Turnstile.CookieExpireSeconds <= 0 {
-		e.Landing.Turnstile.CookieExpireSeconds = 120
-	}
-	if e.Landing.Turnstile.TokenTable == "" {
-		e.Landing.Turnstile.TokenTable = "TURNSTILE_TOKEN_BINDING"
-	}
-	if e.Landing.Turnstile.ExpectedAction == "" {
-		e.Landing.Turnstile.ExpectedAction = "download"
-	}
-	if e.Landing.Turnstile.Enabled {
-		if e.Landing.Turnstile.SiteKey == "" || e.Landing.Turnstile.SecretKey == "" {
-			return fmt.Errorf("landing.turnstile.siteKey/secretKey are required for env %s when turnstile.enabled is true", envName)
-		}
-	}
-
-	if err := e.Landing.Altcha.ensureDefaults(); err != nil {
-		return fmt.Errorf("landing.altcha invalid for env %s: %w", envName, err)
-	}
-
-	if err := e.Landing.Powdet.ensureDefaults(); err != nil {
-		return fmt.Errorf("landing.powdet invalid for env %s: %w", envName, err)
-	}
-
-	if e.Landing.Powdet.Enabled {
-		if e.Landing.Powdet.BaseURL == "" {
-			return fmt.Errorf("landing.powdet.baseUrl is required for env %s when powdet.enabled is true", envName)
-		}
-		if e.Landing.Powdet.Token == "" {
-			return fmt.Errorf("landing.powdet.token is required for env %s when powdet.enabled is true", envName)
-		}
+	if err := e.Landing.ensureDefaults(envName); err != nil {
+		return err
 	}
 
 	if err := e.Download.ensureDefaults(e.Common, envName); err != nil {
@@ -450,8 +491,192 @@ func (c *LandingPowdetConfig) ensureDefaults() error {
 	return nil
 }
 
-func (l *LandingConfig) ensureDefaults() {
-	// no-op for now; placeholder for landing-specific defaults like IPv4Only.
+func (l *LandingConfig) ensureDefaults(envName string) error {
+	if l.PageSecret == "" {
+		return fmt.Errorf("landing.pageSecret is required for env %s", envName)
+	}
+
+	if l.Turnstile.TokenTTLSeconds <= 0 {
+		l.Turnstile.TokenTTLSeconds = 600
+	}
+	if l.Turnstile.CookieExpireSeconds <= 0 {
+		l.Turnstile.CookieExpireSeconds = 120
+	}
+	if l.Turnstile.TokenTable == "" {
+		l.Turnstile.TokenTable = "TURNSTILE_TOKEN_BINDING"
+	}
+	if l.Turnstile.ExpectedAction == "" {
+		l.Turnstile.ExpectedAction = "download"
+	}
+	if l.Turnstile.Enabled {
+		if l.Turnstile.SiteKey == "" || l.Turnstile.SecretKey == "" {
+			return fmt.Errorf("landing.turnstile.siteKey/secretKey are required for env %s when turnstile.enabled is true", envName)
+		}
+	}
+
+	if err := l.Altcha.ensureDefaults(); err != nil {
+		return fmt.Errorf("landing.altcha invalid for env %s: %w", envName, err)
+	}
+
+	if err := l.Powdet.ensureDefaults(); err != nil {
+		return fmt.Errorf("landing.powdet invalid for env %s: %w", envName, err)
+	}
+
+	if l.Powdet.Enabled {
+		if l.Powdet.BaseURL == "" {
+			return fmt.Errorf("landing.powdet.baseUrl is required for env %s when powdet.enabled is true", envName)
+		}
+		if l.Powdet.Token == "" {
+			return fmt.Errorf("landing.powdet.token is required for env %s when powdet.enabled is true", envName)
+		}
+	}
+
+	if err := l.DB.ensureDefaults(envName); err != nil {
+		return fmt.Errorf("landing.db invalid for env %s: %w", envName, err)
+	}
+
+	l.Crypt.ensureDefaults()
+	l.WebDownloader.ensureDefaults()
+	l.Additional.ensureDefaults()
+
+	if (l.WebDownloader.Enabled || l.ClientDecryptEnabled) && strings.TrimSpace(l.Crypt.DataKey) == "" {
+		return fmt.Errorf("landing.crypt.dataKey is required for env %s when webDownloader or clientDecrypt is enabled", envName)
+	}
+
+	return nil
+}
+
+func (d *LandingDBConfig) ensureDefaults(envName string) error {
+	if d.Mode != "" && d.Mode != "custom-pg-rest" {
+		return fmt.Errorf("landing.db.mode must be \"\" or \"custom-pg-rest\" for env %s", envName)
+	}
+
+	if d.CleanupPercentage <= 0 {
+		d.CleanupPercentage = defaultLandingCleanupPercent
+	}
+
+	d.Cache.ensureDefaults(d.CleanupPercentage)
+	d.RateLimit.ensureDefaults(d.CleanupPercentage)
+
+	if d.IdleTimeoutSeconds < 0 {
+		d.IdleTimeoutSeconds = defaultLandingIdleTimeout
+	}
+	if d.IdleTable == "" {
+		d.IdleTable = "DOWNLOAD_LAST_ACTIVE_TABLE"
+	}
+
+	if d.Mode == "custom-pg-rest" {
+		if d.PostgrestURL == "" {
+			return fmt.Errorf("landing.db.postgrestUrl is required for env %s when mode=custom-pg-rest", envName)
+		}
+		if len(d.VerifyHeader) == 0 || len(d.VerifySecret) == 0 {
+			return fmt.Errorf("landing.db.verifyHeader/verifySecret are required for env %s when mode=custom-pg-rest", envName)
+		}
+		if len(d.VerifyHeader) != len(d.VerifySecret) {
+			return fmt.Errorf("landing.db.verifyHeader and verifySecret must have the same length for env %s", envName)
+		}
+	} else {
+		d.RateLimit.Enabled = false
+	}
+
+	return nil
+}
+
+func (c *LandingCacheConfig) ensureDefaults(fallbackCleanup float64) {
+	if c.TableName == "" {
+		c.TableName = "FILESIZE_CACHE_TABLE"
+	}
+	if c.SizeTTLSeconds <= 0 {
+		c.SizeTTLSeconds = defaultLandingCacheTTLSeconds
+	}
+	if c.CleanupPercentage <= 0 {
+		if fallbackCleanup > 0 {
+			c.CleanupPercentage = fallbackCleanup
+		} else {
+			c.CleanupPercentage = defaultLandingCleanupPercent
+		}
+	}
+}
+
+func (r *LandingRateLimitConfig) ensureDefaults(fallbackCleanup float64) {
+	if r.IPv4Suffix == "" {
+		r.IPv4Suffix = defaultRateLimitIPv4Suffix
+	}
+	if r.IPv6Suffix == "" {
+		r.IPv6Suffix = defaultRateLimitIPv6Suffix
+	}
+	if r.BlockSeconds <= 0 {
+		r.BlockSeconds = defaultRateLimitBlockSeconds
+	}
+	if r.FileWindowSeconds <= 0 {
+		r.FileWindowSeconds = defaultLandingFileWindowSeconds
+	}
+	if r.FileLimit < 0 {
+		r.FileLimit = 0
+	}
+	if r.FileBlockSeconds <= 0 {
+		r.FileBlockSeconds = defaultLandingFileBlockSeconds
+	}
+	if r.TableName == "" {
+		r.TableName = "IP_LIMIT_TABLE"
+	}
+	if r.FileTableName == "" {
+		r.FileTableName = "IP_FILE_LIMIT_TABLE"
+	}
+	if r.CleanupPercentage <= 0 {
+		if fallbackCleanup > 0 {
+			r.CleanupPercentage = fallbackCleanup
+		} else {
+			r.CleanupPercentage = defaultLandingCleanupPercent
+		}
+	}
+	r.PgErrorHandle = normalizePgErrorHandle(r.PgErrorHandle)
+	if !r.Enabled || r.Limit <= 0 || r.WindowSeconds <= 0 {
+		r.Enabled = false
+	}
+	if r.FileWindowSeconds <= 0 || r.FileLimit <= 0 {
+		r.FileLimit = 0
+		r.FileWindowSeconds = 0
+	}
+	if r.FileBlockSeconds < 0 {
+		r.FileBlockSeconds = defaultLandingFileBlockSeconds
+	}
+}
+
+func (c *LandingCryptConfig) ensureDefaults() {
+	if c.EncryptionMode == "" {
+		c.EncryptionMode = "crypt"
+	}
+	if c.FileHeaderSize <= 0 {
+		c.FileHeaderSize = defaultLandingCryptFileHeader
+	}
+	if c.BlockHeaderSize <= 0 {
+		c.BlockHeaderSize = defaultLandingCryptBlockHeader
+	}
+	if c.BlockDataSize <= 0 {
+		c.BlockDataSize = defaultLandingCryptBlockData
+	}
+	if c.Includes == nil {
+		c.Includes = []string{}
+	}
+}
+
+func (w *LandingWebDownloaderConfig) ensureDefaults() {
+	if w.MaxConnections <= 0 {
+		w.MaxConnections = defaultLandingWebMaxConn
+	}
+}
+
+func (a *LandingAdditionalConfig) ensureDefaults() {
+	if a.MinBandwidthMbps <= 0 {
+		a.MinBandwidthMbps = defaultLandingMinBandwidthMbps
+	}
+	if a.MinDurationSeconds <= 0 {
+		a.MinDurationSeconds = defaultLandingMinDurationSec
+	}
+	if a.MaxDurationSeconds < 0 {
+		a.MaxDurationSeconds = 0
+	}
 }
 
 func (d *DownloadConfig) ensureDefaults(common CommonConfig, envName string) error {

@@ -1,7 +1,6 @@
 import {
   rotLower,
   uint8ToBase64,
-  parseBoolean,
   parseInteger,
   parseNumber,
   parseWindowTime,
@@ -788,18 +787,34 @@ const resolveConfig = (env = {}, bootstrap = null) => {
 
   const ipv4Only = landingBootstrap.ipv4Only === true;
 
-  // Parse prefix lists (comma-separated)
-  const parsePrefixList = (value) => {
-    if (!value || typeof value !== 'string') return [];
-    return value.split(',').map(p => p.trim()).filter(p => p.length > 0);
+  const dbConfig = landingBootstrap.db && typeof landingBootstrap.db === 'object'
+    ? landingBootstrap.db
+    : {};
+  const rateLimitSource = dbConfig.rateLimit && typeof dbConfig.rateLimit === 'object'
+    ? dbConfig.rateLimit
+    : {};
+  const cacheSource = dbConfig.cache && typeof dbConfig.cache === 'object'
+    ? dbConfig.cache
+    : {};
+  const parseStringArray = (value) => {
+    if (!Array.isArray(value)) return [];
+    return value
+      .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
+      .filter((entry) => entry.length > 0);
   };
 
-  const cryptPrefix = normalizeString(env.CRYPT_PREFIX);
-  const cryptIncludes = parsePrefixList(env.CRYPT_INCLUDES);
-  const webDownloaderEnabled = parseBoolean(env.WEB_DOWNLOADER_ENABLED, false);
-  const clientDecryptEnabled = parseBoolean(env.CLIENT_DECRYPT_ENABLED, false);
+  const cryptConfig = landingBootstrap.crypt && typeof landingBootstrap.crypt === 'object'
+    ? landingBootstrap.crypt
+    : {};
+  const cryptPrefix = normalizeString(cryptConfig.prefix);
+  const cryptIncludes = parseStringArray(cryptConfig.includes);
+  const webDownloaderConfig = landingBootstrap.webDownloader && typeof landingBootstrap.webDownloader === 'object'
+    ? landingBootstrap.webDownloader
+    : {};
+  const webDownloaderEnabled = Boolean(webDownloaderConfig.enabled);
+  const clientDecryptEnabled = landingBootstrap.clientDecryptEnabled === true;
   let webDownloaderMaxConnections = parseInteger(
-    env.WEB_DOWNLOADER_MAX_CONNECTIONS,
+    webDownloaderConfig.maxConnections,
     DEFAULT_WEB_DOWNLOADER_MAX_CONNECTIONS
   );
   if (!Number.isFinite(webDownloaderMaxConnections) || webDownloaderMaxConnections <= 0) {
@@ -809,133 +824,137 @@ const resolveConfig = (env = {}, bootstrap = null) => {
     MIN_WEB_DOWNLOADER_MAX_CONNECTIONS,
     Math.min(MAX_WEB_DOWNLOADER_MAX_CONNECTIONS, Math.floor(webDownloaderMaxConnections))
   );
-  const cryptEncryptionMode = normalizeString(env.CRYPT_ENCRYPTION_MODE, 'crypt') || 'crypt';
+  const cryptEncryptionMode = normalizeString(cryptConfig.encryptionMode, 'crypt') || 'crypt';
   let cryptFileHeaderSize = parseInteger(
-    env.CRYPT_FILE_HEADER_SIZE,
+    cryptConfig.fileHeaderSize,
     DEFAULT_CRYPT_FILE_HEADER_SIZE
   );
   if (!Number.isFinite(cryptFileHeaderSize) || cryptFileHeaderSize <= 0) {
     cryptFileHeaderSize = DEFAULT_CRYPT_FILE_HEADER_SIZE;
   }
   let cryptBlockHeaderSize = parseInteger(
-    env.CRYPT_BLOCK_HEADER_SIZE,
+    cryptConfig.blockHeaderSize,
     DEFAULT_CRYPT_BLOCK_HEADER_SIZE
   );
   if (!Number.isFinite(cryptBlockHeaderSize) || cryptBlockHeaderSize <= 0) {
     cryptBlockHeaderSize = DEFAULT_CRYPT_BLOCK_HEADER_SIZE;
   }
   let cryptBlockDataSize = parseInteger(
-    env.CRYPT_BLOCK_DATA_SIZE,
+    cryptConfig.blockDataSize,
     DEFAULT_CRYPT_BLOCK_DATA_SIZE
   );
   if (!Number.isFinite(cryptBlockDataSize) || cryptBlockDataSize <= 0) {
     cryptBlockDataSize = DEFAULT_CRYPT_BLOCK_DATA_SIZE;
   }
-  const rawCryptDataKey = normalizeString(env.CRYPT_DATA_KEY);
+  const rawCryptDataKey = normalizeString(cryptConfig.dataKey);
   let cryptDataKeyBase64 = '';
   if (rawCryptDataKey) {
     const dataKeyBytes = hexToUint8Array(rawCryptDataKey);
     if (!dataKeyBytes || dataKeyBytes.length !== CRYPT_DATA_KEY_LENGTH) {
-      throw new Error(`CRYPT_DATA_KEY must be a ${CRYPT_DATA_KEY_LENGTH * 2}-character hex string`);
+      throw new Error(`controller landing.crypt.dataKey must be a ${CRYPT_DATA_KEY_LENGTH * 2}-character hex string`);
     }
     cryptDataKeyBase64 = uint8ToBase64(dataKeyBytes);
   } else if (webDownloaderEnabled || clientDecryptEnabled) {
-    throw new Error('CRYPT_DATA_KEY is required when WEB_DOWNLOADER_ENABLED or CLIENT_DECRYPT_ENABLED is true');
+    throw new Error('controller landing.crypt.dataKey is required when web downloader or client decrypt is enabled');
   }
 
-  // Parse database mode for rate limiting
-  const dbModeRaw = env.DB_MODE && typeof env.DB_MODE === 'string' ? env.DB_MODE.trim() : '';
+  const dbModeRaw = typeof dbConfig.mode === 'string' ? dbConfig.mode.trim() : '';
   const normalizedDbMode = dbModeRaw ? dbModeRaw.toLowerCase() : '';
   const dbMode = normalizedDbMode === 'custom-pg-rest' ? 'custom-pg-rest' : '';
   const hasDbMode = dbMode === 'custom-pg-rest';
-  if (normalizedDbMode && !hasDbMode) {
-    throw new Error(`Invalid DB_MODE: "${dbModeRaw}". Only "" or "custom-pg-rest" are supported.`);
+  if (dbModeRaw && !hasDbMode) {
+    throw new Error(`controller landing.db.mode must be "" or "custom-pg-rest", got "${dbModeRaw}"`);
   }
   const enableCfRatelimiter = normalizeString(env.ENABLE_CF_RATELIMITER, 'false').toLowerCase() === 'true';
   const cfRatelimiterBinding = normalizeString(env.CF_RATELIMITER_BINDING, 'CF_RATE_LIMITER');
-  let postgrestUrl = '';
+
+  const windowTimeSeconds = parseDurationToSeconds(
+    rateLimitSource.windowSeconds ?? rateLimitSource.window ?? rateLimitSource.windowTime,
+    0
+  );
+  const windowTime = typeof rateLimitSource.window === 'string' && rateLimitSource.window.trim()
+    ? rateLimitSource.window.trim()
+    : (typeof rateLimitSource.windowTime === 'string' && rateLimitSource.windowTime.trim()
+      ? rateLimitSource.windowTime.trim()
+      : (windowTimeSeconds > 0 ? `${windowTimeSeconds}s` : ''));
+  const ipSubnetLimit = parseInteger(rateLimitSource.limit, 0);
+  const ipv4Suffix = normalizeString(rateLimitSource.ipv4Suffix, '/32') || '/32';
+  const ipv6Suffix = normalizeString(rateLimitSource.ipv6Suffix, '/60') || '/60';
+  const pgErrorHandle = normalizeString(rateLimitSource.pgErrorHandle, 'fail-closed').toLowerCase() || 'fail-closed';
+  const blockTimeSeconds = parseDurationToSeconds(
+    rateLimitSource.blockSeconds ?? rateLimitSource.block ?? rateLimitSource.blockTime,
+    parseWindowTime('10m')
+  );
+  const blockTime = typeof rateLimitSource.block === 'string' && rateLimitSource.block.trim()
+    ? rateLimitSource.block.trim()
+    : (typeof rateLimitSource.blockTime === 'string' && rateLimitSource.blockTime.trim()
+      ? rateLimitSource.blockTime.trim()
+      : '10m');
+  const fileWindowTimeSeconds = parseDurationToSeconds(
+    rateLimitSource.fileWindowSeconds ?? rateLimitSource.fileWindow ?? rateLimitSource.fileWindowTime,
+    parseWindowTime('60s')
+  );
+  const fileWindowTime = typeof rateLimitSource.fileWindow === 'string' && rateLimitSource.fileWindow.trim()
+    ? rateLimitSource.fileWindow.trim()
+    : (typeof rateLimitSource.fileWindowTime === 'string' && rateLimitSource.fileWindowTime.trim()
+      ? rateLimitSource.fileWindowTime.trim()
+      : '60s');
+  const fileLimit = parseInteger(rateLimitSource.fileLimit, 4);
+  const rawFileBlockTime = rateLimitSource.fileBlockSeconds ?? rateLimitSource.fileBlock ?? rateLimitSource.fileBlockTime;
+  let fileBlockTimeSeconds = parseDurationToSeconds(rawFileBlockTime, parseWindowTime('4m'));
+  if (fileBlockTimeSeconds < 0) {
+    fileBlockTimeSeconds = parseWindowTime('4m');
+  }
+
+  let cleanupPercentage = Number.parseFloat(dbConfig.cleanupPercentage);
+  if (!Number.isFinite(cleanupPercentage) || cleanupPercentage < 0 || cleanupPercentage > 100) {
+    cleanupPercentage = 5;
+  }
+  cleanupPercentage = Math.min(100, Math.max(0, cleanupPercentage));
+  const cleanupProbability = cleanupPercentage / 100;
+
+  let rateLimitCleanupPercentage = Number.parseFloat(rateLimitSource.cleanupPercentage);
+  if (!Number.isFinite(rateLimitCleanupPercentage) || rateLimitCleanupPercentage < 0 || rateLimitCleanupPercentage > 100) {
+    rateLimitCleanupPercentage = cleanupPercentage;
+  }
+  rateLimitCleanupPercentage = Math.min(100, Math.max(0, rateLimitCleanupPercentage));
+  const rateLimitCleanupProbability = rateLimitCleanupPercentage / 100;
+
+  const cacheCleanupRaw = Number.parseFloat(cacheSource.cleanupPercentage);
+  const cacheCleanupPercentage = Number.isFinite(cacheCleanupRaw) && cacheCleanupRaw >= 0 && cacheCleanupRaw <= 100
+    ? cacheCleanupRaw
+    : cleanupPercentage;
+  const cacheCleanupProbability = Math.min(100, Math.max(0, cacheCleanupPercentage)) / 100;
+
+  let sizeTTLSeconds = parseDurationToSeconds(cacheSource.sizeTTLSeconds ?? cacheSource.sizeTTL, parseWindowTime('24h'));
+  if (sizeTTLSeconds <= 0) {
+    sizeTTLSeconds = parseWindowTime('24h');
+  }
+  const sizeTTL = typeof cacheSource.sizeTTL === 'string' && cacheSource.sizeTTL.trim()
+    ? cacheSource.sizeTTL.trim()
+    : `${sizeTTLSeconds}s`;
+  const filesizeCacheTableName = normalizeString(cacheSource.tableName, 'FILESIZE_CACHE_TABLE') || 'FILESIZE_CACHE_TABLE';
+
+  const verifyHeaders = parseStringArray(dbConfig.verifyHeader);
+  const verifySecrets = parseStringArray(dbConfig.verifySecret);
+
+  if (verifyHeaders.length > 0 && verifySecrets.length > 0 && verifyHeaders.length !== verifySecrets.length) {
+    throw new Error('controller landing.db.verifyHeader and verifySecret must have the same length');
+  }
+
+  let postgrestUrl = normalizeString(dbConfig.postgrestUrl, '');
 
   if (!hasDbMode) {
     turnstileTokenBindingEnabled = false;
   }
 
-  // Parse common rate limit configuration
-  const windowTime = env.WINDOW_TIME && typeof env.WINDOW_TIME === 'string' ? env.WINDOW_TIME.trim() : '';
-  const windowTimeSeconds = parseWindowTime(windowTime);
-  const ipSubnetLimit = parseInteger(env.IPSUBNET_WINDOWTIME_LIMIT, 0);
-  const ipv4Suffix = env.IPV4_SUFFIX && typeof env.IPV4_SUFFIX === 'string' ? env.IPV4_SUFFIX.trim() : '/32';
-  const ipv6Suffix = env.IPV6_SUFFIX && typeof env.IPV6_SUFFIX === 'string' ? env.IPV6_SUFFIX.trim() : '/60';
-  const pgErrorHandle = env.PG_ERROR_HANDLE && typeof env.PG_ERROR_HANDLE === 'string'
-    ? env.PG_ERROR_HANDLE.trim().toLowerCase()
-    : 'fail-closed';
-  const blockTime = env.BLOCK_TIME && typeof env.BLOCK_TIME === 'string' ? env.BLOCK_TIME.trim() : '10m';
-  const blockTimeSeconds = parseWindowTime(blockTime);
-  const rawFileWindowTime = env.FILE_WINDOW_TIME && typeof env.FILE_WINDOW_TIME === 'string'
-    ? env.FILE_WINDOW_TIME.trim()
-    : '60s';
-  let fileWindowTimeSeconds = parseWindowTime(rawFileWindowTime || '60s');
-  if (fileWindowTimeSeconds <= 0) {
-    fileWindowTimeSeconds = parseWindowTime('60s');
-  }
-  const fileWindowTime = rawFileWindowTime && rawFileWindowTime.length > 0 ? rawFileWindowTime : '60s';
-  const fileLimit = parseInteger(env.IPSUBNET_FILE_WINDOWTIME_LIMIT, 4);
-  const rawFileBlockTime = env.FILE_BLOCK_TIME && typeof env.FILE_BLOCK_TIME === 'string'
-    ? env.FILE_BLOCK_TIME.trim()
-    : '4m';
-  let fileBlockTimeSeconds = parseWindowTime(rawFileBlockTime || '4m');
-  if (fileBlockTimeSeconds < 0) {
-    fileBlockTimeSeconds = parseWindowTime('4m');
-  }
-
-  // Parse cleanup percentage (默认 5%)
-  let cleanupPercentage = Number.parseFloat(typeof env.CLEANUP_PERCENTAGE === 'string' ? env.CLEANUP_PERCENTAGE.trim() : '');
-  if (!Number.isFinite(cleanupPercentage)) {
-    cleanupPercentage = 5;
-  }
-  if (cleanupPercentage < 0 || cleanupPercentage > 100) {
-    cleanupPercentage = 5;
-  }
-  // Convert to probability (0.0 to 1.0)
-  const cleanupProbability = cleanupPercentage / 100;
-
-  // Filesize cache configuration
-  const rawSizeTTL = env.SIZE_TTL && typeof env.SIZE_TTL === 'string' ? env.SIZE_TTL.trim() : '24h';
-  let sizeTTLSeconds = parseWindowTime(rawSizeTTL);
-  if (sizeTTLSeconds <= 0) {
-    sizeTTLSeconds = parseWindowTime('24h');
-  }
-  const sizeTTL = rawSizeTTL && rawSizeTTL.length > 0 ? rawSizeTTL : '24h';
-  const filesizeCacheTableName = env.FILESIZE_CACHE_TABLE && typeof env.FILESIZE_CACHE_TABLE === 'string'
-    ? env.FILESIZE_CACHE_TABLE.trim()
-    : 'FILESIZE_CACHE_TABLE';
-
-  // Validate PG_ERROR_HANDLE value
-  const validPgErrorHandle = pgErrorHandle === 'fail-open' ? 'fail-open' : 'fail-closed';
-
-  const parseVerifyValues = (value) => {
-    if (!value || typeof value !== 'string') {
-      return [];
-    }
-    return value
-      .split(',')
-      .map((entry) => entry.trim())
-      .filter((entry) => entry.length > 0);
-  };
-
-  const verifyHeaders = parseVerifyValues(env.VERIFY_HEADER);
-  const verifySecrets = parseVerifyValues(env.VERIFY_SECRET);
-
-  if (verifyHeaders.length > 0 && verifySecrets.length > 0 && verifyHeaders.length !== verifySecrets.length) {
-    throw new Error('VERIFY_HEADER and VERIFY_SECRET must have the same number of comma-separated entries');
-  }
-
-  // Parse database-specific configuration
   let rateLimitEnabled = false;
   let rateLimitConfig = {};
   let cacheEnabled = false;
   let cacheConfig = {};
-  const ipRateLimitActive = Boolean(hasDbMode && windowTimeSeconds > 0 && ipSubnetLimit > 0);
-  const fileRateLimitActive = Boolean(hasDbMode && fileWindowTimeSeconds > 0 && fileLimit > 0);
+  const rateLimitEnabledFlag = rateLimitSource.enabled !== false;
+  const ipRateLimitActive = Boolean(hasDbMode && rateLimitEnabledFlag && windowTimeSeconds > 0 && ipSubnetLimit > 0);
+  const fileRateLimitActive = Boolean(hasDbMode && rateLimitEnabledFlag && fileWindowTimeSeconds > 0 && fileLimit > 0);
 
   if (hasDbMode && ipSubnetLimit === 0 && !ipRateLimitDisabledLogged) {
     console.log('IP rate limiting disabled (limit=0)');
@@ -943,36 +962,36 @@ const resolveConfig = (env = {}, bootstrap = null) => {
   }
 
   if (hasDbMode) {
-    // Custom PostgreSQL REST API (PostgREST) configuration
-    postgrestUrl = env.POSTGREST_URL && typeof env.POSTGREST_URL === 'string' ? env.POSTGREST_URL.trim() : '';
-    const postgrestTableName = env.POSTGREST_TABLE_NAME && typeof env.POSTGREST_TABLE_NAME === 'string' ? env.POSTGREST_TABLE_NAME.trim() : '';
-
     if (!postgrestUrl || verifyHeaders.length === 0 || verifySecrets.length === 0) {
-      throw new Error('DB_MODE is set to "custom-pg-rest" but POSTGREST_URL, VERIFY_HEADER, or VERIFY_SECRET is missing');
+      throw new Error('controller landing.db requires postgrestUrl and verifyHeader/verifySecret when db.mode = "custom-pg-rest"');
     }
     if (ipSubnetLimit > 0 && windowTimeSeconds <= 0) {
-      throw new Error('WINDOW_TIME must be greater than zero when IPSUBNET_WINDOWTIME_LIMIT > 0');
+      throw new Error('landing rateLimit.windowSeconds must be greater than zero when limit > 0');
     }
     if (fileLimit > 0 && fileWindowTimeSeconds <= 0) {
-      throw new Error('FILE_WINDOW_TIME must be greater than zero when IPSUBNET_FILE_WINDOWTIME_LIMIT > 0');
+      throw new Error('landing rateLimit.fileWindowSeconds must be greater than zero when fileLimit > 0');
     }
+
+    const validPgErrorHandle = pgErrorHandle === 'fail-open' ? 'fail-open' : 'fail-closed';
+    const rateLimitTableName = normalizeString(rateLimitSource.tableName, 'IP_LIMIT_TABLE') || 'IP_LIMIT_TABLE';
+    const rateLimitFileTable = normalizeString(rateLimitSource.fileTableName, 'IP_FILE_LIMIT_TABLE') || 'IP_FILE_LIMIT_TABLE';
 
     rateLimitConfig = {
       postgrestUrl,
       verifyHeader: verifyHeaders,
       verifySecret: verifySecrets,
-      tableName: postgrestTableName || 'IP_LIMIT_TABLE',
+      tableName: rateLimitTableName,
       windowTimeSeconds,
       limit: ipSubnetLimit,
       ipv4Suffix,
       ipv6Suffix,
       pgErrorHandle: validPgErrorHandle,
-      cleanupProbability,
+      cleanupProbability: rateLimitCleanupProbability,
       blockTimeSeconds,
       fileLimit,
       fileWindowTimeSeconds,
       fileBlockTimeSeconds,
-      fileTableName: 'IP_FILE_LIMIT_TABLE',
+      fileTableName: rateLimitFileTable,
       ipRateLimitEnabled: ipRateLimitActive,
       fileRateLimitEnabled: fileRateLimitActive,
     };
@@ -987,52 +1006,37 @@ const resolveConfig = (env = {}, bootstrap = null) => {
         verifySecret: verifySecrets,
         tableName: filesizeCacheTableName,
         sizeTTL: sizeTTLSeconds,
-        cleanupProbability,
+        cleanupProbability: cacheCleanupProbability,
       };
     } else {
       console.warn('[CONFIG] Cache DISABLED: sizeTTLSeconds =', sizeTTLSeconds);
     }
   }
 
-  const idleTimeoutRaw = normalizeString(env.IDLE_TIMEOUT, '0');
-  let idleTimeoutSeconds = hasDbMode ? parseWindowTime(idleTimeoutRaw) : 0;
+  let idleTimeoutSeconds = hasDbMode ? parseDurationToSeconds(dbConfig.idleTimeoutSeconds, 0) : 0;
   if (!Number.isFinite(idleTimeoutSeconds) || idleTimeoutSeconds < 0) {
     idleTimeoutSeconds = 0;
   }
 
-  const idleTableName = normalizeString(env.IDLE_TABLE_NAME, 'DOWNLOAD_LAST_ACTIVE_TABLE');
+  const idleTimeoutRaw = `${idleTimeoutSeconds}s`;
+  const idleTableName = normalizeString(dbConfig.idleTable, 'DOWNLOAD_LAST_ACTIVE_TABLE') || 'DOWNLOAD_LAST_ACTIVE_TABLE';
 
-  const appendAdditional = parseBoolean(env.IF_APPEND_ADDITIONAL, true);
-  const addressCandidates = [
-    typeof env.ALIST_ADDRESS === 'string' ? env.ALIST_ADDRESS.trim() : '',
-    typeof env.ALIST_BASE_URL === 'string' ? env.ALIST_BASE_URL.trim() : '',
-    typeof env.ADDRESS === 'string' ? env.ADDRESS.trim() : '',
-  ];
-  const rawAlistAddress = addressCandidates.find((value) => value) || '';
-  const normalizedAlistAddress = rawAlistAddress.replace(/\/$/, '');
-  const minBandwidthMbps = parseNumber(env.MIN_ALLOWED_BANDWIDTH, 10);
+  const additionalConfig = landingBootstrap.additional && typeof landingBootstrap.additional === 'object'
+    ? landingBootstrap.additional
+    : {};
+  const appendAdditional = additionalConfig.appendAdditional !== false;
+  const normalizedAlistAddress = normalizeString(commonBootstrap.alistBaseUrl).replace(/\/$/, '');
+  const minBandwidthMbps = parseNumber(additionalConfig.minBandwidthMbps, 10);
   const bandwidthBytesPerSecond = minBandwidthMbps > 0
     ? (minBandwidthMbps * 1_000_000) / 8
     : (10 * 1_000_000) / 8;
-  const minDurationLabel = env.MIN_DURATION_TIME && typeof env.MIN_DURATION_TIME === 'string'
-    ? env.MIN_DURATION_TIME.trim()
-    : '';
-  const parsedMinDurationSeconds = parseWindowTime(minDurationLabel);
-  const minDurationSeconds = parsedMinDurationSeconds > 0 ? parsedMinDurationSeconds : 3600;
-  const rawMaxDurationLabel =
-    typeof env.MAX_DURATION_TIME === 'string' ? env.MAX_DURATION_TIME.trim() : '';
-  let maxDurationMilliseconds = null;
-  let maxDurationSeconds = 0;
-  if (rawMaxDurationLabel) {
-    const parsedMaxDurationSeconds = parseWindowTime(rawMaxDurationLabel);
-    if (parsedMaxDurationSeconds > 0) {
-      maxDurationMilliseconds = parsedMaxDurationSeconds * 1000;
-      maxDurationSeconds = parsedMaxDurationSeconds;
-    }
-  }
+  const minDurationSeconds = parseDurationToSeconds(additionalConfig.minDurationSeconds, 3600);
+  const rawMaxDurationSeconds = parseDurationToSeconds(additionalConfig.maxDurationSeconds, 0);
+  const maxDurationSeconds = Math.max(0, rawMaxDurationSeconds);
+  const maxDurationMilliseconds = maxDurationSeconds > 0 ? maxDurationSeconds * 1000 : null;
 
   if (appendAdditional && !normalizedAlistAddress) {
-    throw new Error('ALIST_ADDRESS (or ADDRESS) is required when IF_APPEND_ADDITIONAL is true');
+    throw new Error('controller common.alistBaseUrl is required when additional.appendAdditional is true');
   }
 
   if (enableCfRatelimiter) {
