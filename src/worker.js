@@ -25,7 +25,7 @@ import { BootstrapDO } from './do/bootstrap-do.js';
 import { DecisionDO } from './do/decision-do.js';
 import { MetricsDO } from './do/metrics-do.js';
 
-const REQUIRED_ENV = ['TOKEN', 'WORKER_ADDRESS_DOWNLOAD'];
+const REQUIRED_ENV = ['WORKER_ADDRESS_DOWNLOAD'];
 
 const TURNSTILE_VERIFY_ENDPOINT = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
 const TURNSTILE_HEADER = 'cf-turnstile-response';
@@ -659,8 +659,18 @@ const resolveConfig = (env = {}, bootstrap = null) => {
     const trimmed = value.trim();
     return trimmed === '' ? defaultValue : trimmed;
   };
-  const rawToken = env.TOKEN;
-  const normalizedToken = typeof rawToken === 'string' ? rawToken : String(rawToken || '');
+  const commonBootstrap = bootstrap && typeof bootstrap === 'object'
+    ? bootstrap.common || null
+    : null;
+  if (!commonBootstrap) {
+    throw new Error('controller bootstrap.common is required');
+  }
+  const token = normalizeString(commonBootstrap.tokenHmacKey);
+  if (!token) {
+    throw new Error('controller common.tokenHmacKey is required');
+  }
+  const signSecretFromController = normalizeString(commonBootstrap.signSecret) || token;
+
   const landingBootstrap = bootstrap && typeof bootstrap === 'object'
     ? bootstrap.landing || null
     : null;
@@ -775,6 +785,8 @@ const resolveConfig = (env = {}, bootstrap = null) => {
   if (powdetEnabled && (!powdetBaseUrl || !powdetApiToken)) {
     throw new Error('controller bootstrap.landing.powdet.baseUrl and token are required when powdet.enabled is true');
   }
+
+  const ipv4Only = landingBootstrap.ipv4Only === true;
 
   // Parse prefix lists (comma-separated)
   const parsePrefixList = (value) => {
@@ -1050,12 +1062,12 @@ const resolveConfig = (env = {}, bootstrap = null) => {
     : null;
 
   return {
-    token: env.TOKEN,
+    token,
     workerAddresses: env.WORKER_ADDRESS_DOWNLOAD,
     verifyHeader: verifyHeaders,
     verifySecret: verifySecrets,
-    ipv4Only: parseBoolean(env.IPV4_ONLY, false),
-    signSecret: env.SIGN_SECRET && env.SIGN_SECRET.trim() !== '' ? env.SIGN_SECRET : env.TOKEN,
+    ipv4Only,
+    signSecret: signSecretFromController,
     underAttack,
     altchaEnabled,
     altchaDifficulty: altchaDifficultyStatic,

@@ -46,12 +46,17 @@ const (
 	defaultSlotHandlerAttemptsCap   = 35
 )
 
+func boolPtr(v bool) *bool {
+	return &v
+}
+
 // CommonConfig holds shared upstream and auth settings.
 type CommonConfig struct {
 	AListBaseURL   string            `yaml:"alistBaseUrl" json:"alistBaseUrl"`
 	AListAuth      map[string]string `yaml:"alistAuthHeaders" json:"alistAuthHeaders"`
 	TokenHMACKeyID string            `yaml:"tokenHmacKeyId" json:"tokenHmacKeyId"`
 	TokenHMACKey   string            `yaml:"tokenHmacKey" json:"tokenHmacKey"`
+	SignSecret     string            `yaml:"signSecret" json:"signSecret"`
 }
 
 // LandingCaptchaConfig carries captcha defaults for landing.
@@ -124,6 +129,7 @@ type LandingConfig struct {
 	PathRules    DownloadPathRules      `yaml:"pathRules" json:"pathRules"`
 	FastRedirect bool                   `yaml:"fastRedirect" json:"fastRedirect"`
 	AutoRedirect bool                   `yaml:"autoRedirect" json:"autoRedirect"`
+	IPv4Only     bool                   `yaml:"ipv4Only" json:"ipv4Only"`
 	Extra        map[string]any         `yaml:",inline" json:"-"`
 }
 
@@ -210,6 +216,17 @@ type DownloadFairQueueConfig struct {
 	Extra                map[string]any                      `yaml:",inline" json:"-"`
 }
 
+// DownloadAuthConfig controls request integrity checks.
+type DownloadAuthConfig struct {
+	SignCheck               *bool  `yaml:"signCheck" json:"signCheck"`
+	HashCheck               *bool  `yaml:"hashCheck" json:"hashCheck"`
+	WorkerCheck             *bool  `yaml:"workerCheck" json:"workerCheck"`
+	AdditionCheck           *bool  `yaml:"additionCheck" json:"additionCheck"`
+	AdditionExpireTimeCheck *bool  `yaml:"additionExpireTimeCheck" json:"additionExpireTimeCheck"`
+	IPv4Only                *bool  `yaml:"ipv4Only" json:"ipv4Only"`
+	SignSecret              string `yaml:"signSecret" json:"signSecret"`
+}
+
 // DownloadConfig collects download-side strategy and upstream config.
 type DownloadConfig struct {
 	Address              string                             `yaml:"address" json:"address"`
@@ -218,6 +235,7 @@ type DownloadConfig struct {
 	ThrottleProfiles     map[string]DownloadThrottleProfile `yaml:"throttleProfiles" json:"throttleProfiles"`
 	OriginBindingDefault string                             `yaml:"originBindingDefault" json:"originBindingDefault"`
 	PathRules            DownloadPathRules                  `yaml:"pathRules" json:"pathRules"`
+	Auth                 DownloadAuthConfig                 `yaml:"auth" json:"auth"`
 	Extra                map[string]interface{}             `yaml:",inline" json:"-"`
 }
 
@@ -274,6 +292,16 @@ func (c *RootConfig) Validate() error {
 }
 
 func (e *EnvConfig) validate(envName string) error {
+	if strings.TrimSpace(e.Common.TokenHMACKey) == "" {
+		return fmt.Errorf("common.tokenHmacKey is required for env %s", envName)
+	}
+	if e.Common.TokenHMACKeyID == "" {
+		e.Common.TokenHMACKeyID = "default"
+	}
+	if e.Common.SignSecret == "" {
+		e.Common.SignSecret = e.Common.TokenHMACKey
+	}
+
 	if e.Download.OriginBindingDefault == "" {
 		return fmt.Errorf("download.originBindingDefault is required for env %s", envName)
 	}
@@ -281,6 +309,8 @@ func (e *EnvConfig) validate(envName string) error {
 	if len(e.Landing.Captcha.DefaultCombo) == 0 {
 		e.Landing.Captcha.DefaultCombo = []string{"verify-altcha"}
 	}
+
+	e.Landing.ensureDefaults()
 
 	if e.Landing.PageSecret == "" {
 		return fmt.Errorf("landing.pageSecret is required for env %s", envName)
@@ -321,7 +351,7 @@ func (e *EnvConfig) validate(envName string) error {
 		}
 	}
 
-	if err := e.Download.ensureDefaults(envName); err != nil {
+	if err := e.Download.ensureDefaults(e.Common, envName); err != nil {
 		return fmt.Errorf("download config invalid for env %s: %w", envName, err)
 	}
 
@@ -420,7 +450,11 @@ func (c *LandingPowdetConfig) ensureDefaults() error {
 	return nil
 }
 
-func (d *DownloadConfig) ensureDefaults(envName string) error {
+func (l *LandingConfig) ensureDefaults() {
+	// no-op for now; placeholder for landing-specific defaults like IPv4Only.
+}
+
+func (d *DownloadConfig) ensureDefaults(common CommonConfig, envName string) error {
 	if d.Address == "" {
 		return fmt.Errorf("download.address is required for env %s", envName)
 	}
@@ -436,6 +470,8 @@ func (d *DownloadConfig) ensureDefaults(envName string) error {
 	if err := d.FairQueue.ensureDefaults(envName); err != nil {
 		return err
 	}
+
+	d.Auth.ensureDefaults(common)
 
 	return nil
 }
@@ -620,6 +656,30 @@ func (f *DownloadFairQueueConfig) ensureDefaults(envName string) error {
 	}
 
 	return nil
+}
+
+func (a *DownloadAuthConfig) ensureDefaults(common CommonConfig) {
+	if a.SignCheck == nil {
+		a.SignCheck = boolPtr(true)
+	}
+	if a.HashCheck == nil {
+		a.HashCheck = boolPtr(true)
+	}
+	if a.WorkerCheck == nil {
+		a.WorkerCheck = boolPtr(true)
+	}
+	if a.AdditionCheck == nil {
+		a.AdditionCheck = boolPtr(true)
+	}
+	if a.AdditionExpireTimeCheck == nil {
+		a.AdditionExpireTimeCheck = boolPtr(true)
+	}
+	if a.IPv4Only == nil {
+		a.IPv4Only = boolPtr(true)
+	}
+	if a.SignSecret == "" {
+		a.SignSecret = common.SignSecret
+	}
 }
 
 func normalizePgErrorHandle(raw string) string {

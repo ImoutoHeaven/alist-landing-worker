@@ -10,6 +10,7 @@ envs:
         Authorization: "Bearer staging-alist-token"
       tokenHmacKeyId: "default"
       tokenHmacKey: "replace-with-hmac-key"
+      signSecret: ""
     landing:
       pageSecret: "replace-with-page-secret"
       captcha:
@@ -39,6 +40,7 @@ envs:
         minUpgradeExponent: 3
       fastRedirect: false
       autoRedirect: false
+      ipv4Only: false
       pathRules:
         blacklist:
           - name: "landing_block_admin"
@@ -69,6 +71,13 @@ envs:
         table: "landing_idle"
     download:
       address: "https://alist-staging.example.com"
+      auth:
+        signCheck: true
+        hashCheck: true
+        workerCheck: true
+        additionCheck: true
+        additionExpireTimeCheck: true
+        ipv4Only: true
       db:
         mode: "custom-pg-rest"
         postgrestUrl: "https://postgrest-staging.example.com"
@@ -154,6 +163,7 @@ envs:
         Authorization: "Bearer prod-alist-token"
       tokenHmacKeyId: "default"
       tokenHmacKey: "replace-with-hmac-key"
+      signSecret: ""
     landing:
       pageSecret: "replace-with-page-secret"
       captcha:
@@ -183,6 +193,7 @@ envs:
         minUpgradeExponent: 3
       fastRedirect: false
       autoRedirect: false
+      ipv4Only: false
       pathRules:
         blacklist:
           - name: "landing_block_admin"
@@ -213,6 +224,13 @@ envs:
         table: "landing_idle"
     download:
       address: "https://alist.example.com"
+      auth:
+        signCheck: true
+        hashCheck: true
+        workerCheck: true
+        additionCheck: true
+        additionExpireTimeCheck: true
+        ipv4Only: true
       db:
         mode: "custom-pg-rest"
         postgrestUrl: "https://postgrest.example.com"
