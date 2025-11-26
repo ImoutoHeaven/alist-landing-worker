@@ -1080,7 +1080,7 @@ const pageScript = buildRawString`
       await sink.start(options);
       return sink;
     } catch (error) {
-      console.warn(`sink ${mode} start failed`, error);
+      console.warn('sink ' + mode + ' start failed', error);
       await markCapabilityBroken(mode);
       return null;
     }
