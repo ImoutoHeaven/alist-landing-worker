@@ -1093,6 +1093,7 @@ const pageScript = buildRawString`
   };
 
   const choosePlaintextSink = async (options = {}) => {
+    await settingsInitPromise;
     const { fileName, mimeType, totalSize } = options || {};
     const mode = state.saveMode;
 
@@ -1856,6 +1857,11 @@ const pageScript = buildRawString`
 
   window.__landingState = state;
 
+  let settingsInitResolve;
+  const settingsInitPromise = new Promise((resolve) => {
+    settingsInitResolve = resolve;
+  });
+
   const syncBodyModeClasses = () => {
     if (!document || !document.body) return;
     document.body.classList.toggle('web-downloader-active', state.mode === 'web');
@@ -2088,7 +2094,7 @@ const pageScript = buildRawString`
       const field = fieldMap[name];
       if (!field) return;
 
-      state[field] = true;
+      window.__landingState[field] = true;
 
       const db = await openStorageDatabase();
       if (!db) return;
@@ -2115,10 +2121,11 @@ const pageScript = buildRawString`
 
     const initCapabilitiesState = async () => {
       const caps = await loadSiteCapabilitiesFromDexie();
-      state.fsBroken = !!caps.fsBroken;
-      state.opfsBroken = !!caps.opfsBroken;
-      state.streamSaverBroken = !!caps.streamSaverBroken;
-      state.memStreamBroken = !!caps.memStreamBroken;
+      const globalState = window.__landingState;
+      globalState.fsBroken = !!caps.fsBroken;
+      globalState.opfsBroken = !!caps.opfsBroken;
+      globalState.streamSaverBroken = !!caps.streamSaverBroken;
+      globalState.memStreamBroken = !!caps.memStreamBroken;
     };
 
     const useStorageTable = async (tableName, executor, { defaultValue = null } = {}) => {
@@ -2525,11 +2532,11 @@ const pageScript = buildRawString`
 
     const initSaveMode = async () => {
       const savedMode = await loadSaveModeSetting();
-      state.saveMode = savedMode;
+      window.__landingState.saveMode = savedMode;
     };
 
     const updateSaveMode = async (saveMode) => {
-      state.saveMode = saveMode;
+      window.__landingState.saveMode = saveMode;
       await persistSaveModeSetting(saveMode);
     };
 
@@ -2726,7 +2733,7 @@ const pageScript = buildRawString`
           }
         }
         if (storedSaveMode) {
-          state.saveMode = storedSaveMode;
+          window.__landingState.saveMode = storedSaveMode;
           if (saveModeSelect) {
             saveModeSelect.value = storedSaveMode;
           }
@@ -2736,9 +2743,11 @@ const pageScript = buildRawString`
       }
     };
 
-    hydrateStoredSettings();
-    initCapabilitiesState();
-    initSaveMode();
+    (async () => {
+      await hydrateStoredSettings();
+      await initCapabilitiesState();
+      settingsInitResolve();
+    })();
 
     const resumeWaiters = [];
 
