@@ -2497,8 +2497,8 @@ const pageScript = buildRawString`
       return null;
     };
 
-    const persistSettingValue = (key, rawValue) => {
-      useStorageTable(
+    const persistSettingValue = async (key, rawValue) => {
+      await useStorageTable(
         STORAGE_TABLE_SETTINGS,
         (table) => table.put({ key, value: String(rawValue || '') }),
         { defaultValue: undefined },
@@ -2519,8 +2519,8 @@ const pageScript = buildRawString`
       return 'auto';
     };
 
-    const persistSaveModeSetting = (value) => {
-      persistSettingValue(SAVE_MODE_SETTING_KEY, value);
+    const persistSaveModeSetting = async (value) => {
+      await persistSettingValue(SAVE_MODE_SETTING_KEY, value);
     };
 
     const initSaveMode = async () => {
@@ -2530,7 +2530,7 @@ const pageScript = buildRawString`
 
     const updateSaveMode = async (saveMode) => {
       state.saveMode = saveMode;
-      persistSaveModeSetting(saveMode);
+      await persistSaveModeSetting(saveMode);
     };
 
     const loadConnectionSetting = async () => {
@@ -2569,20 +2569,20 @@ const pageScript = buildRawString`
       return parsed;
     };
 
-    const persistConnectionSetting = (value) => {
-      persistSettingValue(CONNECTION_SETTING_KEY, value);
+    const persistConnectionSetting = async (value) => {
+      await persistSettingValue(CONNECTION_SETTING_KEY, value);
     };
 
-    const persistParallelSetting = (value) => {
-      persistSettingValue(PARALLEL_SETTING_KEY, value);
+    const persistParallelSetting = async (value) => {
+      await persistSettingValue(PARALLEL_SETTING_KEY, value);
     };
 
-    const persistSegmentSizeSetting = (valueMb) => {
-      persistSettingValue(SEGMENT_SIZE_SETTING_KEY, valueMb);
+    const persistSegmentSizeSetting = async (valueMb) => {
+      await persistSettingValue(SEGMENT_SIZE_SETTING_KEY, valueMb);
     };
 
-    const persistTtfbTimeoutSetting = (valueSeconds) => {
-      persistSettingValue(TTFB_TIMEOUT_SETTING_KEY, valueSeconds);
+    const persistTtfbTimeoutSetting = async (valueSeconds) => {
+      await persistSettingValue(TTFB_TIMEOUT_SETTING_KEY, valueSeconds);
     };
 
     const ensureHandlePermission = async (handle) => {
