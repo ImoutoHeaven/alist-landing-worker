@@ -4750,13 +4750,18 @@ const pageScript = buildRawString`
     clientDecryptSection.addEventListener('drop', (event) => {
       prevent(event);
       deactivate();
+      if (clientDecryptUiState.running) {
+        return;
+      }
       const dropped = event.dataTransfer?.files;
       if (!dropped || dropped.length === 0) {
         return;
       }
       const file = dropped[0];
       if (file) {
+        clearClientDecryptFile();
         if (!validateClientDecryptFile(file)) {
+          syncClientDecryptControls();
           return;
         }
         setClientDecryptFile(file);
@@ -6243,20 +6248,27 @@ const pageScript = buildRawString`
 
   if (clientDecryptSelectBtn && clientDecryptFileInput) {
     clientDecryptSelectBtn.addEventListener('click', () => {
+      if (clientDecryptUiState.running) {
+        return;
+      }
+      clearClientDecryptFile();
       clientDecryptFileInput.click();
     });
     clientDecryptFileInput.addEventListener('change', (event) => {
-      const file = event.target.files && event.target.files[0];
+      if (clientDecryptUiState.running) {
+        return;
+      }
+      const fileInput = event.target;
+      const file = fileInput.files && fileInput.files[0];
+      clearClientDecryptFile();
       if (file) {
         if (!validateClientDecryptFile(file)) {
+          syncClientDecryptControls();
           return;
         }
         setClientDecryptFile(file);
         clientDecryptor.setSourceFile(file);
         updateClientDecryptStatusHint('pending');
-      } else {
-        clearClientDecryptFile();
-        clientDecryptor.clearSourceFile();
       }
       syncClientDecryptControls();
     });
