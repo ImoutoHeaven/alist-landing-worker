@@ -203,6 +203,7 @@ type LandingConfig struct {
 	FastRedirect         bool                       `yaml:"fastRedirect" json:"fastRedirect"`
 	AutoRedirect         bool                       `yaml:"autoRedirect" json:"autoRedirect"`
 	IPv4Only             bool                       `yaml:"ipv4Only" json:"ipv4Only"`
+	WorkerAddresses      []string                   `yaml:"workerAddresses" json:"workerAddresses"`
 	DB                   LandingDBConfig            `yaml:"db" json:"db"`
 	Crypt                LandingCryptConfig         `yaml:"crypt" json:"crypt"`
 	WebDownloader        LandingWebDownloaderConfig `yaml:"webDownloader" json:"webDownloader"`
@@ -542,6 +543,18 @@ func (l *LandingConfig) ensureDefaults(envName string) error {
 	if (l.WebDownloader.Enabled || l.ClientDecryptEnabled) && strings.TrimSpace(l.Crypt.DataKey) == "" {
 		return fmt.Errorf("landing.crypt.dataKey is required for env %s when webDownloader or clientDecrypt is enabled", envName)
 	}
+
+	cleaned := make([]string, 0, len(l.WorkerAddresses))
+	for _, addr := range l.WorkerAddresses {
+		trimmed := strings.TrimSpace(addr)
+		if trimmed != "" {
+			cleaned = append(cleaned, trimmed)
+		}
+	}
+	if len(cleaned) == 0 {
+		return fmt.Errorf("landing.workerAddresses is required for env %s", envName)
+	}
+	l.WorkerAddresses = cleaned
 
 	return nil
 }

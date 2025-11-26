@@ -13,7 +13,6 @@ persist = true
 # [vars]
 # 控制面为唯一策略来源，wrangler 仅保留 infra 级 env：
 # - ENV / ROLE / INSTANCE_ID / APP_NAME / APP_VERSION
-# - WORKER_ADDRESS_DOWNLOAD（下载 worker 列表）
 # - CONTROLLER_URL / CONTROLLER_API_PREFIX / CONTROLLER_API_TOKEN
 # - BOOTSTRAP_CACHE_MODE / DECISION_CACHE_MODE / METRICS_MODE
 # - BOOTSTRAP_DO / DECISION_DO / METRICS_DO / BOOTSTRAP_KV 绑定
@@ -27,7 +26,6 @@ persist = true
 # INSTANCE_ID=landing-dev-1
 # APP_NAME=alist-landing-worker
 # APP_VERSION=dev
-# WORKER_ADDRESS_DOWNLOAD=https://worker1.example.com,https://worker2.example.com
 # CONTROLLER_URL=https://controller.example.com
 # CONTROLLER_API_PREFIX=/api/v0
 # CONTROLLER_API_TOKEN=replace-with-controller-token

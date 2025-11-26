@@ -340,7 +340,7 @@ Landing worker 对「验证码」类验证（Turnstile、ALTCHA）做了上下�
      - `path` / `size` / `is_dir` / 名称等；
 7. 构造下载票据：
    - 选取 download worker 地址：
-     - `selectRandomWorker(WORKER_ADDRESS_DOWNLOAD)`：从逗号分隔列表中随机；
+    - `selectRandomWorker(controller.landing.workerAddresses)`：从 controller 下发列表中随机；
    - 生成 download worker 需要的签名：
      - `sign`：`HMAC-SHA256(path, expire)`（download worker 的 `SIGN_CHECK`）
      - `hashSign`：`HMAC-SHA256(base64(path), expire)`（`HASH_CHECK`）
@@ -454,7 +454,7 @@ Landing worker 的 DB schema 由 `init.sql` 定义，仅服务 `DB_MODE="custom-
 这里只总结与架构/模块相关的关键项，具体说明参考 `wrangler.toml` 中注释：
 
 - 基础：
-  - `TOKEN` / `SIGN_SECRET` / `WORKER_ADDRESS_DOWNLOAD` / `ALIST_ADDRESS`
+  - `TOKEN` / `SIGN_SECRET` / `controller.landing.workerAddresses` / `ALIST_ADDRESS`
 - Turnstile：
   - `UNDER_ATTACK`, `TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET_KEY`, `TURNSTILE_TOKEN_BINDING`, `TURNSTILE_TOKEN_TTL`, `TURNSTILE_TOKEN_TABLE` 等
 - ALTCHA：

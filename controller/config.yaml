@@ -41,6 +41,8 @@ envs:
       fastRedirect: false
       autoRedirect: false
       ipv4Only: false
+      workerAddresses:
+        - "https://download-staging.example.com"
       pathRules:
         blacklist:
           - name: "landing_block_admin"
@@ -235,6 +237,8 @@ envs:
       fastRedirect: false
       autoRedirect: false
       ipv4Only: false
+      workerAddresses:
+        - "https://download.example.com"
       pathRules:
         blacklist:
           - name: "landing_block_admin"

@@ -124,7 +124,7 @@ Download worker（例如 `simple-alist-cf-proxy`）应当：
 完整环境变量列表请参考 `wrangler.toml` 注释与 `DEPLOYMENT.md`。核心项包括：
 
 - **基础：**
-  - `TOKEN`, `SIGN_SECRET`, `WORKER_ADDRESS_DOWNLOAD`, `ALIST_ADDRESS`
+  - `TOKEN`, `SIGN_SECRET`, `controller.landing.workerAddresses`, `ALIST_ADDRESS`
 - **安全：**
   - Turnstile：`UNDER_ATTACK`, `TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET_KEY`, `TURNSTILE_TOKEN_*`
   - ALTCHA：`ALTCHA_ENABLED`, `ALTCHA_*`, `PAGE_SECRET`

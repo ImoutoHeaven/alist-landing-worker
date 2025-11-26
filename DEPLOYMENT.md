@@ -7,6 +7,8 @@
 
 这里只给出实用向的部署和配置步骤。
 
+> **重要**：当前 `controller-overhaul` 分支已由 controller 统一下发策略与 download worker 列表。历史变量如 `WORKER_ADDRESS_DOWNLOAD` 不再在 wrangler/env 中配置，而是通过 `controller/config.yaml` 的 `landing.workerAddresses` 提供。下文旧版 env 示例仅供参考，实际部署请以 controller 配置为准。
+
 ---
 
 ## 1. Quick Start
@@ -27,32 +29,37 @@ npm run build
 
 构建完成后会生成 `dist/worker.js`，即 Worker 入口。
 
-### 1.3 Minimal `.dev.vars` (no DB / no ALTCHA / no Powdet)
+### 1.3 Minimal `.dev.vars`（controller-overhaul 模式）
 
-在项目根目录创建 `.dev.vars`：
+在项目根目录创建 `.dev.vars`（仅包含基础接入，所有策略与 download worker 列表由 controller 配置下发）：
 
 ```bash
-TOKEN=your-hmac-token-here
-WORKER_ADDRESS_DOWNLOAD=https://download1.example.com,https://download2.example.com
-ALIST_ADDRESS=https://alist.example.com
+ENV=staging
+ROLE=landing
+INSTANCE_ID=landing-dev-1
+APP_NAME=alist-landing-worker
+APP_VERSION=dev
 
-UNDER_ATTACK=false
-FAST_REDIRECT=false
-AUTO_REDIRECT=false
+CONTROLLER_URL=https://controller.example.com
+CONTROLLER_API_PREFIX=/api/v0
+CONTROLLER_API_TOKEN=replace-with-controller-token
 
-# 关闭额外 PoW 模块（按需再开启）
-ALTCHA_ENABLED=false
-POWDET_ENABLED=false
+BOOTSTRAP_CACHE_MODE=do
+DECISION_CACHE_MODE=do
+METRICS_MODE=do
+BOOTSTRAP_DO=BootstrapDO
+DECISION_DO=DecisionDO
+METRICS_DO=MetricsDO
+BOOTSTRAP_KV=BOOTSTRAP_KV
 
-# 不启用数据库限流
-DB_MODE=
+INTERNAL_API_TOKEN=replace-with-internal-token
+ENABLE_CF_RATELIMITER=false
+CF_RATELIMITER_BINDING=CF_RATE_LIMITER
 ```
 
 说明：
-- `TOKEN` 用于所有 HMAC 及 AES 加密（如未单独配置 `SIGN_SECRET`）。  
-- `WORKER_ADDRESS_DOWNLOAD` 为 download worker 列表（例如 `simple-alist-cf-proxy`）。  
-- `ALIST_ADDRESS` 为 AList 实例地址，用于 `/api/fs/get` 查询文件信息。  
-- 初始可以不开启 ALTCHA / Powdet / DB，待验证通过后再慢慢加安全层。  
+- download worker 列表与策略均在 `controller/config.yaml` 配置（如 `landing.workerAddresses`），wrangler/env 不再填写 `WORKER_ADDRESS_DOWNLOAD` 等策略变量。  
+- 其他策略（Turnstile/ALTCHA/powdet/限流/路径等）同样由 controller 下发，保持 env 纯 infra。  
 
 ### 1.4 Local Development
 
@@ -87,8 +94,8 @@ npm run deploy
   - 所有签名与 origin snapshot 加密的基础密钥。  
 - `SIGN_SECRET`（可选，Secret）  
   - 若设置，则用它替代 `TOKEN` 做 HMAC；未设置时等同于 `TOKEN`。  
-- `WORKER_ADDRESS_DOWNLOAD`（必填）  
-  - 逗号分隔的 download worker 列表，随机轮询。  
+- `controller.landing.workerAddresses`（必填，配置于 controller）  
+  - 由 controller 下发 download worker 列表，wrangler/env 不再配置 `WORKER_ADDRESS_DOWNLOAD`。  
 - `ALIST_ADDRESS`  
   - AList API 根地址，例如 `https://alist.example.com`。  
   - 当启用 `IF_APPEND_ADDITIONAL=true`（默认）时必须配置，用于给下载链接附加过期时间。  

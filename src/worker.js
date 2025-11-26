@@ -24,8 +24,6 @@ import { BootstrapDO } from './do/bootstrap-do.js';
 import { DecisionDO } from './do/decision-do.js';
 import { MetricsDO } from './do/metrics-do.js';
 
-const REQUIRED_ENV = ['WORKER_ADDRESS_DOWNLOAD'];
-
 const TURNSTILE_VERIFY_ENDPOINT = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
 const TURNSTILE_HEADER = 'cf-turnstile-response';
 const TURNSTILE_BINDING_HEADER = 'x-turnstile-binding';
@@ -642,16 +640,7 @@ const hopByHopHeaders = new Set([
   'host',
 ]);
 
-const ensureRequiredEnv = (env) => {
-  REQUIRED_ENV.forEach((key) => {
-    if (!env[key] || String(env[key]).trim() === '') {
-      throw new Error(`environment variable ${key} is required`);
-    }
-  });
-};
-
 const resolveConfig = (env = {}, bootstrap = null) => {
-  ensureRequiredEnv(env);
   const normalizeString = (value, defaultValue = '') => {
     if (value === undefined || value === null) return defaultValue;
     if (typeof value !== 'string') return defaultValue;
@@ -1039,6 +1028,17 @@ const resolveConfig = (env = {}, bootstrap = null) => {
     throw new Error('controller common.alistBaseUrl is required when additional.appendAdditional is true');
   }
 
+  const workerAddressesList = Array.isArray(landingBootstrap.workerAddresses)
+    ? landingBootstrap.workerAddresses
+    : [];
+  const normalizedWorkerAddresses = workerAddressesList
+    .map((addr) => (typeof addr === 'string' ? addr.trim() : ''))
+    .filter((addr) => addr.length > 0);
+  if (normalizedWorkerAddresses.length === 0) {
+    throw new Error('controller landing.workerAddresses is required');
+  }
+  const workerAddressesValue = normalizedWorkerAddresses.join(',');
+
   if (enableCfRatelimiter) {
     const ratelimiter = env[cfRatelimiterBinding];
     if (!ratelimiter || typeof ratelimiter.limit !== 'function') {
@@ -1067,7 +1067,7 @@ const resolveConfig = (env = {}, bootstrap = null) => {
 
   return {
     token,
-    workerAddresses: env.WORKER_ADDRESS_DOWNLOAD,
+    workerAddresses: workerAddressesValue,
     verifyHeader: verifyHeaders,
     verifySecret: verifySecrets,
     ipv4Only,
@@ -1712,7 +1712,7 @@ const ensureIPv4 = (request, ipv4Only) => {
 
 const selectRandomWorker = (workerAddresses) => {
   if (!workerAddresses || typeof workerAddresses !== 'string') {
-    throw new Error('WORKER_ADDRESS_DOWNLOAD is not configured');
+    throw new Error('controller landing.workerAddresses is not configured');
   }
   const addresses = workerAddresses
     .split(',')
@@ -1720,7 +1720,7 @@ const selectRandomWorker = (workerAddresses) => {
     .filter((addr) => addr.length > 0);
 
   if (addresses.length === 0) {
-    throw new Error('WORKER_ADDRESS_DOWNLOAD contains no valid addresses');
+    throw new Error('controller landing.workerAddresses contains no valid addresses');
   }
 
   const selected = addresses[Math.floor(Math.random() * addresses.length)];
