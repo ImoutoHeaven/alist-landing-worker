@@ -129,15 +129,15 @@ export const htmlTemplate = `<!DOCTYPE html>
             <div class="config-section-title">保存方式</div>
             <label class="retry-label" for="saveModeSelect">
               保存策略
-              <span class="retry-hint">自动模式会根据浏览器能力选择最优方式</span>
+              <span class="retry-hint" id="saveModeHint">Auto模式提供不可用时降级回退，这不一定稳定，但总比瞎选强</span>
             </label>
             <select id="saveModeSelect" class="retry-input">
-              <option value="auto">Auto（推荐）</option>
-              <option value="fs">FS（文件系统访问）</option>
-              <option value="opfs">OPFS（浏览器内临时文件）</option>
-              <option value="stream">Stream（StreamSaver）</option>
-              <option value="memstream">MemStream（内存流）</option>
-              <option value="memory">Memory（纯内存）</option>
+              <option value="auto">Auto</option>
+              <option value="fs">FS</option>
+              <option value="opfs">OPFS</option>
+              <option value="stream">Stream</option>
+              <option value="memstream">MemStream</option>
+              <option value="memory">Memory</option>
             </select>
           </div>
           <div class="keygen-panel mode-shared">

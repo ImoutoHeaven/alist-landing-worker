@@ -599,6 +599,7 @@ const pageScript = buildRawString`
   const segmentSizeInput = $('segmentSizeInput');
   const ttfbTimeoutInput = $('ttfbTimeoutInput');
   const saveModeSelect = $('saveModeSelect');
+  const saveModeHint = $('saveModeHint');
   const downloadBar = $('downloadBar');
   const decryptBar = $('decryptBar');
   const downloadText = $('downloadText');
@@ -634,6 +635,23 @@ const pageScript = buildRawString`
     logEl.appendChild(entry);
     logEl.scrollTop = logEl.scrollHeight;
   };
+
+  const SAVE_MODE_HINTS = {
+    auto: 'Auto模式提供不可用时降级回退，这不一定稳定，但总比瞎选强',
+    fs: 'FS模式使用最干净的API直接访问文件句柄，如果FileSystemAccessAPI可用，你应该保持选它',
+    opfs: 'OPFS模式直接访问站点本地私有文件句柄，但必须手动导出和清理，不那么干净，但很可靠',
+    stream: 'StreamSaver通过Service Worker和流下载进行直接落盘，很干净，但可能会被下载器拦截，请保持IDM和aria2关闭',
+    memstream: '将内存压力从JS堆栈转移给浏览器引擎和你的OS，他们为了保证自己的存活会帮你内存管理和垃圾回收，比较可靠，但不干净',
+    memory: 'legacy模式，只有前四种均不可用时才考虑选择，小心你的内存占用',
+  };
+
+  const syncSaveModeHint = (mode) => {
+    if (!saveModeHint) return;
+    const text = SAVE_MODE_HINTS[mode] || SAVE_MODE_HINTS.auto;
+    saveModeHint.textContent = text;
+  };
+
+  syncSaveModeHint('auto');
 
   let autoRedirectWebNoticeShown = false;
   const notifyAutoRedirectForWeb = () => {
@@ -1103,7 +1121,7 @@ const pageScript = buildRawString`
     if (mode !== 'auto') {
       const sink = await tryCreateSinkByMode(mode, options);
       if (sink) return sink;
-      console.warn('指定保存方式失败，回退 Auto', mode);
+      throw new Error('指定保存模式不可用：' + mode);
     }
 
     if (supportsFileSystemAccess() && !state.fsBroken) {
@@ -2538,10 +2556,12 @@ const pageScript = buildRawString`
     const initSaveMode = async () => {
       const savedMode = await loadSaveModeSetting();
       window.__landingState.saveMode = savedMode;
+      syncSaveModeHint(savedMode);
     };
 
     const updateSaveMode = async (saveMode) => {
       window.__landingState.saveMode = saveMode;
+      syncSaveModeHint(saveMode);
       await persistSaveModeSetting(saveMode);
     };
 
@@ -2743,6 +2763,7 @@ const pageScript = buildRawString`
             saveModeSelect.value = storedSaveMode;
           }
         }
+        syncSaveModeHint(window.__landingState.saveMode);
       } catch (error) {
         console.warn('加载 webDownloader 设置失败', error);
       }
@@ -6437,6 +6458,7 @@ const pageScript = buildRawString`
     saveModeSelect.addEventListener('change', (event) => {
       webDownloader.updateSaveMode(event.target.value);
       clientDecryptor.updateSaveMode(event.target.value);
+      syncSaveModeHint(event.target.value);
     });
   }
 
