@@ -769,6 +769,11 @@ const pageScript = buildRawString`
     typeof window.streamSaver === 'object' &&
     typeof window.streamSaver.createWriteStream === 'function';
 
+  const supportsMemoryStream = () =>
+    typeof ReadableStream === 'function' &&
+    typeof Response === 'function' &&
+    typeof Response.prototype.blob === 'function';
+
   if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
     window.addEventListener('pagehide', () => {
       revokeTrackedBlobUrls();
@@ -978,39 +983,148 @@ const pageScript = buildRawString`
     };
   };
 
-  const acquirePlaintextSink = async (options = {}) => {
-    const { preferOpfs = true, existingHandle } = options || {};
-    const startSink = async (create, label) => {
-      try {
-        const sink = create();
-        await sink.start(options);
-        return sink;
-      } catch (error) {
-        console.warn(label + ' 不可用，尝试其他方式', error);
-        return null;
-      }
+  const createMemoryStreamSink = () => {
+    let controller = null;
+    let stream = null;
+    let writerClosed = false;
+    let fileName = 'download.bin';
+    let mimeType = 'application/octet-stream';
+
+    return {
+      type: 'memstream',
+
+      async start(options = {}) {
+        fileName = options.fileName || fileName;
+        mimeType = options.mimeType || mimeType;
+
+        stream = new ReadableStream({
+          start(ctrl) {
+            controller = ctrl;
+          },
+          cancel(reason) {
+            console.warn('memstream canceled by consumer', reason);
+          },
+        });
+
+        writerClosed = false;
+      },
+
+      async write(chunk) {
+        if (!controller || writerClosed) {
+          throw new Error('memstream sink not started or already closed');
+        }
+        controller.enqueue(chunk);
+      },
+
+      async finalize() {
+        if (!controller) return;
+
+        if (!writerClosed) {
+          writerClosed = true;
+          controller.close();
+        }
+
+        let blob;
+        try {
+          const response = new Response(stream, {
+            headers: { 'Content-Type': mimeType },
+          });
+          blob = await response.blob();
+        } catch (error) {
+          throw error instanceof Error ? error : new Error(String(error));
+        }
+
+        try {
+          const url = URL.createObjectURL(blob);
+          trackBlobUrl(url);
+          const anchor = document.createElement('a');
+          anchor.href = url;
+          anchor.download = fileName;
+          document.body.appendChild(anchor);
+          anchor.click();
+          document.body.removeChild(anchor);
+        } finally {
+          controller = null;
+          stream = null;
+        }
+      },
+
+      async abort(reason) {
+        try {
+          if (controller && !writerClosed) {
+            writerClosed = true;
+            controller.error(reason || new Error('aborted'));
+          }
+        } finally {
+          controller = null;
+          stream = null;
+        }
+      },
+    };
+  };
+
+  const safeCreateSink = async (mode, options) => {
+    const factoryMap = {
+      fs: createFsAccessSink,
+      opfs: createOpfsSink,
+      stream: createStreamSaverSink,
+      memstream: createMemoryStreamSink,
+      memory: createMemoryBlobSink,
     };
 
-    const canUseFs = supportsFileSystemAccess() || Boolean(existingHandle);
-    if (canUseFs) {
-      const fsSink = await startSink(createFsAccessSink, 'File System Access');
-      if (fsSink) return fsSink;
-    }
+    const factory = factoryMap[mode];
+    if (!factory) return null;
 
-    if (preferOpfs && supportsOPFS()) {
-      const opfsSink = await startSink(createOpfsSink, 'OPFS 写入');
-      if (opfsSink) return opfsSink;
+    const sink = factory();
+    try {
+      await sink.start(options);
+      return sink;
+    } catch (error) {
+      console.warn(`sink ${mode} start failed`, error);
+      await markCapabilityBroken(mode);
+      return null;
     }
-
-    if (supportsStreamSaver()) {
-      const streamSink = await startSink(createStreamSaverSink, 'StreamSaver 初始化');
-      if (streamSink) return streamSink;
-    }
-
-    const fallbackSink = createMemoryBlobSink();
-    await fallbackSink.start(options);
-    return fallbackSink;
   };
+
+  const tryCreateSinkByMode = async (mode, options) => {
+    const sink = await safeCreateSink(mode, options);
+    return sink;
+  };
+
+  const choosePlaintextSink = async (options = {}) => {
+    const { fileName, mimeType, totalSize } = options || {};
+    const mode = state.saveMode;
+
+    if (mode !== 'auto') {
+      const sink = await tryCreateSinkByMode(mode, options);
+      if (sink) return sink;
+      console.warn('指定保存方式失败，回退 Auto', mode);
+    }
+
+    if (supportsFileSystemAccess() && !state.fsBroken) {
+      const sink = await safeCreateSink('fs', options);
+      if (sink) return sink;
+    }
+
+    if (supportsOPFS() && !state.opfsBroken) {
+      const sink = await safeCreateSink('opfs', options);
+      if (sink) return sink;
+    }
+
+    if (supportsStreamSaver() && !state.streamSaverBroken) {
+      const sink = await safeCreateSink('stream', options);
+      if (sink) return sink;
+    }
+
+    if (supportsMemoryStream() && !state.memStreamBroken) {
+      const sink = await safeCreateSink('memstream', options);
+      if (sink) return sink;
+    }
+
+    return createMemoryBlobSink();
+  };
+
+  const acquirePlaintextSink = choosePlaintextSink;
 
   const BYTES_PER_MB = 1024 * 1024;
   const MIN_SEGMENT_SIZE_MB = 2;
@@ -1685,6 +1799,11 @@ const pageScript = buildRawString`
     awaitingRetryUnlock: false,
       mode: 'legacy',
     webTask: null,
+    fsBroken: false,
+    opfsBroken: false,
+    streamSaverBroken: false,
+    memStreamBroken: false,
+    saveMode: 'auto',
     security: {
       underAttack: false,
       siteKey: '',
@@ -1906,6 +2025,100 @@ const pageScript = buildRawString`
         return promise;
       };
     })();
+
+    const simpleHash = async (str) => {
+      let h = 0;
+      for (let i = 0; i < str.length; i++) {
+        h = (h * 31 + str.charCodeAt(i)) | 0;
+      }
+      return String(h >>> 0);
+    };
+
+    const loadSiteCapabilitiesFromDexie = async () => {
+      const db = await openStorageDatabase();
+      if (!db) return {};
+      try {
+        const row = await db.table(STORAGE_TABLE_SETTINGS).get('capabilities');
+        if (!row) return {};
+
+        const caps = row.value || row;
+        const now = Date.now();
+        const updatedAt = caps.lastUpdated ? Date.parse(caps.lastUpdated) : 0;
+        const age = updatedAt ? now - updatedAt : Infinity;
+
+        const ua = navigator.userAgent || '';
+        const uaHashNow = await simpleHash(ua);
+
+        const tooOld = age > 180 * 24 * 60 * 60 * 1000; // > 180 天
+        const uaChanged = caps.userAgentHash && caps.userAgentHash !== uaHashNow;
+
+        if (tooOld || uaChanged) {
+          return {
+            fsBroken: false,
+            opfsBroken: false,
+            streamSaverBroken: false,
+            memStreamBroken: false,
+            lastUpdated: null,
+            userAgentHash: uaHashNow,
+          };
+        }
+
+        return {
+          fsBroken: !!caps.fsBroken,
+          opfsBroken: !!caps.opfsBroken,
+          streamSaverBroken: !!caps.streamSaverBroken,
+          memStreamBroken: !!caps.memStreamBroken,
+          lastUpdated: caps.lastUpdated || null,
+          userAgentHash: uaHashNow,
+        };
+      } catch (error) {
+        console.warn('加载 capabilities 配置失败', error);
+        return {};
+      }
+    };
+
+    const markCapabilityBroken = async (name) => {
+      const fieldMap = {
+        fs: 'fsBroken',
+        opfs: 'opfsBroken',
+        stream: 'streamSaverBroken',
+        memstream: 'memStreamBroken',
+      };
+      const field = fieldMap[name];
+      if (!field) return;
+
+      state[field] = true;
+
+      const db = await openStorageDatabase();
+      if (!db) return;
+
+      try {
+        const prev = await loadSiteCapabilitiesFromDexie();
+        const nowIso = new Date().toISOString();
+        const ua = navigator.userAgent || '';
+        const uaHash = await simpleHash(ua);
+
+        await db.table(STORAGE_TABLE_SETTINGS).put({
+          key: 'capabilities',
+          value: {
+            ...prev,
+            [field]: true,
+            lastUpdated: nowIso,
+            userAgentHash: uaHash,
+          },
+        });
+      } catch (error) {
+        console.warn('标记 capability broken 失败', error);
+      }
+    };
+
+    const initCapabilitiesState = async () => {
+      const caps = await loadSiteCapabilitiesFromDexie();
+      state.fsBroken = !!caps.fsBroken;
+      state.opfsBroken = !!caps.opfsBroken;
+      state.streamSaverBroken = !!caps.streamSaverBroken;
+      state.memStreamBroken = !!caps.memStreamBroken;
+    };
 
     const useStorageTable = async (tableName, executor, { defaultValue = null } = {}) => {
       await ensureSessionIsolation();
@@ -2295,6 +2508,29 @@ const pageScript = buildRawString`
     const PARALLEL_SETTING_KEY = 'webdownloader-parallel';
     const SEGMENT_SIZE_SETTING_KEY = 'webdownloader-segment-size-mb';
     const TTFB_TIMEOUT_SETTING_KEY = 'webdownloader-ttfb-timeout';
+    const SAVE_MODE_SETTING_KEY = 'saveMode';
+
+    const loadSaveModeSetting = async () => {
+      const stored = await loadSettingValue(SAVE_MODE_SETTING_KEY);
+      if (!stored) return 'auto';
+      const validModes = ['auto', 'fs', 'opfs', 'stream', 'memstream', 'memory'];
+      if (validModes.includes(stored)) return stored;
+      return 'auto';
+    };
+
+    const persistSaveModeSetting = (value) => {
+      persistSettingValue(SAVE_MODE_SETTING_KEY, value);
+    };
+
+    const initSaveMode = async () => {
+      const savedMode = await loadSaveModeSetting();
+      state.saveMode = savedMode;
+    };
+
+    const updateSaveMode = async (saveMode) => {
+      state.saveMode = saveMode;
+      persistSaveModeSetting(saveMode);
+    };
 
     const loadConnectionSetting = async () => {
       const stored = await loadSettingValue(CONNECTION_SETTING_KEY);
@@ -2493,6 +2729,8 @@ const pageScript = buildRawString`
     };
 
     hydrateStoredSettings();
+    initCapabilitiesState();
+    initSaveMode();
 
     const resumeWaiters = [];
 
