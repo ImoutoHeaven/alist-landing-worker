@@ -1,4 +1,15 @@
 {
+  "controller": {
+    "url": "",
+    "api_prefix": "/api/v0",
+    "api_token": "",
+    "env": "",
+    "role": "powdet",
+    "instance_id": "",
+    "app_name": "powdet",
+    "app_version": ""
+  },
+  "internal_api_token": "REPLACE_WITH_INTERNAL_TOKEN",
   "listen_port": 2370,
   "batch_size": 1000,
   "deprecate_after_batches": 10,

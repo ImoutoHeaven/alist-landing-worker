@@ -17,14 +17,12 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
-	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	configlite "git.sequentialread.com/forest/config-lite"
 	errors "git.sequentialread.com/forest/pkg-errors"
 	"golang.org/x/crypto/argon2"
 )
@@ -68,12 +66,14 @@ type Challenge struct {
 }
 
 type controllerEnv struct {
-	URL        string
-	APIPrefix  string
-	APIToken   string
-	Env        string
-	Role       string
-	InstanceID string
+	URL        string `json:"url"`
+	APIPrefix  string `json:"api_prefix"`
+	APIToken   string `json:"api_token"`
+	Env        string `json:"env"`
+	Role       string `json:"role"`
+	InstanceID string `json:"instance_id"`
+	AppName    string `json:"app_name"`
+	AppVersion string `json:"app_version"`
 }
 
 type runtimeMeta struct {
@@ -90,6 +90,11 @@ type metricsSnapshot struct {
 	Counts         map[string]int64
 	ChallengeCache int
 	TokenCount     int
+}
+
+type fileConfigMeta struct {
+	Controller       controllerEnv `json:"controller"`
+	InternalAPIToken string        `json:"internal_api_token"`
 }
 
 func (m metricsSnapshot) empty() bool {
@@ -133,9 +138,6 @@ type tokenCache struct {
 var apiTokensCache = tokenCache{tokens: map[string]struct{}{}}
 
 func main() {
-
-	loadRuntimeEnv()
-
 	metricsCollector = newMetricsCounters()
 
 	if err := readConfiguration(); err != nil {
@@ -925,31 +927,6 @@ func logEffectiveConfig(cfg Config, version string) {
 	log.Println(configToLogString)
 }
 
-func loadRuntimeEnv() {
-	controllerSettings = controllerEnv{
-		URL:        os.Getenv("CONTROLLER_URL"),
-		APIPrefix:  os.Getenv("CONTROLLER_API_PREFIX"),
-		APIToken:   os.Getenv("CONTROLLER_API_TOKEN"),
-		Env:        os.Getenv("ENV"),
-		Role:       os.Getenv("ROLE"),
-		InstanceID: os.Getenv("INSTANCE_ID"),
-	}
-
-	if strings.TrimSpace(controllerSettings.APIPrefix) == "" {
-		controllerSettings.APIPrefix = "/api/v0"
-	}
-
-	internalAPIToken = os.Getenv("INTERNAL_API_TOKEN")
-	role := controllerSettings.role()
-	runtimeInfo = runtimeMeta{
-		appName:    defaultString(os.Getenv("APP_NAME"), "powdet"),
-		appVersion: os.Getenv("APP_VERSION"),
-		env:        defaultString(controllerSettings.Env, "local"),
-		role:       role,
-		instanceID: defaultString(controllerSettings.InstanceID, role+"-local"),
-	}
-}
-
 func readConfiguration() error {
 	apiTokensFolder = locateAPITokensFolder()
 	appDirectory = filepath.Dir(apiTokensFolder)
@@ -958,15 +935,31 @@ func readConfiguration() error {
 	var version string
 	var err error
 
-	useController := strings.TrimSpace(controllerSettings.URL) != "" || strings.TrimSpace(controllerSettings.APIToken) != "" || strings.TrimSpace(controllerSettings.Env) != ""
-	if useController && !controllerSettings.enabled() {
-		return fmt.Errorf("controller settings incomplete: require CONTROLLER_URL, CONTROLLER_API_TOKEN, and ENV")
+	configPath := filepath.Join(appDirectory, "config.json")
+	cfgFromFile, meta, versionFromFile, err := loadConfigFromFile(configPath)
+	if err != nil {
+		return fmt.Errorf("load local config: %w", err)
+	}
+
+	controllerSettings = meta.Controller
+	if strings.TrimSpace(controllerSettings.APIPrefix) == "" {
+		controllerSettings.APIPrefix = "/api/v0"
+	}
+	internalAPIToken = meta.InternalAPIToken
+
+	role := controllerSettings.role()
+	runtimeInfo = runtimeMeta{
+		appName:    defaultString(controllerSettings.AppName, "powdet"),
+		appVersion: controllerSettings.AppVersion,
+		env:        defaultString(controllerSettings.Env, "local"),
+		role:       role,
+		instanceID: defaultString(controllerSettings.InstanceID, role+"-local"),
 	}
 
 	if controllerSettings.enabled() {
 		cfg, version, err = fetchConfigFromController(controllerSettings)
 	} else {
-		cfg, version, err = loadConfigFromFile(filepath.Join(appDirectory, "config.json"))
+		cfg, version = cfgFromFile, versionFromFile
 	}
 	if err != nil {
 		if controllerSettings.enabled() {
@@ -997,12 +990,21 @@ func intOrDefault(v int, fallback int) int {
 	return v
 }
 
-func loadConfigFromFile(path string) (Config, string, error) {
+func loadConfigFromFile(path string) (Config, fileConfigMeta, string, error) {
 	var cfg Config
-	if err := configlite.ReadConfiguration(path, "POW_BOT_DETERRENT", []string{}, reflect.ValueOf(&cfg)); err != nil {
-		return cfg, "", errors.Wrap(err, "ReadConfiguration returned")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return cfg, fileConfigMeta{}, "", errors.Wrap(err, "read config file")
 	}
-	return cfg, "local-config", nil
+
+	var meta fileConfigMeta
+	_ = json.Unmarshal(data, &meta)
+
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return cfg, meta, "", errors.Wrap(err, "decode config.json")
+	}
+
+	return cfg, meta, "local-config", nil
 }
 
 func fetchConfigFromController(ctrl controllerEnv) (Config, string, error) {

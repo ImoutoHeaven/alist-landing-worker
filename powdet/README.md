@@ -32,8 +32,7 @@ Environment variable prefixes remain `POW_BOT_DETERRENT_*` (e.g., `POW_BOT_DETER
 
 ### Controller integration & control API
 
-- If `CONTROLLER_URL`, `CONTROLLER_API_TOKEN`, and `ENV` are set (optionally `ROLE`/`INSTANCE_ID`/`APP_*`), the service fetches config from controller `/api/v0/bootstrap` with `role=powdet`. Incomplete controller settings will fail fast instead of falling back.
-- Without controller settings, config still comes from `config.json` + `POW_BOT_DETERRENT_*` env overrides.
+- Controller 接入信息（url/api_prefix/api_token/env/role/instance_id/app_name/app_version）与 `internal_api_token` 统一放在 `config.json`，不再读取环境变量；配置完整则从 controller `/api/v0/bootstrap`（role=powdet）拉取运行参数，不完整则直接使用 `config.json` 内容。
 - Metrics: when controller is configured, a snapshot is sent every 60s to controller `/api/v0/metrics` (challenge batch/verify counters, challenge cache size, token count, configVersion). `/api/v0/flush` also pushes a snapshot first and returns 502 if the push fails.
 - Internal control endpoints (protected by `Authorization: Bearer $INTERNAL_API_TOKEN`, unmatched → 404):
   - `GET /api/v0/health` → 204 with `X-App-*`/`X-Config-Version`.

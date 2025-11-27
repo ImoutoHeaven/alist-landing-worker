@@ -71,6 +71,15 @@ envs:
         expireSeconds: 180 # powdet ticket TTL; >0
         clockSkewSeconds: 60 # Allowed client clock skew when validating tickets; seconds >=0
         maxWindowSeconds: 600 # Max rolling window considered for difficulty; seconds >=0
+        staticLevel: 12 # Base difficulty when dynamic is disabled; >=0
+        dynamic: # Adaptive difficulty parameters (mirrors legacy POWDET_DYNAMIC_* envs)
+          windowSeconds: 60 # Rolling window for leveling up; seconds >0
+          resetSeconds: 300 # Cooldown to decay level; seconds >0
+          blockSeconds: 300 # Block duration after reaching max level; seconds >=0
+          baseLevelMin: 12 # Minimum base level for difficulty mapping; >=0
+          baseLevelMax: 20 # Maximum base level; >= baseLevelMin
+          levelStep: 1 # Difficulty increment per level; >0
+          maxLevel: 4 # Maximum dynamic level; >=0
       db:
         mode: "custom-pg-rest" # Database mode; allowed: "" (disabled) | "custom-pg-rest"
         postgrestUrl: "https://postgrest-staging.example.com" # PostgREST endpoint used by landing; required if mode set
@@ -167,7 +176,7 @@ envs:
       throttleProfiles:
         default:
           hostPatterns: [] # Host patterns this throttle profile applies to; glob list
-          windowSeconds: 60 # Throttle observation window; seconds >0
+          windowSeconds: 60 # Throttle protection window (how long host stays protected before resume); seconds >0
           observeWindowSeconds: 60 # Observation window for smoothing; seconds >0
           errorRatioPercent: 6 # Error ratio threshold (%) to trip throttle; 0-100
           consecutiveThreshold: 2 # Consecutive errors needed to trip; >=0
@@ -317,6 +326,15 @@ envs:
         expireSeconds: 180
         clockSkewSeconds: 60
         maxWindowSeconds: 600
+        staticLevel: 12
+        dynamic:
+          windowSeconds: 60
+          resetSeconds: 300
+          blockSeconds: 300
+          baseLevelMin: 12
+          baseLevelMax: 20
+          levelStep: 1
+          maxLevel: 4
       db:
         mode: "custom-pg-rest"
         postgrestUrl: "https://postgrest.example.com"
