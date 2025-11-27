@@ -537,7 +537,7 @@ func Load(path string) (*RootConfig, error) {
 
 	var cfg RootConfig
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("parse config: %w", err)
+		return nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
 
 	if err := cfg.Validate(); err != nil {
