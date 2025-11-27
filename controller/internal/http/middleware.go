@@ -10,19 +10,19 @@ func AuthMiddleware(apiToken string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if apiToken == "" {
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				http.NotFound(w, r)
 				return
 			}
 
 			auth := r.Header.Get("Authorization")
 			if !strings.HasPrefix(auth, "Bearer ") {
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				http.NotFound(w, r)
 				return
 			}
 
 			token := strings.TrimPrefix(auth, "Bearer ")
 			if token != apiToken {
-				http.Error(w, "forbidden", http.StatusForbidden)
+				http.NotFound(w, r)
 				return
 			}
 
