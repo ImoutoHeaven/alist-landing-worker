@@ -1,254 +1,256 @@
-apiToken: "replace-with-controller-api-token"
-bootstrapVersion: "bootstrap-2025-11-25"
-rulesVersion: "decision-2025-11-25"
+# Example controller config with inline notes. Replace placeholder secrets
+# before deploying to real environments.
+apiToken: "replace-with-controller-api-token" # Required Bearer token protecting all controller HTTP APIs; keep non-empty
+bootstrapVersion: "bootstrap-2025-11-25" # Version string echoed in /bootstrap responses for cache invalidation; bump to force refresh
+rulesVersion: "decision-2025-11-25" # Version tag for /decision payloads; bump to invalidate decision cache
 
 envs:
-  staging:
+  staging: # Staging environment configuration
     common:
-      alistBaseUrl: "https://alist-staging.example.com"
+      alistBaseUrl: "https://alist-staging.example.com" # Base URL of upstream AList instance
       alistAuthHeaders:
-        Authorization: "Bearer staging-alist-token"
-      tokenHmacKeyId: "default"
-      tokenHmacKey: "replace-with-hmac-key"
-      signSecret: ""
-    landing:
-      pageSecret: "replace-with-page-secret"
+        Authorization: "Bearer staging-alist-token" # Extra headers sent to AList (token, cookies etc.)
+      tokenHmacKeyId: "default" # Key ID placed in issued tokens
+      tokenHmacKey: "replace-with-hmac-key" # HMAC secret for issuing/validating tickets
+      signSecret: "" # Optional legacy sign secret consumed by download worker
+    landing: # Landing-side configuration for staging
+      pageSecret: "replace-with-page-secret" # Used to sign/validate landing page state/token (non-empty when signatures required)
       captcha:
-        defaultCombo: ["verify-altcha"]
+        defaultCombo: ["verify-altcha"] # Ordered challenge pipeline; allowed values: verify-altcha|verify-turnstile|verify-powdet|verify-none; empty array = no challenge
       turnstile:
-        enabled: false
-        siteKey: ""
-        secretKey: ""
-        tokenBinding: true
-        tokenTTLSeconds: 600
-        tokenTable: "TURNSTILE_TOKEN_BINDING"
-        cookieExpireSeconds: 120
-        expectedAction: "download"
-        enforceAction: true
-        enforceHostname: false
-        allowedHostnames: []
+        enabled: false # Enable Cloudflare Turnstile challenge (default=false)
+        siteKey: "" # Turnstile site key used by frontend (required if enabled)
+        secretKey: "" # Turnstile secret for server-side verification (required if enabled)
+        tokenBinding: true # Whether to bind Turnstile token to device info; default=true
+        tokenTTLSeconds: 600 # TTL for Turnstile tokens; >0, default=600
+        tokenTable: "TURNSTILE_TOKEN_BINDING" # Table name for token binding storage
+        cookieExpireSeconds: 120 # How long the Turnstile cookie lives; seconds, default=120
+        expectedAction: "download" # Expected Turnstile action string; non-empty when enforceAction=true
+        enforceAction: true # Enforce expectedAction check; default=true
+        enforceHostname: false # Enforce hostname check from Turnstile token; default=false
+        allowedHostnames: [] # Optional allowlist of hostnames; empty means accept any when enforceHostname=false
       altcha:
-        enabled: true
-        baseDifficultyMin: 250000
-        baseDifficultyMax: 250000
-        tokenExpireSeconds: 180
-        tokenTable: "ALTCHA_TOKEN_LIST"
-        difficultyWindowSeconds: 30
-        difficultyResetSeconds: 120
-        maxBlockSeconds: 120
-        maxExponent: 10
-        minUpgradeExponent: 3
-      fastRedirect: false
-      autoRedirect: false
-      ipv4Only: false
+        enabled: true # Enable built-in ALTCHA challenge (default=true)
+        baseDifficultyMin: 250000 # Minimum puzzle difficulty; >0, must be <= baseDifficultyMax
+        baseDifficultyMax: 250000 # Maximum puzzle difficulty; >= baseDifficultyMin
+        tokenExpireSeconds: 180 # TTL for ALTCHA tokens; >0, default=180
+        tokenTable: "ALTCHA_TOKEN_LIST" # Table name for issued ALTCHA tokens
+        difficultyWindowSeconds: 30 # Window for dynamic difficulty; seconds, >0
+        difficultyResetSeconds: 120 # Reset interval for difficulty window; seconds, >0
+        maxBlockSeconds: 120 # Maximum block time when difficulty spikes; seconds, >=0
+        maxExponent: 10 # Maximum exponent multiplier for difficulty upgrades; >=0
+        minUpgradeExponent: 3 # Minimum exponent when upgrading difficulty; >=0 and <= maxExponent
+      fastRedirect: false # If true, bypass intermediate page and redirect faster; default=false
+      autoRedirect: false # If true, auto-jump to download after verification; default=false
+      ipv4Only: false # Force IPv4-only traffic handling on landing; default=false
       workerAddresses:
-        - "https://download-staging.example.com"
-      pathRules:
+        - "https://download-staging.example.com" # Download worker endpoints for issued tickets; non-empty list in prod
+      pathRules: # Landing path-based policy rules
         blacklist:
-          - name: "landing_block_admin"
-            prefix: ["/admin", "/internal"]
-            dirIncludes: []
-            nameIncludes: []
-            pathIncludes: []
-            action: ["block"]
+          - name: "landing_block_admin" # Block admin/internal prefixes
+            prefix: ["/admin", "/internal"] # Path prefixes to match; at least one
+            dirIncludes: [] # Directory substrings that trigger the rule; empty = no dir filter
+            nameIncludes: [] # Filename substrings that trigger the rule; empty = no name filter
+            pathIncludes: [] # Full path substrings that trigger the rule; empty = prefix-only
+            action: ["block"] # Actions when rule matches; landing actions allowed: block|pass-asis|verify-altcha|verify-turnstile|verify-powdet
         whitelist:
-          - name: "landing_public"
-            prefix: ["/public", "/share"]
-            dirIncludes: []
-            nameIncludes: []
-            pathIncludes: []
-            action: ["pass-asis"]
-        except: []
+          - name: "landing_public" # Allow public/share prefixes without extra checks
+            prefix: ["/public", "/share"] # Path prefixes to match; at least one
+            dirIncludes: [] # Directory substrings that trigger the rule
+            nameIncludes: [] # Filename substrings that trigger the rule
+            pathIncludes: [] # Full path substrings that trigger the rule
+            action: ["pass-asis"] # Actions when rule matches; see allowed list above
+        except: [] # Exception rules; empty when not needed; actions follow same allowed list
       powdet:
-        enabled: false
-        baseUrl: ""
-        staticBaseUrl: ""
-        token: ""
-        table: "POW_CHALLENGE_TICKET"
-        difficultyTable: "POWDET_DIFFICULTY_STATE"
-        expireSeconds: 180
-        clockSkewSeconds: 60
-        maxWindowSeconds: 600
+        enabled: false # Whether landing delegates PoW to external powdet service (default=false)
+        baseUrl: "" # powdet API base URL; required if enabled
+        staticBaseUrl: "" # Static assets base for powdet challenge; optional
+        token: "" # powdet API token; required if enabled
+        table: "POW_CHALLENGE_TICKET" # Table for powdet tickets
+        difficultyTable: "POWDET_DIFFICULTY_STATE" # Table storing dynamic difficulty state
+        expireSeconds: 180 # powdet ticket TTL; >0
+        clockSkewSeconds: 60 # Allowed client clock skew when validating tickets; seconds >=0
+        maxWindowSeconds: 600 # Max rolling window considered for difficulty; seconds >=0
       db:
-        mode: "custom-pg-rest"
-        postgrestUrl: "https://postgrest-staging.example.com"
-        verifyHeader: ["X-Postgrest-Auth"]
-        verifySecret: ["replace-with-postgrest-secret"]
-        cleanupPercentage: 5 # set to 0 to disable landing-side cleanup
+        mode: "custom-pg-rest" # Database mode; allowed: "" (disabled) | "custom-pg-rest"
+        postgrestUrl: "https://postgrest-staging.example.com" # PostgREST endpoint used by landing; required if mode set
+        verifyHeader: ["X-Postgrest-Auth"] # Header names to authenticate PostgREST calls; must align with verifySecret length
+        verifySecret: ["replace-with-postgrest-secret"] # Corresponding header values
+        cleanupPercentage: 5 # Chance (0-100) to trigger landing-side cleanup jobs; set 0 to disable
         cache:
-          tableName: "FILESIZE_CACHE_TABLE"
-          sizeTTLSeconds: 86400
-          cleanupPercentage: 5
+          tableName: "FILESIZE_CACHE_TABLE" # Table holding file size cache
+          sizeTTLSeconds: 86400 # TTL for cached sizes; seconds >0
+          cleanupPercentage: 5 # Chance (0-100) of cache cleanup per request
         rateLimit:
-          enabled: false
-          windowSeconds: 60
-          limit: 0
-          ipv4Suffix: "/32"
-          ipv6Suffix: "/60"
-          blockSeconds: 600
-          pgErrorHandle: "fail-closed"
-          fileWindowSeconds: 60
-          fileLimit: 0
-          fileBlockSeconds: 240
-          tableName: "IP_LIMIT_TABLE"
-          fileTableName: "IP_FILE_LIMIT_TABLE"
-          cleanupPercentage: 5
-        idleTable: "landing_idle"
-        idleTimeoutSeconds: 0
+          enabled: false # Landing-side rate limit toggle (default=false)
+          windowSeconds: 60 # Rate limit window in seconds; >0 when enabled
+          limit: 0 # Max operations per window; 0 means unlimited when enabled=false
+          ipv4Suffix: "/32" # CIDR suffix used for IPv4 bucketing
+          ipv6Suffix: "/60" # CIDR suffix used for IPv6 bucketing
+          blockSeconds: 600 # Block duration after limit exceeded; seconds >=0
+          pgErrorHandle: "fail-closed" # Behavior on DB errors; allowed: fail-closed|fail-open
+          fileWindowSeconds: 60 # File-specific rate limit window; seconds >0
+          fileLimit: 0 # Max file-specific operations per window; 0 means unlimited
+          fileBlockSeconds: 240 # Block duration for file-level limit; seconds >=0
+          tableName: "IP_LIMIT_TABLE" # Table storing IP rate limit entries
+          fileTableName: "IP_FILE_LIMIT_TABLE" # Table storing file-level limits
+          cleanupPercentage: 5 # Chance (0-100) of cleaning rate limit tables
+        idleTable: "landing_idle" # Table tracking landing idle time
+        idleTimeoutSeconds: 0 # Idle timeout before cleanup; 0 disables
       crypt:
-        prefix: ""
-        includes: []
-        encryptionMode: "crypt"
-        fileHeaderSize: 32
-        blockHeaderSize: 16
-        blockDataSize: 65536
-        dataKey: ""
+        prefix: "" # Path prefix requiring encryption; empty disables
+        includes: [] # Additional path includes for crypt
+        encryptionMode: "crypt" # Encryption mode identifier; allowed: crypt|none
+        fileHeaderSize: 32 # Bytes reserved for file header in crypt mode; >0 when enabled
+        blockHeaderSize: 16 # Bytes reserved per block header; >0 when enabled
+        blockDataSize: 65536 # Bytes per encrypted block payload; >0 when enabled
+        dataKey: "" # Symmetric encryption key; required when encryptionMode=crypt
       webDownloader:
-        enabled: false
-        maxConnections: 16
-      clientDecryptEnabled: false
+        enabled: false # Enable web downloader UI (default=false)
+        maxConnections: 16 # Max concurrent connections in web downloader; >0
+      clientDecryptEnabled: false # Allow client-side decryption; default=false
       additional:
-        appendAdditional: true
-        minBandwidthMbps: 10
-        minDurationSeconds: 3600
-        maxDurationSeconds: 0
-    download:
-      address: "https://alist-staging.example.com"
+        appendAdditional: true # Append extra info to response when true; default=true
+        minBandwidthMbps: 10 # Minimum bandwidth requirement; Mbps, 0 means no check
+        minDurationSeconds: 3600 # Minimum allowed download duration; seconds, >=0
+        maxDurationSeconds: 0 # Maximum allowed duration; 0 means unlimited
+    download: # Download-side configuration for staging
+      address: "https://alist-staging.example.com" # Upstream AList address for download links; must be https://...; required
       auth:
-        signCheck: true
-        hashCheck: true
-        workerCheck: true
-        additionCheck: true
-        additionExpireTimeCheck: true
-        ipv4Only: true
+        signCheck: true # Enforce signature validation on generated links; default=true
+        hashCheck: true # Verify hash on download requests; default=true
+        workerCheck: true # Validate worker identity in ticket; default=true
+        additionCheck: true # Validate addition payload (extra metadata); default=true
+        additionExpireTimeCheck: true # Enforce addition payload expiry; default=true
+        ipv4Only: true # Only allow IPv4 clients for downloads; default=true
       db:
-        mode: "custom-pg-rest"
-        postgrestUrl: "https://postgrest-staging.example.com"
-        verifyHeader: ["X-Postgrest-Auth"]
-        verifySecret: ["replace-with-postgrest-secret"]
-        cacheTable: "download_cache"
-        linkTTLSeconds: 1800
-        cleanupPercentage: 1
-        idleTimeoutSeconds: 0
-        lastActiveTable: "download_last_active"
+        mode: "custom-pg-rest" # Database mode used by download worker; allowed: "" | "custom-pg-rest"
+        postgrestUrl: "https://postgrest-staging.example.com" # PostgREST endpoint for download tables; required if mode set
+        verifyHeader: ["X-Postgrest-Auth"] # Headers carrying PostgREST auth; length must match verifySecret
+        verifySecret: ["replace-with-postgrest-secret"] # Values for PostgREST auth headers
+        cacheTable: "download_cache" # Table storing download cache entries
+        linkTTLSeconds: 1800 # TTL for cached download links; seconds >0
+        cleanupPercentage: 1 # Chance (0-100) of running cache cleanup per request
+        idleTimeoutSeconds: 0 # Idle timeout before evicting sessions; 0 disables
+        lastActiveTable: "download_last_active" # Table for tracking last active time
         rateLimit:
-          enabled: false
-          windowSeconds: 0
-          limit: 0
-          ipv4Suffix: "/32"
-          ipv6Suffix: "/60"
-          blockSeconds: 600
-          pgErrorHandle: "fail-closed"
-          tableName: "download_ip_ratelimit"
-          cleanupPercentage: 1
+          enabled: false # Toggle IP rate limiting on download worker (default=false)
+          windowSeconds: 0 # Rate limit window in seconds; >0 when enabled
+          limit: 0 # Allowed actions per window; 0 means unlimited when disabled
+          ipv4Suffix: "/32" # IPv4 bucket size for rate limiting (CIDR suffix)
+          ipv6Suffix: "/60" # IPv6 bucket size for rate limiting (CIDR suffix)
+          blockSeconds: 600 # Block duration when limit exceeded; seconds >=0
+          pgErrorHandle: "fail-closed" # Behavior on DB errors; allowed: fail-closed|fail-open
+          tableName: "download_ip_ratelimit" # Table storing rate limit counters
+          cleanupPercentage: 1 # Chance (0-100) of cleaning rate-limit table
       fairQueue:
-        enabled: true
-        backend: "slot-handler"
-        hostPatterns: ["*.sharepoint.com"]
-        slotHandlerUrl: "https://slot-handler-staging.example.com"
-        slotHandlerAuthKey: "replace-with-slot-handler-key"
-        queueWaitTimeoutMs: 120000
-        slotHandlerTimeoutMs: 20000
-        perRequestTimeoutMs: 8000
-        maxAttemptsCap: 35
+        enabled: true # Enable Fair Queue via slot-handler (default=true)
+        backend: "slot-handler" # Backend provider for FQ; allowed: slot-handler|off
+        hostPatterns: ["*.sharepoint.com"] # Hosts controlled by slot-handler; glob list
+        slotHandlerUrl: "https://slot-handler-staging.example.com" # slot-handler endpoint; required if enabled
+        slotHandlerAuthKey: "replace-with-slot-handler-key" # Auth key sent to slot-handler; required if enabled
+        queueWaitTimeoutMs: 120000 # Max time to wait in queue overall; ms >0
+        slotHandlerTimeoutMs: 20000 # Timeout for slot-handler RPC; ms >0
+        perRequestTimeoutMs: 8000 # Timeout per slot-handler request; ms >0
+        maxAttemptsCap: 35 # Max retry attempts for slot acquisition; >=1
         profiles:
           default:
-            maxWaitMs: 120000
-            maxSlotPerHost: 8
-            maxSlotPerIp: 3
-            maxWaitersPerIp: 8
+            maxWaitMs: 120000 # Max queue wait for default profile; ms >0
+            maxSlotPerHost: 8 # Slot cap per host; >=0
+            maxSlotPerIp: 3 # Slot cap per IP; >=0
+            maxWaitersPerIp: 8 # Queue depth per IP; >=0
           strict:
-            maxWaitMs: 90000
-            maxSlotPerHost: 4
-            maxSlotPerIp: 2
-            maxWaitersPerIp: 4
+            maxWaitMs: 90000 # Stricter queue wait limit; ms >0
+            maxSlotPerHost: 4 # Stricter slot cap per host
+            maxSlotPerIp: 2 # Stricter slot cap per IP
+            maxWaitersPerIp: 4 # Stricter queue depth per IP
       throttleProfiles:
         default:
-          hostPatterns: []
-          windowSeconds: 60
-          observeWindowSeconds: 60
-          errorRatioPercent: 6
-          consecutiveThreshold: 2
-          minSampleCount: 50
-          fastErrorRatioPercent: 60
-          fastMinSampleCount: 4
-          protectHttpCodes: [429, 499, 500, 502, 503, 504]
-          cleanupPercentage: 1
-          tableName: "download_throttle"
-      originBindingDefault: "asn,iprange"
-      pathRules:
+          hostPatterns: [] # Host patterns this throttle profile applies to; glob list
+          windowSeconds: 60 # Throttle observation window; seconds >0
+          observeWindowSeconds: 60 # Observation window for smoothing; seconds >0
+          errorRatioPercent: 6 # Error ratio threshold (%) to trip throttle; 0-100
+          consecutiveThreshold: 2 # Consecutive errors needed to trip; >=0
+          minSampleCount: 50 # Minimum samples before evaluating; >=0
+          fastErrorRatioPercent: 60 # Immediate trip ratio for small samples; 0-100
+          fastMinSampleCount: 4 # Sample size for fast path evaluation; >=0
+          protectHttpCodes: [429, 499, 500, 502, 503, 504] # Status codes considered errors; list of ints
+          cleanupPercentage: 1 # Chance (0-100) to clean throttle table
+          tableName: "download_throttle" # Table storing throttle state
+      originBindingDefault: "asn,iprange" # Default origin binding mode; allowed tokens: asn|iprange|ua|none, comma-separated
+      pathRules: # Download path-based policy rules
         blacklist:
-          - name: "block_admin"
-            prefix: ["/admin", "/internal"]
-            dirIncludes: []
-            nameIncludes: []
-            pathIncludes: []
-            action: ["block"]
+          - name: "block_admin" # Block admin/internal paths on download
+            prefix: ["/admin", "/internal"] # Path prefixes to match; at least one
+            dirIncludes: [] # Directory substrings that trigger the rule
+            nameIncludes: [] # Filename substrings that trigger the rule
+            pathIncludes: [] # Full path substrings that trigger the rule
+            action: ["block"] # Actions when rule matches; download actions allowed: block|skip-origin|asis
         whitelist:
-          - name: "public_share"
-            prefix: ["/share"]
-            dirIncludes: []
-            nameIncludes: []
-            pathIncludes: ["/share"]
-            action: ["skip-origin"]
+          - name: "public_share" # Allow certain share paths to skip origin fetch
+            prefix: ["/share"] # Path prefixes to match; at least one
+            dirIncludes: [] # Directory substrings that trigger the rule
+            nameIncludes: [] # Filename substrings that trigger the rule
+            pathIncludes: ["/share"] # Full path substrings that trigger the rule
+            action: ["skip-origin"] # Actions when rule matches; see allowed list above
         except:
-          - name: "public_share_passthrough"
-            prefix: ["/share/public"]
-            dirIncludes: []
-            nameIncludes: []
-            pathIncludes: []
-            action: ["asis"]
-    powdet:
-      enabled: true
-      listenPort: 2370
-      batchSize: 1000
-      deprecateAfterBatches: 10
+          - name: "public_share_passthrough" # Exception to whitelist; passthrough as-is
+            prefix: ["/share/public"] # Path prefixes to match; at least one
+            dirIncludes: [] # Directory substrings that trigger the rule
+            nameIncludes: [] # Filename substrings that trigger the rule
+            pathIncludes: [] # Full path substrings that trigger the rule
+            action: ["asis"] # Actions when rule matches; see allowed list above
+    powdet: # powdet service configuration for staging
+      enabled: true # Whether to run powdet service in staging; default=true
+      listenPort: 2370 # powdet listen port; >0, default=2370
+      batchSize: 1000 # Number of challenges per batch; >=1
+      deprecateAfterBatches: 10 # How many batches before rotating challenges; >=0
       argon2:
-        memoryKiB: 16384
-        iterations: 2
-        parallelism: 1
-        keyLength: 16
-      adminApiToken: "replace-with-admin-token"
-    slotHandler:
-      listen: ":8080"
-      logLevel: "info"
+        memoryKiB: 16384 # Argon2 memory cost; >0
+        iterations: 2 # Argon2 iterations; >0
+        parallelism: 1 # Argon2 parallelism; >0
+        keyLength: 16 # Argon2 key length; >0
+      adminApiToken: "replace-with-admin-token" # Token to protect powdet admin endpoints; required if admin API exposed
+    slotHandler: # slot-handler config for staging (prod mirrors structure)
+      listen: ":8080" # Slot-handler listen address; host:port
+      logLevel: "info" # Logging level for slot-handler; allowed: debug|info|warn|error
       auth:
-        enabled: true
-        header: "X-FQ-Auth"
-        token: "replace-with-slot-handler-key"
+        enabled: true # Whether to enforce auth on slot-handler API; default=true
+        header: "X-FQ-Auth" # Header name carrying auth token
+        token: "replace-with-slot-handler-key" # Token required by slot-handler; required if auth.enabled
       backend:
-        mode: "postgrest"
+        mode: "postgrest" # Backend mode: postgrest|postgres
         postgrest:
-          baseUrl: "https://postgrest-staging.example.com"
-          authHeader: "Bearer replace-with-postgrest-token"
+          baseUrl: "https://postgrest-staging.example.com" # PostgREST endpoint used by slot-handler; required if mode=postgrest
+          authHeader: "Bearer replace-with-postgrest-token" # Auth header for PostgREST calls; string
         postgres:
-          dsn: "postgres://user:pass@host:5432/dbname?sslmode=disable"
+          dsn: "postgres://user:pass@host:5432/dbname?sslmode=disable" # Direct Postgres DSN (optional when using postgres mode)
       fairQueue:
-        maxWaitMs: 60000
-        pollIntervalMs: 500
-        pollWindowMs: 6000
-        minSlotHoldMs: 800
-        smoothReleaseIntervalMs: null
-        sessionIdleSeconds: 90
-        maxSlotPerHost: 5
-        maxSlotPerIp: 1
-        maxWaitersPerIp: 3
-        maxWaitersPerHost: 50
-        zombieTimeoutSeconds: 30
-        ipCooldownSeconds: 0
+        maxWaitMs: 60000 # Max wait time before giving up; ms >0
+        pollIntervalMs: 500 # Poll interval when waiting for slot; ms >0
+        pollWindowMs: 6000 # Poll window length; ms >0
+        minSlotHoldMs: 800 # Minimum slot hold duration before release; ms >0
+        smoothReleaseIntervalMs: null # Interval for smooth release; null disables smoothing
+        sessionIdleSeconds: 90 # Session idle timeout; seconds >=0
+        maxSlotPerHost: 5 # Slot cap per host; >=0
+        maxSlotPerIp: 1 # Slot cap per IP; >=0
+        maxWaitersPerIp: 3 # Max queued requests per IP; >=0
+        maxWaitersPerHost: 50 # Max queued requests per host; >=0
+        zombieTimeoutSeconds: 30 # Timeout for zombie sessions; seconds >=0
+        ipCooldownSeconds: 0 # Cooldown for IP after release; seconds >=0
         rpc:
-          throttleCheckFunc: "download_check_throttle_protection"
-          registerWaiterFunc: "download_register_fq_waiter"
-          releaseWaiterFunc: "download_release_fq_waiter"
-          tryAcquireFunc: "download_try_acquire_slot"
-          releaseFunc: "download_release_slot"
+          throttleCheckFunc: "download_check_throttle_protection" # RPC name to check throttle
+          registerWaiterFunc: "download_register_fq_waiter" # RPC name to register waiter
+          releaseWaiterFunc: "download_release_fq_waiter" # RPC to mark waiter release
+          tryAcquireFunc: "download_try_acquire_slot" # RPC to attempt slot acquisition
+          releaseFunc: "download_release_slot" # RPC to release slot
         cleanup:
-          enabled: true
-          intervalSeconds: 1800
-          queueDepthZombieTtlSeconds: 20
-        defaultGrantedCleanupDelay: 5
+          enabled: true # Enable periodic cleanup; default=true
+          intervalSeconds: 1800 # Interval for cleanup job; seconds >0
+          queueDepthZombieTtlSeconds: 20 # TTL before zombie queue depth entry is purged; seconds >=0
+        defaultGrantedCleanupDelay: 5 # Delay before cleaning granted sessions; seconds >=0
 
-  prod:
+  prod: # Production environment (same schema as staging; see staging comments for ranges/enums and fill real values)
     common:
       alistBaseUrl: "https://alist.example.com"
       alistAuthHeaders:
@@ -256,10 +258,11 @@ envs:
       tokenHmacKeyId: "default"
       tokenHmacKey: "replace-with-hmac-key"
       signSecret: ""
-    landing:
+    # All prod sub-sections mirror staging; allowed values/defaults/ranges are identical.
+    landing: # Production landing config; field meanings match staging.landing
       pageSecret: "replace-with-page-secret"
       captcha:
-        defaultCombo: ["verify-altcha"]
+        defaultCombo: ["verify-altcha"] # Same enum as staging: verify-altcha|verify-turnstile|verify-powdet|verify-none; order defines pipeline
       turnstile:
         enabled: false
         siteKey: ""
@@ -288,7 +291,7 @@ envs:
       ipv4Only: false
       workerAddresses:
         - "https://download.example.com"
-      pathRules:
+      pathRules: # Same semantics as staging pathRules
         blacklist:
           - name: "landing_block_admin"
             prefix: ["/admin", "/internal"]
@@ -357,7 +360,7 @@ envs:
         minBandwidthMbps: 10
         minDurationSeconds: 3600
         maxDurationSeconds: 0
-    download:
+    download: # Production download config; field meanings match staging.download
       address: "https://alist.example.com"
       auth:
         signCheck: true
@@ -415,8 +418,8 @@ envs:
           protectHttpCodes: [429, 499, 500, 502, 503, 504]
           cleanupPercentage: 1
           tableName: "download_throttle"
-      originBindingDefault: "asn,iprange"
-      pathRules:
+      originBindingDefault: "asn,iprange" # Default origin binding mode; allowed tokens: asn|iprange|ua|none, comma-separated
+      pathRules: # Same semantics as staging pathRules
         blacklist:
           - name: "block_admin"
             prefix: ["/admin", "/internal"]
@@ -438,7 +441,7 @@ envs:
             nameIncludes: []
             pathIncludes: []
             action: ["asis"]
-    powdet:
+    powdet: # Same semantics as staging powdet; prod endpoints/tokens
       enabled: true
       listenPort: 2370
       batchSize: 1000
@@ -449,7 +452,7 @@ envs:
         parallelism: 1
         keyLength: 16
       adminApiToken: "replace-with-admin-token"
-    slotHandler:
+    slotHandler: # slot-handler config for prod; mirrors staging structure
       listen: ":8080"
       logLevel: "info"
       auth:
