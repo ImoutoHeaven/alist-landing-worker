@@ -1,9 +1,11 @@
 package main
 
 import (
+	"flag"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -16,7 +18,14 @@ import (
 )
 
 func main() {
-	cfgPath := os.Getenv("CONTROLLER_CONFIG_PATH")
+	configFlag := flag.String("c", "", "path to controller config file (overrides CONTROLLER_CONFIG_PATH)")
+	flag.StringVar(configFlag, "config", "", "path to controller config file")
+	flag.Parse()
+
+	cfgPath := strings.TrimSpace(os.Getenv("CONTROLLER_CONFIG_PATH"))
+	if strings.TrimSpace(*configFlag) != "" {
+		cfgPath = strings.TrimSpace(*configFlag)
+	}
 	if cfgPath == "" {
 		cfgPath = "config.yaml"
 	}
