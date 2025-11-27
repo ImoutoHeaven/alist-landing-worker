@@ -80,6 +80,7 @@ const (
 	defaultSlotHandlerReleaseWaiter = "download_release_fq_waiter"
 	defaultSlotHandlerTryAcquire    = "download_try_acquire_slot"
 	defaultSlotHandlerReleaseSlot   = "download_release_slot"
+	defaultControllerListenAddr     = ":8080"
 )
 
 func boolPtr(v bool) *bool {
@@ -525,6 +526,7 @@ type RootConfig struct {
 	ApiToken         string               `yaml:"apiToken" json:"apiToken"`
 	BootstrapVersion string               `yaml:"bootstrapVersion" json:"bootstrapVersion"`
 	RulesVersion     string               `yaml:"rulesVersion" json:"rulesVersion"`
+	ListenAddr       string               `yaml:"listenAddr" json:"listenAddr"`
 	Envs             map[string]EnvConfig `yaml:"envs" json:"envs"`
 }
 
@@ -554,6 +556,9 @@ func (c *RootConfig) Validate() error {
 	}
 	if len(c.Envs) == 0 {
 		return errors.New("envs is empty")
+	}
+	if strings.TrimSpace(c.ListenAddr) == "" {
+		c.ListenAddr = defaultControllerListenAddr
 	}
 
 	for name, envCfg := range c.Envs {

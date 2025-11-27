@@ -3,6 +3,7 @@
 apiToken: "replace-with-controller-api-token" # Required Bearer token protecting all controller HTTP APIs; keep non-empty
 bootstrapVersion: "bootstrap-2025-11-25" # Version string echoed in /bootstrap responses for cache invalidation; bump to force refresh
 rulesVersion: "decision-2025-11-25" # Version tag for /decision payloads; bump to invalidate decision cache
+listenAddr: ":8080" # Listen address for controller HTTP server (host:port); default ":8080"
 
 envs:
   staging: # Staging environment configuration

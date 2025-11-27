@@ -4,7 +4,6 @@ import (
 	"flag"
 	"log"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -22,10 +21,7 @@ func main() {
 	flag.StringVar(configFlag, "config", "", "path to controller config file")
 	flag.Parse()
 
-	cfgPath := strings.TrimSpace(os.Getenv("CONTROLLER_CONFIG_PATH"))
-	if strings.TrimSpace(*configFlag) != "" {
-		cfgPath = strings.TrimSpace(*configFlag)
-	}
+	cfgPath := strings.TrimSpace(*configFlag)
 	if cfgPath == "" {
 		cfgPath = "config.yaml"
 	}
@@ -64,7 +60,7 @@ func main() {
 		api.Post("/debug/decision", ctrl.HandleDebugDecision)
 	})
 
-	addr := os.Getenv("CONTROLLER_LISTEN_ADDR")
+	addr := strings.TrimSpace(cfg.ListenAddr)
 	if addr == "" {
 		addr = ":8080"
 	}
