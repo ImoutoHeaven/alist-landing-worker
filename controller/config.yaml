@@ -16,7 +16,7 @@ envs:
     landing: # Landing-side configuration for staging
       pageSecret: "replace-with-page-secret" # Used to sign/validate landing page state/token (non-empty when signatures required)
       captcha:
-        defaultCombo: ["verify-altcha"] # Ordered challenge pipeline; allowed values: verify-altcha|verify-turnstile|verify-powdet|verify-none; empty array = no challenge
+        defaultCombo: ["verify-altcha"] # Ordered challenge pipeline; allowed values: verify-altcha|verify-turn|verify-turnstile|verify-powdet|verify-none; empty array = no challenge
       turnstile:
         enabled: false # Enable Cloudflare Turnstile challenge (default=false)
         siteKey: "" # Turnstile site key used by frontend (required if enabled)
@@ -52,15 +52,15 @@ envs:
             dirIncludes: [] # Directory substrings that trigger the rule; empty = no dir filter
             nameIncludes: [] # Filename substrings that trigger the rule; empty = no name filter
             pathIncludes: [] # Full path substrings that trigger the rule; empty = prefix-only
-            action: ["block"] # Actions when rule matches; landing actions allowed: block|pass-asis|verify-altcha|verify-turnstile|verify-powdet
+            action: ["block"] # Actions when rule matches; landing actions allowed: block|verify-altcha|verify-turn|verify-turnstile|verify-powdet|pass-web|pass-server|pass-asis (comma-combinable except block/pass-asis)
         whitelist:
           - name: "landing_public" # Allow public/share prefixes without extra checks
             prefix: ["/public", "/share"] # Path prefixes to match; at least one
             dirIncludes: [] # Directory substrings that trigger the rule
             nameIncludes: [] # Filename substrings that trigger the rule
             pathIncludes: [] # Full path substrings that trigger the rule
-            action: ["pass-asis"] # Actions when rule matches; see allowed list above
-        except: [] # Exception rules; empty when not needed; actions follow same allowed list
+            action: ["pass-asis"] # Actions when rule matches; see allowed list above (comma combos allowed except block/pass-asis)
+        except: [] # Exception rules; use -except variants of the same actions (e.g., block-except, verify-altcha-except)
       powdet:
         enabled: false # Whether landing delegates PoW to external powdet service (default=false)
         baseUrl: "" # powdet API base URL; required if enabled
@@ -177,29 +177,29 @@ envs:
           protectHttpCodes: [429, 499, 500, 502, 503, 504] # Status codes considered errors; list of ints
           cleanupPercentage: 1 # Chance (0-100) to clean throttle table
           tableName: "download_throttle" # Table storing throttle state
-      originBindingDefault: "asn,iprange" # Default origin binding mode; allowed tokens: asn|iprange|ua|none, comma-separated
-      pathRules: # Download path-based policy rules
+      originBindingDefault: "asn,iprange" # Default origin binding mode; allowed tokens: ip|iprange|country|continent|region|city|asn (comma-separated)
+      pathRules: # Download path-based policy rules; union logic on prefix/includes, priority BLACK > WHITE > EXCEPT
         blacklist:
           - name: "block_admin" # Block admin/internal paths on download
             prefix: ["/admin", "/internal"] # Path prefixes to match; at least one
             dirIncludes: [] # Directory substrings that trigger the rule
             nameIncludes: [] # Filename substrings that trigger the rule
             pathIncludes: [] # Full path substrings that trigger the rule
-            action: ["block"] # Actions when rule matches; download actions allowed: block|skip-origin|asis
+            action: ["block"] # Actions when rule matches; download actions allowed: block|skip-sign|skip-hash|skip-worker|skip-origin|asis (block/asis exclusive; others comma-combinable)
         whitelist:
           - name: "public_share" # Allow certain share paths to skip origin fetch
             prefix: ["/share"] # Path prefixes to match; at least one
             dirIncludes: [] # Directory substrings that trigger the rule
             nameIncludes: [] # Filename substrings that trigger the rule
             pathIncludes: ["/share"] # Full path substrings that trigger the rule
-            action: ["skip-origin"] # Actions when rule matches; see allowed list above
+            action: ["skip-origin"] # Actions when rule matches; see allowed list above (comma combos allowed except block/asis)
         except:
           - name: "public_share_passthrough" # Exception to whitelist; passthrough as-is
             prefix: ["/share/public"] # Path prefixes to match; at least one
             dirIncludes: [] # Directory substrings that trigger the rule
             nameIncludes: [] # Filename substrings that trigger the rule
             pathIncludes: [] # Full path substrings that trigger the rule
-            action: ["asis"] # Actions when rule matches; see allowed list above
+            action: ["asis"] # Actions when rule matches; for EXCEPT use -except variants (e.g., skip-origin-except)
     powdet: # powdet service configuration for staging
       enabled: true # Whether to run powdet service in staging; default=true
       listenPort: 2370 # powdet listen port; >0, default=2370
@@ -418,8 +418,8 @@ envs:
           protectHttpCodes: [429, 499, 500, 502, 503, 504]
           cleanupPercentage: 1
           tableName: "download_throttle"
-      originBindingDefault: "asn,iprange" # Default origin binding mode; allowed tokens: asn|iprange|ua|none, comma-separated
-      pathRules: # Same semantics as staging pathRules
+      originBindingDefault: "asn,iprange" # Default origin binding mode; allowed tokens: ip|iprange|country|continent|region|city|asn
+      pathRules: # Same semantics as staging pathRules (union prefix/includes; BLACK > WHITE > EXCEPT; use -except for inverse actions)
         blacklist:
           - name: "block_admin"
             prefix: ["/admin", "/internal"]
