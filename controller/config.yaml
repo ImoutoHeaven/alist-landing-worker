@@ -50,33 +50,56 @@ envs:
         blacklist: []
         whitelist: []
         except: []
-      paths: # New path profile/rule schema (pathAction merged into bootstrap)
+      paths: # New landing path profile/rule schema（优先于 pathRules）；将原来的 pathAction 合并进 bootstrap
         global:
+          # defaultProfileId：未命中任何规则时使用的 profileId；必须出现在 pathProfiles[].id 中
           defaultProfileId: "landing-default"
+          # decisionTimeoutMs：预留字段，用于 future 对动态决策设置超时时间；当前 Worker 未使用，可以留空或保持默认
+        # pathProfiles：按 profileId 分组的「静态策略模板」；dynamic 控制是否额外调用 /decision
         pathProfiles:
-          - id: "landing-default"
-            dynamic: false
+          - id: "landing-default" # profile 唯一 ID，供 pathRules.profileId 引用
+            dynamic: false # 是否动态：false=只用 actions 静态策略；true=静态策略 + 调用 /decision 叠加动态结果
             actions:
+              # captchaCombo：验证码链；枚举值：
+              # - verify-altcha
+              # - verify-turn
+              # - verify-turnstile
+              # - verify-powdet
+              # - verify-none            （显式跳过验证码）
+              # 以及以下「路径动作为伪验证码值」：
+              # - block                  （直接阻断访问）
+              # - pass-web               （走 web downloader）
+              # - pass-server            （走纯后端下载）
+              # - pass-asis              （保持默认行为，由前端/后端根据配置决定）
+              # 可以按顺序组合，例如 ["verify-altcha","verify-powdet"]；block/pass-* 一般单独使用。
               captchaCombo: ["verify-altcha"]
+              # fastRedirect/autoRedirect：覆盖 landing.fastRedirect/autoRedirect 的布尔值（可选）
               fastRedirect: false
               autoRedirect: false
           - id: "landing-block-admin"
             dynamic: false
             actions:
+              # 对管理路径的策略：直接 block，并带上 blockReason
               captchaCombo: ["block"]
               fastRedirect: false
               autoRedirect: false
-              blockReason: "blocked by rule landing_block_admin"
+              blockReason: "blocked by rule landing_block_admin" # 展示/记录用的阻断原因
           - id: "landing-public"
             dynamic: false
             actions:
+              # 对公共路径：直接放行（pass-asis），不额外验证码
               captchaCombo: ["pass-asis"]
               fastRedirect: false
               autoRedirect: false
+        # pathRules：按 pattern → profileId 映射；priority 越大优先级越高
         pathRules:
+          # pattern 语法：支持前缀+glob，"**" 表示任意多级目录，"*" 表示单级目录：
+          #  - "/public/**"  匹配 /public/ 下所有路径
+          #  - "/share/*"    匹配 /share/ 下单层文件（不含子目录）
+          # 如未显式指定 priority，默认视为 0；同一请求命中多条规则时，优先选择 priority 最大的那条。
           - pattern: "/admin/**"
             profileId: "landing-block-admin"
-            priority: 300
+            priority: 300 # 管理路径优先级最高
           - pattern: "/internal/**"
             profileId: "landing-block-admin"
             priority: 300
@@ -216,41 +239,67 @@ envs:
         blacklist: []
         whitelist: []
         except: []
-      paths:
+      paths: # Download 侧 path profile/rule schema；决定 pathAction / FQ profile / throttle profile 等
         global:
+          # defaultProfileId：未命中任何规则时使用的 profileId；必须出现在 pathProfiles[].id 中
           defaultProfileId: "download-default"
-          decisionTimeoutMs: 200
+          # decisionTimeoutMs：预留字段，用于 future 控制动态决策超时时间；当前 Worker 未使用
+        # pathProfiles：按 profileId 分组的「下载路径策略模板」
         pathProfiles:
           - id: "download-default"
-            dynamic: false
+            dynamic: false # 是否动态：false=只用 actions 静态策略；true=静态策略 + /decision 叠加
             actions:
+              # pathAction：下载路径行为列表；枚举值：
+              # - block        ：直接阻断
+              # - skip-sign    ：跳过签名校验
+              # - skip-hash    ：跳过哈希校验
+              # - skip-worker  ：跳过 Worker 逻辑（直连上游/缓存）
+              # - skip-origin  ：跳过 origin 请求（使用缓存或直接 404）
+              # - asis         ：保持默认行为（与 pathRules 时代 "asis" 含义一致）
+              # 组合规则：
+              # - "block" 和 "asis" 互斥；出现其中之一时应单独使用；
+              # - 其他标记可以按需组合，例如 ["skip-sign","skip-hash"]。
               pathAction: []
+              # checkOriginMode：origin 绑定/校验模式（逗号分隔的 token 列表）；枚举值：
+              #   ip | iprange | country | continent | region | city | asn
+              # 例如：
+              #   "asn,iprange"（默认）  → 按 ASN + IP 段绑定；
+              #   "ip"                   → 单 IP 绑定；
+              #   "country,asn"          → 国家 + ASN 绑定。
               checkOriginMode: "asn,iprange"
+              # fairQueueProfile：FQ 策略名称；必须出现在 download.fairQueue.profiles.* 中，例如：default|strict
               fairQueueProfile: "default"
+              # throttleProfile：Throttle 策略名称；必须出现在 download.throttleProfiles.* 中，例如：default
               throttleProfile: "default"
+              # maxSlotsPerIp / maxWaitersPerIp：可选覆盖值；>0 时覆盖对应 FQ profile 的 per-IP 限制
           - id: "download-block-admin"
             dynamic: false
             actions:
-              pathAction: ["block"]
+              pathAction: ["block"] # 管理路径全部阻断
               checkOriginMode: "asn,iprange"
               fairQueueProfile: "default"
               throttleProfile: "default"
-              blockReason: "blocked by rule block_admin"
+              blockReason: "blocked by rule block_admin" # 可选，供日志/前端提示使用
           - id: "download-public-share"
             dynamic: false
             actions:
-              pathAction: ["skip-origin"]
+              pathAction: ["skip-origin"] # 对公共分享路径优先使用缓存/短路
               checkOriginMode: "asn,iprange"
               fairQueueProfile: "default"
               throttleProfile: "default"
           - id: "download-public-share-passthrough"
             dynamic: false
             actions:
-              pathAction: ["asis"]
+              pathAction: ["asis"] # 公共分享中某些路径完全 passthrough
               checkOriginMode: "asn,iprange"
               fairQueueProfile: "default"
               throttleProfile: "default"
+        # pathRules：按 pattern → profileId 映射；priority 越大优先级越高，未设置时视为 0
         pathRules:
+          # pattern 语法与 landing 相同：支持前缀 + glob
+          # - "/share/**"          → /share/ 下所有层级
+          # - "/share/public/**"   → 更细粒度的 public 子目录
+          # 同一请求命中多条规则时，选择 priority 最大的一条；若相等则按配置顺序选择先出现的。
           - pattern: "/admin/**"
             profileId: "download-block-admin"
             priority: 300
