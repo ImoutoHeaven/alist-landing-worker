@@ -3998,13 +3998,6 @@ const routeRequest = async (request, env, config, rateLimiter, ctx) => {
   if (request.method === 'OPTIONS') {
     return handleOptions(request);
   }
-
-  const pathname = new URL(request.url).pathname || '/';
-  if (request.method === 'GET' && pathname === '/info') {
-    const ipv4Error = ensureIPv4(request, config.ipv4Only);
-    if (ipv4Error) return ipv4Error;
-    return handleInfo(request, env, config, rateLimiter, ctx);
-  }
   return handleFileRequest(request, env, config, rateLimiter, ctx);
 };
 
@@ -4013,10 +4006,18 @@ export { BootstrapDO, MetricsDO };
 export default {
   async fetch(request, env, ctx) {
     try {
-      const internalResponse = await handleInternalApiIfAny(request, env, ctx);
-      if (internalResponse) {
-        return internalResponse;
+      const url = new URL(request.url);
+      const pathname = url.pathname || '/';
+
+      // 控制面 token 校验成功时直接返回，不进入 paths/pathAction。
+      if (pathname.startsWith('/api/v0/')) {
+        const internalResponse = await handleInternalApiIfAny(request, env, ctx);
+        if (internalResponse) {
+          return internalResponse;
+        }
       }
+
+      const isInfoPath = pathname === '/info';
 
       let controllerState = null;
       try {
@@ -4035,6 +4036,17 @@ export default {
       const rateLimiter = config.rateLimitEnabled ? createRateLimiter(config.dbMode) : null;
 
       ctx.controllerState = controllerState;
+
+      if (isInfoPath) {
+        const ipv4Error = ensureIPv4(request, config.ipv4Only);
+        if (ipv4Error) return ipv4Error;
+        if (request.method !== 'GET') {
+          const origin = request.headers.get('origin') || '*';
+          return respondJson(origin, { code: 405, message: 'method not allowed' }, 405);
+        }
+        return handleInfo(request, env, config, rateLimiter, ctx);
+      }
+
       return await routeRequest(request, env, config, rateLimiter, ctx);
     } catch (error) {
       const origin = request.headers.get('origin') || '*';

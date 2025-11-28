@@ -71,6 +71,7 @@ npm run dev
 访问：
 - `http://localhost:8787/path/to/file.txt?sign=SIGNATURE` → 落地页  
 - `http://localhost:8787/info?path=/path/to/file.txt&sign=SIGNATURE` → JSON 下载信息  
+- 控制面 `/api/v0/*`：携带正确 `INTERNAL_API_TOKEN` 时直接命中控制 handler、绕过路径策略；token 缺失/错误才按普通路径进入 paths。`/info` 为信息接口，始终不参与路径策略匹配，如需保护请单独加 auth。
 
 签名算法与字段见下文「与 download worker 集成」小节。
 
