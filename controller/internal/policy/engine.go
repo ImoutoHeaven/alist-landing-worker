@@ -16,6 +16,55 @@ type Engine struct {
 	cfg *config.RootConfig
 }
 
+func toString(v any) string {
+	switch t := v.(type) {
+	case string:
+		return strings.TrimSpace(t)
+	case fmt.Stringer:
+		return strings.TrimSpace(t.String())
+	default:
+		return ""
+	}
+}
+
+func toStringSlice(v any) []string {
+	switch val := v.(type) {
+	case []string:
+		return append([]string{}, val...)
+	case []any:
+		out := make([]string, 0, len(val))
+		for _, item := range val {
+			if s := toString(item); s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func toIntPointer(v any) *int {
+	switch val := v.(type) {
+	case int:
+		return &val
+	case int32:
+		tmp := int(val)
+		return &tmp
+	case int64:
+		tmp := int(val)
+		return &tmp
+	case float64:
+		tmp := int(val)
+		return &tmp
+	case float32:
+		tmp := int(val)
+		return &tmp
+	default:
+		return nil
+	}
+}
+
 // NewEngine constructs a decision engine.
 func NewEngine(cfg *config.RootConfig) *Engine {
 	return &Engine{cfg: cfg}
@@ -63,8 +112,8 @@ func (e *Engine) evalDownloadDecision(ctx DecisionContext) (DownloadDecision, Me
 		}
 	}
 
+	pathGlobal, profiles, _ := config.BuildPathSet(envCfg, "download")
 	dlCfg := envCfg.Download
-	rules := dlCfg.PathRules
 
 	dd := DownloadDecision{
 		PathAction:      []string{},
@@ -78,25 +127,13 @@ func (e *Engine) evalDownloadDecision(ctx DecisionContext) (DownloadDecision, Me
 		Explain: []string{},
 	}
 
-	path := ctx.Request.Path
-
-	if rule, ok := matchRuleList(path, rules.Blacklist); ok {
-		dd.PathAction = []string{"block"}
-		meta.RuleIds = append(meta.RuleIds, rule.Name)
-		meta.Explain = append(meta.Explain, "blacklist "+rule.Name+" matched for path "+path)
-		return dd, meta
-	}
-
-	if rule, ok := matchRuleList(path, rules.Whitelist); ok {
-		dd.PathAction = append(dd.PathAction, rule.Action...)
-		meta.RuleIds = append(meta.RuleIds, rule.Name)
-		meta.Explain = append(meta.Explain, "whitelist "+rule.Name+" matched for path "+path)
-	}
-
-	if rule, ok := matchRuleList(path, rules.Except); ok {
-		dd.PathAction = append(dd.PathAction, rule.Action...)
-		meta.RuleIds = append(meta.RuleIds, rule.Name)
-		meta.Explain = append(meta.Explain, "except "+rule.Name+" matched for path "+path)
+	profile := pickProfile(profiles, ctx.ProfileID, pathGlobal.DefaultProfileID)
+	if profile != nil {
+		dd = applyDownloadActions(*profile, dd)
+		meta.RuleIds = append(meta.RuleIds, "profile:"+profile.ID)
+		meta.Explain = append(meta.Explain, "applied path profile "+profile.ID)
+	} else {
+		meta.Explain = append(meta.Explain, "no matching profile, using defaults")
 	}
 
 	return dd, meta
@@ -106,19 +143,17 @@ func (e *Engine) evalLandingDecision(ctx DecisionContext) (LandingDecision, Meta
 	envCfg, ok := e.cfg.Envs[ctx.Env]
 	if !ok {
 		return LandingDecision{
-			CaptchaCombo: []string{"verify-altcha"},
-			FastRedirect: false,
-			AutoRedirect: false,
-			BlockReason:  nil,
-		}, MetaInfo{
-			RuleIds: []string{},
-			Explain: []string{"landing: env not found, using default captchaCombo"},
-		}
+				CaptchaCombo: []string{"verify-altcha"},
+				FastRedirect: false,
+				AutoRedirect: false,
+				BlockReason:  nil,
+			}, MetaInfo{
+				RuleIds: []string{},
+				Explain: []string{"landing: env not found, using default captchaCombo"},
+			}
 	}
 
 	landingCfg := envCfg.Landing
-	path := ctx.Request.Path
-	rules := landingCfg.PathRules
 
 	defaultCombo := landingCfg.Captcha.DefaultCombo
 	if len(defaultCombo) == 0 {
@@ -136,132 +171,90 @@ func (e *Engine) evalLandingDecision(ctx DecisionContext) (LandingDecision, Meta
 		Explain: []string{"landing: applied default captchaCombo from config"},
 	}
 
-	if rule, ok := matchRuleList(path, rules.Blacklist); ok {
-		ld.CaptchaCombo = append([]string{}, rule.Action...)
-		if containsAction(rule.Action, "block") {
-			reason := "blocked by rule " + rule.Name
-			ld.BlockReason = &reason
-		}
-		meta.RuleIds = append(meta.RuleIds, rule.Name)
-		meta.Explain = append(meta.Explain, "blacklist "+rule.Name+" matched for path "+path)
-		return ld, meta
-	}
-
-	if rule, ok := matchRuleList(path, rules.Whitelist); ok {
-		ld.CaptchaCombo = append([]string{}, rule.Action...)
-		meta.RuleIds = append(meta.RuleIds, rule.Name)
-		meta.Explain = append(meta.Explain, "whitelist "+rule.Name+" matched for path "+path)
-	}
-
-	if rule, ok := matchRuleList(path, rules.Except); ok {
-		ld.CaptchaCombo = append([]string{}, rule.Action...)
-		meta.RuleIds = append(meta.RuleIds, rule.Name)
-		meta.Explain = append(meta.Explain, "except "+rule.Name+" matched for path "+path)
-	}
-
-	if len(ld.CaptchaCombo) == 0 {
-		ld.CaptchaCombo = []string{"verify-altcha"}
+	pathGlobal, profiles, _ := config.BuildPathSet(envCfg, "landing")
+	profile := pickProfile(profiles, ctx.ProfileID, pathGlobal.DefaultProfileID)
+	if profile != nil {
+		ld = applyLandingActions(*profile, ld, defaultCombo)
+		meta.RuleIds = append(meta.RuleIds, "profile:"+profile.ID)
+		meta.Explain = append(meta.Explain, "applied path profile "+profile.ID)
 	}
 
 	return ld, meta
 }
 
-func matchRuleList(path string, rules []config.DownloadPathRule) (config.DownloadPathRule, bool) {
-	for _, r := range rules {
-		if !pathHasPrefix(path, r.Prefix) {
-			continue
-		}
-		if !pathContainsAnyDir(path, r.DirIncludes) {
-			continue
-		}
-		if !pathContainsAnyName(path, r.NameIncludes) {
-			continue
-		}
-		if !pathContainsAny(path, r.PathIncludes) {
-			continue
-		}
-		return r, true
-	}
-	return config.DownloadPathRule{}, false
-}
-
-func containsAction(actions []string, target string) bool {
+func pickProfile(profiles []config.PathProfile, profileID string, defaultID string) *config.PathProfile {
+	target := strings.TrimSpace(profileID)
 	if target == "" {
-		return false
+		target = strings.TrimSpace(defaultID)
 	}
-	for _, action := range actions {
-		if strings.EqualFold(action, target) {
-			return true
+
+	for i := range profiles {
+		if profiles[i].ID == target {
+			return &profiles[i]
 		}
 	}
-	return false
+
+	if len(profiles) == 0 {
+		return nil
+	}
+	return &profiles[0]
 }
 
-func pathHasPrefix(path string, prefixes []string) bool {
-	if len(prefixes) == 0 {
-		return true
+func applyDownloadActions(profile config.PathProfile, base DownloadDecision) DownloadDecision {
+	actions := profile.Actions
+	if actions == nil {
+		return base
 	}
-	for _, p := range prefixes {
-		if strings.HasPrefix(path, p) {
-			return true
-		}
+
+	if vals := toStringSlice(actions["pathAction"]); len(vals) > 0 {
+		base.PathAction = vals
 	}
-	return false
+	if s := toString(actions["checkOriginMode"]); s != "" {
+		base.CheckOriginMode = s
+	}
+	if s := toString(actions["fairQueueProfile"]); s != "" {
+		base.FairQueueProfile = s
+	}
+	if s := toString(actions["throttleProfile"]); s != "" {
+		base.ThrottleProfile = s
+	}
+	if v := toIntPointer(actions["maxSlotsPerIp"]); v != nil {
+		base.MaxSlotsPerIpOverride = v
+	}
+	if v := toIntPointer(actions["maxWaitersPerIp"]); v != nil {
+		base.MaxWaitersPerIpOverride = v
+	}
+	if s := toString(actions["blockReason"]); s != "" {
+		base.BlockReason = &s
+	}
+
+	return base
 }
 
-func pathContainsAny(path string, includes []string) bool {
-	if len(includes) == 0 {
-		return true
+func applyLandingActions(profile config.PathProfile, base LandingDecision, defaultCombo []string) LandingDecision {
+	actions := profile.Actions
+	if actions == nil {
+		return base
 	}
-	for _, inc := range includes {
-		if strings.Contains(path, inc) {
-			return true
+
+	if vals := toStringSlice(actions["captchaCombo"]); len(vals) > 0 {
+		base.CaptchaCombo = vals
+	} else if len(base.CaptchaCombo) == 0 && len(defaultCombo) > 0 {
+		base.CaptchaCombo = append([]string{}, defaultCombo...)
+	}
+	if v := actions["fastRedirect"]; v != nil {
+		if b, ok := v.(bool); ok {
+			base.FastRedirect = b
 		}
 	}
-	return false
-}
-
-func pathContainsAnyDir(path string, includes []string) bool {
-	if len(includes) == 0 {
-		return true
-	}
-
-	trimmed := strings.Trim(path, "/")
-	if trimmed == "" {
-		return false
-	}
-	parts := strings.Split(trimmed, "/")
-	if len(parts) <= 1 {
-		return false
-	}
-	dirs := parts[:len(parts)-1]
-
-	for _, dir := range dirs {
-		for _, inc := range includes {
-			if strings.Contains(dir, inc) {
-				return true
-			}
+	if v := actions["autoRedirect"]; v != nil {
+		if b, ok := v.(bool); ok {
+			base.AutoRedirect = b
 		}
 	}
-	return false
-}
-
-func pathContainsAnyName(path string, includes []string) bool {
-	if len(includes) == 0 {
-		return true
+	if s := toString(actions["blockReason"]); s != "" {
+		base.BlockReason = &s
 	}
 
-	trimmed := strings.Trim(path, "/")
-	if trimmed == "" {
-		return false
-	}
-	parts := strings.Split(trimmed, "/")
-	name := parts[len(parts)-1]
-
-	for _, inc := range includes {
-		if strings.Contains(name, inc) {
-			return true
-		}
-	}
-	return false
+	return base
 }

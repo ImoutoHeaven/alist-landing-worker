@@ -21,7 +21,6 @@ import { unifiedCheck } from './unified-check.js';
 import { handleInternalApiIfAny } from './internal-api.js';
 import { fetchControllerState } from './controller-adapter.js';
 import { BootstrapDO } from './do/bootstrap-do.js';
-import { DecisionDO } from './do/decision-do.js';
 import { MetricsDO } from './do/metrics-do.js';
 
 const TURNSTILE_VERIFY_ENDPOINT = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
@@ -4009,7 +4008,7 @@ const routeRequest = async (request, env, config, rateLimiter, ctx) => {
   return handleFileRequest(request, env, config, rateLimiter, ctx);
 };
 
-export { BootstrapDO, DecisionDO, MetricsDO };
+export { BootstrapDO, MetricsDO };
 
 export default {
   async fetch(request, env, ctx) {

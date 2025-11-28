@@ -87,6 +87,43 @@ func boolPtr(v bool) *bool {
 	return &v
 }
 
+// PathProfile describes a reusable action set for path matching.
+type PathProfile struct {
+	ID      string         `yaml:"id" json:"id"`
+	Dynamic bool           `yaml:"dynamic" json:"dynamic"`
+	Actions map[string]any `yaml:"actions" json:"actions"`
+	Extra   map[string]any `yaml:",inline" json:"-"`
+}
+
+// PathRule maps an incoming path to a PathProfile.
+// Pattern follows glob-like semantics, while legacy prefix/includes fields allow
+// backward-compatible matching when present.
+type PathRule struct {
+	Pattern      string         `yaml:"pattern" json:"pattern"`
+	ProfileID    string         `yaml:"profileId" json:"profileId"`
+	Priority     int            `yaml:"priority,omitempty" json:"priority,omitempty"`
+	Prefix       []string       `yaml:"prefix,omitempty" json:"prefix,omitempty"`
+	DirIncludes  []string       `yaml:"dirIncludes,omitempty" json:"dirIncludes,omitempty"`
+	NameIncludes []string       `yaml:"nameIncludes,omitempty" json:"nameIncludes,omitempty"`
+	PathIncludes []string       `yaml:"pathIncludes,omitempty" json:"pathIncludes,omitempty"`
+	Extra        map[string]any `yaml:",inline" json:"-"`
+}
+
+// PathGlobal carries path-level defaults.
+type PathGlobal struct {
+	DefaultProfileID  string         `yaml:"defaultProfileId" json:"defaultProfileId"`
+	DecisionTimeoutMs *int           `yaml:"decisionTimeoutMs,omitempty" json:"decisionTimeoutMs,omitempty"`
+	EnableFairQueue   *bool          `yaml:"enableFairQueue,omitempty" json:"enableFairQueue,omitempty"`
+	Extra             map[string]any `yaml:",inline" json:"-"`
+}
+
+// PathConfig groups profiles, rules, and global defaults.
+type PathConfig struct {
+	Global   PathGlobal    `yaml:"global" json:"global"`
+	Profiles []PathProfile `yaml:"profiles" json:"pathProfiles"`
+	Rules    []PathRule    `yaml:"rules" json:"pathRules"`
+}
+
 // CommonConfig holds shared upstream and auth settings.
 type CommonConfig struct {
 	AListBaseURL   string            `yaml:"alistBaseUrl" json:"alistBaseUrl"`
@@ -262,6 +299,7 @@ type LandingConfig struct {
 	Altcha               LandingAltchaConfig        `yaml:"altcha" json:"altcha"`
 	Powdet               LandingPowdetConfig        `yaml:"powdet" json:"powdet"`
 	PathRules            DownloadPathRules          `yaml:"pathRules" json:"pathRules"`
+	Paths                PathConfig                 `yaml:"paths" json:"paths"`
 	FastRedirect         bool                       `yaml:"fastRedirect" json:"fastRedirect"`
 	AutoRedirect         bool                       `yaml:"autoRedirect" json:"autoRedirect"`
 	IPv4Only             bool                       `yaml:"ipv4Only" json:"ipv4Only"`
@@ -395,6 +433,7 @@ type DownloadConfig struct {
 	ThrottleProfiles     map[string]DownloadThrottleProfile `yaml:"throttleProfiles" json:"throttleProfiles"`
 	OriginBindingDefault string                             `yaml:"originBindingDefault" json:"originBindingDefault"`
 	PathRules            DownloadPathRules                  `yaml:"pathRules" json:"pathRules"`
+	Paths                PathConfig                         `yaml:"paths" json:"paths"`
 	Auth                 DownloadAuthConfig                 `yaml:"auth" json:"auth"`
 	Extra                map[string]interface{}             `yaml:",inline" json:"-"`
 }
@@ -1280,6 +1319,233 @@ func (c *SlotHandlerConfig) ensureDefaults(envName string) error {
 	}
 
 	return nil
+}
+
+func ensurePathGlobal(global PathGlobal, profiles []PathProfile) PathGlobal {
+	if strings.TrimSpace(global.DefaultProfileID) == "" {
+		if len(profiles) > 0 && strings.TrimSpace(profiles[0].ID) != "" {
+			global.DefaultProfileID = profiles[0].ID
+		} else {
+			global.DefaultProfileID = "default"
+		}
+	}
+	return global
+}
+
+func uniqueProfileID(base string, seen map[string]int) string {
+	key := strings.TrimSpace(base)
+	if key == "" {
+		key = "profile"
+	}
+	if count, ok := seen[key]; ok {
+		seen[key] = count + 1
+		return fmt.Sprintf("%s_%d", key, count+1)
+	}
+	seen[key] = 1
+	return key
+}
+
+func normalizePatternPrefix(prefix string) string {
+	if prefix == "" {
+		return "/**"
+	}
+	p := prefix
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	if strings.HasSuffix(p, "/**") {
+		return p
+	}
+	if strings.HasSuffix(p, "/") {
+		return p + "**"
+	}
+	if strings.HasSuffix(p, "*") {
+		return p
+	}
+	return p + "/**"
+}
+
+func generateDownloadPathConfig(cfg DownloadConfig) (PathGlobal, []PathProfile, []PathRule) {
+	profiles := []PathProfile{}
+	rules := []PathRule{}
+	seen := map[string]int{}
+
+	defaultProfileID := "default"
+	profiles = append(profiles, PathProfile{
+		ID:      defaultProfileID,
+		Dynamic: false,
+		Actions: map[string]any{
+			"pathAction":       []string{},
+			"checkOriginMode":  cfg.OriginBindingDefault,
+			"fairQueueProfile": "default",
+			"throttleProfile":  "default",
+			"maxSlotsPerIp":    nil,
+			"maxWaitersPerIp":  nil,
+			"blockReason":      nil,
+		},
+	})
+
+	appendRules := func(list []DownloadPathRule, priority int) {
+		for _, rule := range list {
+			profileID := uniqueProfileID(rule.Name, seen)
+			profiles = append(profiles, PathProfile{
+				ID:      profileID,
+				Dynamic: false,
+				Actions: map[string]any{
+					"pathAction":       append([]string{}, rule.Action...),
+					"checkOriginMode":  cfg.OriginBindingDefault,
+					"fairQueueProfile": "default",
+					"throttleProfile":  "default",
+				},
+			})
+
+			if len(rule.Prefix) == 0 {
+				rules = append(rules, PathRule{
+					Pattern:      "/**",
+					ProfileID:    profileID,
+					Priority:     priority,
+					Prefix:       append([]string{}, rule.Prefix...),
+					DirIncludes:  append([]string{}, rule.DirIncludes...),
+					NameIncludes: append([]string{}, rule.NameIncludes...),
+					PathIncludes: append([]string{}, rule.PathIncludes...),
+				})
+				continue
+			}
+
+			for _, prefix := range rule.Prefix {
+				rules = append(rules, PathRule{
+					Pattern:      normalizePatternPrefix(prefix),
+					ProfileID:    profileID,
+					Priority:     priority,
+					Prefix:       append([]string{}, rule.Prefix...),
+					DirIncludes:  append([]string{}, rule.DirIncludes...),
+					NameIncludes: append([]string{}, rule.NameIncludes...),
+					PathIncludes: append([]string{}, rule.PathIncludes...),
+				})
+			}
+		}
+	}
+
+	appendRules(cfg.PathRules.Blacklist, 300)
+	appendRules(cfg.PathRules.Whitelist, 200)
+	appendRules(cfg.PathRules.Except, 100)
+
+	global := ensurePathGlobal(cfg.Paths.Global, profiles)
+	if global.DefaultProfileID == "" {
+		global.DefaultProfileID = defaultProfileID
+	}
+
+	return global, profiles, rules
+}
+
+func containsActionToken(actions []string, target string) bool {
+	if target == "" {
+		return false
+	}
+	for _, action := range actions {
+		if strings.EqualFold(strings.TrimSpace(action), target) {
+			return true
+		}
+	}
+	return false
+}
+
+func generateLandingPathConfig(cfg LandingConfig) (PathGlobal, []PathProfile, []PathRule) {
+	profiles := []PathProfile{}
+	rules := []PathRule{}
+	seen := map[string]int{}
+
+	defaultProfileID := "default"
+	defaultCombo := cfg.Captcha.DefaultCombo
+	if len(defaultCombo) == 0 {
+		defaultCombo = []string{"verify-altcha"}
+	}
+	profiles = append(profiles, PathProfile{
+		ID:      defaultProfileID,
+		Dynamic: false,
+		Actions: map[string]any{
+			"captchaCombo": defaultCombo,
+			"fastRedirect": cfg.FastRedirect,
+			"autoRedirect": cfg.AutoRedirect,
+		},
+	})
+
+	appendRules := func(list []DownloadPathRule, priority int) {
+		for _, rule := range list {
+			profileID := uniqueProfileID(rule.Name, seen)
+			actions := map[string]any{
+				"captchaCombo": append([]string{}, rule.Action...),
+				"fastRedirect": cfg.FastRedirect,
+				"autoRedirect": cfg.AutoRedirect,
+			}
+			if containsActionToken(rule.Action, "block") {
+				actions["blockReason"] = "blocked by rule " + rule.Name
+			}
+			profiles = append(profiles, PathProfile{
+				ID:      profileID,
+				Dynamic: false,
+				Actions: actions,
+			})
+
+			if len(rule.Prefix) == 0 {
+				rules = append(rules, PathRule{
+					Pattern:      "/**",
+					ProfileID:    profileID,
+					Priority:     priority,
+					Prefix:       append([]string{}, rule.Prefix...),
+					DirIncludes:  append([]string{}, rule.DirIncludes...),
+					NameIncludes: append([]string{}, rule.NameIncludes...),
+					PathIncludes: append([]string{}, rule.PathIncludes...),
+				})
+				continue
+			}
+
+			for _, prefix := range rule.Prefix {
+				rules = append(rules, PathRule{
+					Pattern:      normalizePatternPrefix(prefix),
+					ProfileID:    profileID,
+					Priority:     priority,
+					Prefix:       append([]string{}, rule.Prefix...),
+					DirIncludes:  append([]string{}, rule.DirIncludes...),
+					NameIncludes: append([]string{}, rule.NameIncludes...),
+					PathIncludes: append([]string{}, rule.PathIncludes...),
+				})
+			}
+		}
+	}
+
+	appendRules(cfg.PathRules.Blacklist, 300)
+	appendRules(cfg.PathRules.Whitelist, 200)
+	appendRules(cfg.PathRules.Except, 100)
+
+	global := ensurePathGlobal(cfg.Paths.Global, profiles)
+	if global.DefaultProfileID == "" {
+		global.DefaultProfileID = defaultProfileID
+	}
+
+	return global, profiles, rules
+}
+
+// BuildPathSet returns global defaults, profiles, and rules for the given role.
+// If explicit paths.* config is present, it takes precedence; otherwise legacy
+// pathRules will be converted into profiles/rules to keep behavior compatible.
+func BuildPathSet(envCfg EnvConfig, role string) (PathGlobal, []PathProfile, []PathRule) {
+	switch role {
+	case "landing":
+		if len(envCfg.Landing.Paths.Profiles) > 0 || len(envCfg.Landing.Paths.Rules) > 0 {
+			global := ensurePathGlobal(envCfg.Landing.Paths.Global, envCfg.Landing.Paths.Profiles)
+			return global, envCfg.Landing.Paths.Profiles, envCfg.Landing.Paths.Rules
+		}
+		return generateLandingPathConfig(envCfg.Landing)
+	case "download":
+		if len(envCfg.Download.Paths.Profiles) > 0 || len(envCfg.Download.Paths.Rules) > 0 {
+			global := ensurePathGlobal(envCfg.Download.Paths.Global, envCfg.Download.Paths.Profiles)
+			return global, envCfg.Download.Paths.Profiles, envCfg.Download.Paths.Rules
+		}
+		return generateDownloadPathConfig(envCfg.Download)
+	default:
+		return PathGlobal{}, nil, nil
+	}
 }
 
 func normalizePgErrorHandle(raw string) string {

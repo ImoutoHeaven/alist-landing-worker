@@ -20,6 +20,8 @@ type DecisionContext struct {
 	Role       string         `json:"role"`
 	Env        string         `json:"env"`
 	InstanceID string         `json:"instance_id"`
+	ProfileID  string         `json:"profileId"`
+	Filepath   string         `json:"filepath"`
 	Request    RequestContext `json:"request"`
 }
 

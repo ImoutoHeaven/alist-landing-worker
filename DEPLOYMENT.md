@@ -44,11 +44,11 @@ CONTROLLER_URL=https://controller.example.com
 CONTROLLER_API_PREFIX=/api/v0
 CONTROLLER_API_TOKEN=replace-with-controller-token
 
-BOOTSTRAP_CACHE_MODE=do
-DECISION_CACHE_MODE=do
+BOOTSTRAP_CACHE_MODE=d1
 METRICS_MODE=do
+CACHE_D1=CACHE_D1
+INIT_TABLES=false
 BOOTSTRAP_DO=BootstrapDO
-DECISION_DO=DecisionDO
 METRICS_DO=MetricsDO
 BOOTSTRAP_KV=BOOTSTRAP_KV
 
@@ -58,6 +58,7 @@ CF_RATELIMITER_BINDING=CF_RATE_LIMITER
 ```
 
 说明：
+- bootstrap 缓存模式支持 direct / do / do+kv / d1；使用 d1 时需绑定 `CACHE_D1`，`INIT_TABLES=true` 仅在开发/新环境下启用自动建表，生产推荐由迁移创建表结构；若切换回 DO/KV，请保持对应 binding。决策仅支持 direct 调用 controller，不再有 DO/D1 缓存。
 - download worker 列表与策略均在 `controller/config.yaml` 配置（如 `landing.workerAddresses`），wrangler/env 不再填写 `WORKER_ADDRESS_DOWNLOAD` 等策略变量。  
 - 其他策略（Turnstile/ALTCHA/powdet/限流/路径等）同样由 controller 下发，保持 env 纯 infra。  
 

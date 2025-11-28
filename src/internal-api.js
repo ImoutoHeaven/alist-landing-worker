@@ -23,6 +23,34 @@ const safeWaitUntil = (ctx, promise) => {
   }
 };
 
+const clearD1CacheIfAny = (env, targets) => {
+  const db = env?.CACHE_D1;
+  if (!db || !(targets?.length)) {
+    return null;
+  }
+  const shouldClearBootstrap = targets.includes('all') || targets.includes('bootstrap');
+  if (!shouldClearBootstrap) {
+    return null;
+  }
+
+  const envName = env?.ENV || '';
+  const role = env?.ROLE || '';
+
+  return (async () => {
+  const statements = [];
+  if (shouldClearBootstrap) {
+    statements.push(
+      db.prepare('DELETE FROM bootstrap_cache WHERE env = ? AND role = ?;').bind(envName, role)
+    );
+  }
+  if (statements.length) {
+    await db.batch(statements);
+  }
+  })().catch((error) => {
+    console.warn('[internal-api] clear D1 cache failed', error);
+  });
+};
+
 /**
  * Handle controller-issued internal API if token matches; otherwise return null to fall back.
  * @param {Request} request
@@ -83,10 +111,6 @@ async function handleRefresh(request, env, ctx) {
     // Placeholder: bootstrap cache to be added when controller client is integrated.
     globalThis.bootstrapCache = null;
   }
-  if (targets.includes('all') || targets.includes('decision')) {
-    // Placeholder: decision cache to be added when controller client is integrated.
-    globalThis.decisionCache = {};
-  }
 
   const promises = [];
 
@@ -94,9 +118,9 @@ async function handleRefresh(request, env, ctx) {
     const promise = notifyDo(env, 'BOOTSTRAP_DO', '/bootstrap/refresh', { mode: body?.mode || 'lazy', targets });
     if (promise) promises.push(promise);
   }
-  if (targets.includes('all') || targets.includes('decision')) {
-    const promise = notifyDo(env, 'DECISION_DO', '/decision/refresh', { mode: body?.mode || 'lazy', targets });
-    if (promise) promises.push(promise);
+  const d1Clear = clearD1CacheIfAny(env, targets);
+  if (d1Clear) {
+    promises.push(d1Clear);
   }
   if (targets.includes('metrics')) {
     const promise = notifyDo(env, 'METRICS_DO', '/metrics/flush', { reason: body?.reason || 'refresh' });

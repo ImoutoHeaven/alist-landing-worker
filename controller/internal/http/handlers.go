@@ -33,6 +33,9 @@ type bootstrapRequest struct {
 type bootstrapResponse struct {
 	ConfigVersion string                      `json:"configVersion"`
 	TTLSeconds    int                         `json:"ttlSeconds"`
+	Global        config.PathGlobal           `json:"global,omitempty"`
+	PathProfiles  []config.PathProfile        `json:"pathProfiles"`
+	PathRules     []config.PathRule           `json:"pathRules"`
 	Common        config.CommonConfig         `json:"common"`
 	Landing       config.LandingConfig        `json:"landing"`
 	Download      config.DownloadConfig       `json:"download"`
@@ -44,6 +47,8 @@ type decisionRequest struct {
 	Role             string                `json:"role"`
 	Env              string                `json:"env"`
 	InstanceID       string                `json:"instance_id"`
+	ProfileID        string                `json:"profileId"`
+	Filepath         string                `json:"filepath"`
 	Request          policy.RequestContext `json:"request"`
 	BootstrapVersion string                `json:"bootstrapVersion"`
 }
@@ -75,9 +80,14 @@ func (c *Controller) HandleBootstrap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	pathGlobal, pathProfiles, pathRules := config.BuildPathSet(envCfg, req.Role)
+
 	resp := bootstrapResponse{
 		ConfigVersion: cfg.BootstrapVersion,
 		TTLSeconds:    300,
+		Global:        pathGlobal,
+		PathProfiles:  pathProfiles,
+		PathRules:     pathRules,
 		Common:        envCfg.Common,
 		Landing:       envCfg.Landing,
 		Download:      envCfg.Download,
@@ -111,6 +121,8 @@ func (c *Controller) HandleDecision(w http.ResponseWriter, r *http.Request) {
 		Role:       req.Role,
 		Env:        req.Env,
 		InstanceID: req.InstanceID,
+		ProfileID:  req.ProfileID,
+		Filepath:   req.Filepath,
 		Request:    req.Request,
 	}
 
@@ -217,6 +229,8 @@ func (c *Controller) HandleDebugDecision(w http.ResponseWriter, r *http.Request)
 		Role:       req.Role,
 		Env:        req.Env,
 		InstanceID: req.InstanceID,
+		ProfileID:  req.ProfileID,
+		Filepath:   req.Filepath,
 		Request:    req.Request,
 	}
 
