@@ -831,7 +831,7 @@ func (d *LandingDBConfig) ensureDefaults(envName string) error {
 		d.IdleTimeoutSeconds = defaultLandingIdleTimeout
 	}
 	if d.IdleTable == "" {
-		d.IdleTable = "landing_idle"
+		d.IdleTable = "DOWNLOAD_LAST_ACTIVE_TABLE"
 	}
 
 	if d.Mode == "custom-pg-rest" {

@@ -152,7 +152,7 @@ envs:
           tableName: "IP_LIMIT_TABLE" # Table storing IP rate limit entries
           fileTableName: "IP_FILE_LIMIT_TABLE" # Table storing file-level limits
           cleanupPercentage: 5 # Chance (0-100) of cleaning rate limit tables
-        idleTable: "landing_idle" # Table tracking landing idle time
+        idleTable: "DOWNLOAD_LAST_ACTIVE_TABLE" # Table tracking landing idle time (shared with download worker init.sql)
         idleTimeoutSeconds: 0 # Idle timeout before cleanup; 0 disables
       crypt:
         prefix: "" # Path prefix requiring encryption; empty disables
@@ -486,7 +486,7 @@ envs:
           tableName: "IP_LIMIT_TABLE"
           fileTableName: "IP_FILE_LIMIT_TABLE"
           cleanupPercentage: 5
-        idleTable: "landing_idle"
+        idleTable: "DOWNLOAD_LAST_ACTIVE_TABLE"
         idleTimeoutSeconds: 0
       crypt:
         prefix: ""
