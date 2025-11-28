@@ -46,22 +46,46 @@ envs:
       ipv4Only: false # Force IPv4-only traffic handling on landing; default=false
       workerAddresses:
         - "https://download-staging.example.com" # Download worker endpoints for issued tickets; non-empty list in prod
-      pathRules: # Landing path-based policy rules
-        blacklist:
-          - name: "landing_block_admin" # Block admin/internal prefixes
-            prefix: ["/admin", "/internal"] # Path prefixes to match; at least one
-            dirIncludes: [] # Directory substrings that trigger the rule; empty = no dir filter
-            nameIncludes: [] # Filename substrings that trigger the rule; empty = no name filter
-            pathIncludes: [] # Full path substrings that trigger the rule; empty = prefix-only
-            action: ["block"] # Actions when rule matches; landing actions allowed: block|verify-altcha|verify-turn|verify-turnstile|verify-powdet|pass-web|pass-server|pass-asis (comma-combinable except block/pass-asis)
-        whitelist:
-          - name: "landing_public" # Allow public/share prefixes without extra checks
-            prefix: ["/public", "/share"] # Path prefixes to match; at least one
-            dirIncludes: [] # Directory substrings that trigger the rule
-            nameIncludes: [] # Filename substrings that trigger the rule
-            pathIncludes: [] # Full path substrings that trigger the rule
-            action: ["pass-asis"] # Actions when rule matches; see allowed list above (comma combos allowed except block/pass-asis)
-        except: [] # Exception rules; use -except variants of the same actions (e.g., block-except, verify-altcha-except)
+      pathRules: # Deprecated by paths.* below; kept empty to avoid legacy mixing
+        blacklist: []
+        whitelist: []
+        except: []
+      paths: # New path profile/rule schema (pathAction merged into bootstrap)
+        global:
+          defaultProfileId: "landing-default"
+        pathProfiles:
+          - id: "landing-default"
+            dynamic: false
+            actions:
+              captchaCombo: ["verify-altcha"]
+              fastRedirect: false
+              autoRedirect: false
+          - id: "landing-block-admin"
+            dynamic: false
+            actions:
+              captchaCombo: ["block"]
+              fastRedirect: false
+              autoRedirect: false
+              blockReason: "blocked by rule landing_block_admin"
+          - id: "landing-public"
+            dynamic: false
+            actions:
+              captchaCombo: ["pass-asis"]
+              fastRedirect: false
+              autoRedirect: false
+        pathRules:
+          - pattern: "/admin/**"
+            profileId: "landing-block-admin"
+            priority: 300
+          - pattern: "/internal/**"
+            profileId: "landing-block-admin"
+            priority: 300
+          - pattern: "/public/**"
+            profileId: "landing-public"
+            priority: 200
+          - pattern: "/share/**"
+            profileId: "landing-public"
+            priority: 200
       powdet:
         enabled: false # Whether landing delegates PoW to external powdet service (default=false)
         baseUrl: "" # powdet API base URL; required if enabled
@@ -188,28 +212,57 @@ envs:
           cleanupPercentage: 1 # Chance (0-100) to clean throttle table
           tableName: "download_throttle" # Table storing throttle state
       originBindingDefault: "asn,iprange" # Default origin binding mode; allowed tokens: ip|iprange|country|continent|region|city|asn (comma-separated)
-      pathRules: # Download path-based policy rules; union logic on prefix/includes, priority BLACK > WHITE > EXCEPT
-        blacklist:
-          - name: "block_admin" # Block admin/internal paths on download
-            prefix: ["/admin", "/internal"] # Path prefixes to match; at least one
-            dirIncludes: [] # Directory substrings that trigger the rule
-            nameIncludes: [] # Filename substrings that trigger the rule
-            pathIncludes: [] # Full path substrings that trigger the rule
-            action: ["block"] # Actions when rule matches; download actions allowed: block|skip-sign|skip-hash|skip-worker|skip-origin|asis (block/asis exclusive; others comma-combinable)
-        whitelist:
-          - name: "public_share" # Allow certain share paths to skip origin fetch
-            prefix: ["/share"] # Path prefixes to match; at least one
-            dirIncludes: [] # Directory substrings that trigger the rule
-            nameIncludes: [] # Filename substrings that trigger the rule
-            pathIncludes: ["/share"] # Full path substrings that trigger the rule
-            action: ["skip-origin"] # Actions when rule matches; see allowed list above (comma combos allowed except block/asis)
-        except:
-          - name: "public_share_passthrough" # Exception to whitelist; passthrough as-is
-            prefix: ["/share/public"] # Path prefixes to match; at least one
-            dirIncludes: [] # Directory substrings that trigger the rule
-            nameIncludes: [] # Filename substrings that trigger the rule
-            pathIncludes: [] # Full path substrings that trigger the rule
-            action: ["asis"] # Actions when rule matches; for EXCEPT use -except variants (e.g., skip-origin-except)
+      pathRules: # Deprecated by paths.* below; kept empty to avoid legacy mixing
+        blacklist: []
+        whitelist: []
+        except: []
+      paths:
+        global:
+          defaultProfileId: "download-default"
+          decisionTimeoutMs: 200
+        pathProfiles:
+          - id: "download-default"
+            dynamic: false
+            actions:
+              pathAction: []
+              checkOriginMode: "asn,iprange"
+              fairQueueProfile: "default"
+              throttleProfile: "default"
+          - id: "download-block-admin"
+            dynamic: false
+            actions:
+              pathAction: ["block"]
+              checkOriginMode: "asn,iprange"
+              fairQueueProfile: "default"
+              throttleProfile: "default"
+              blockReason: "blocked by rule block_admin"
+          - id: "download-public-share"
+            dynamic: false
+            actions:
+              pathAction: ["skip-origin"]
+              checkOriginMode: "asn,iprange"
+              fairQueueProfile: "default"
+              throttleProfile: "default"
+          - id: "download-public-share-passthrough"
+            dynamic: false
+            actions:
+              pathAction: ["asis"]
+              checkOriginMode: "asn,iprange"
+              fairQueueProfile: "default"
+              throttleProfile: "default"
+        pathRules:
+          - pattern: "/admin/**"
+            profileId: "download-block-admin"
+            priority: 300
+          - pattern: "/internal/**"
+            profileId: "download-block-admin"
+            priority: 300
+          - pattern: "/share/**"
+            profileId: "download-public-share"
+            priority: 200
+          - pattern: "/share/public/**"
+            profileId: "download-public-share-passthrough"
+            priority: 100
     powdet: # powdet service configuration for staging
       enabled: true # Whether to run powdet service in staging; default=true
       listenPort: 2370 # powdet listen port; >0, default=2370
@@ -301,22 +354,46 @@ envs:
       ipv4Only: false
       workerAddresses:
         - "https://download.example.com"
-      pathRules: # Same semantics as staging pathRules
-        blacklist:
-          - name: "landing_block_admin"
-            prefix: ["/admin", "/internal"]
-            dirIncludes: []
-            nameIncludes: []
-            pathIncludes: []
-            action: ["block"]
-        whitelist:
-          - name: "landing_public"
-            prefix: ["/public", "/share"]
-            dirIncludes: []
-            nameIncludes: []
-            pathIncludes: []
-            action: ["pass-asis"]
+      pathRules: # Deprecated by paths.* below; kept empty to avoid legacy mixing
+        blacklist: []
+        whitelist: []
         except: []
+      paths:
+        global:
+          defaultProfileId: "landing-default"
+        pathProfiles:
+          - id: "landing-default"
+            dynamic: false
+            actions:
+              captchaCombo: ["verify-altcha"]
+              fastRedirect: false
+              autoRedirect: false
+          - id: "landing-block-admin"
+            dynamic: false
+            actions:
+              captchaCombo: ["block"]
+              fastRedirect: false
+              autoRedirect: false
+              blockReason: "blocked by rule landing_block_admin"
+          - id: "landing-public"
+            dynamic: false
+            actions:
+              captchaCombo: ["pass-asis"]
+              fastRedirect: false
+              autoRedirect: false
+        pathRules:
+          - pattern: "/admin/**"
+            profileId: "landing-block-admin"
+            priority: 300
+          - pattern: "/internal/**"
+            profileId: "landing-block-admin"
+            priority: 300
+          - pattern: "/public/**"
+            profileId: "landing-public"
+            priority: 200
+          - pattern: "/share/**"
+            profileId: "landing-public"
+            priority: 200
       powdet:
         enabled: true
         baseUrl: "https://powdet.example.com"
@@ -438,28 +515,57 @@ envs:
           cleanupPercentage: 1
           tableName: "download_throttle"
       originBindingDefault: "asn,iprange" # Default origin binding mode; allowed tokens: ip|iprange|country|continent|region|city|asn
-      pathRules: # Same semantics as staging pathRules (union prefix/includes; BLACK > WHITE > EXCEPT; use -except for inverse actions)
-        blacklist:
-          - name: "block_admin"
-            prefix: ["/admin", "/internal"]
-            dirIncludes: []
-            nameIncludes: []
-            pathIncludes: []
-            action: ["block"]
-        whitelist:
-          - name: "public_share"
-            prefix: ["/share"]
-            dirIncludes: []
-            nameIncludes: []
-            pathIncludes: ["/share"]
-            action: ["skip-origin"]
-        except:
-          - name: "public_share_passthrough"
-            prefix: ["/share/public"]
-            dirIncludes: []
-            nameIncludes: []
-            pathIncludes: []
-            action: ["asis"]
+      pathRules: # Deprecated by paths.* below; kept empty to avoid legacy mixing
+        blacklist: []
+        whitelist: []
+        except: []
+      paths:
+        global:
+          defaultProfileId: "download-default"
+          decisionTimeoutMs: 200
+        pathProfiles:
+          - id: "download-default"
+            dynamic: false
+            actions:
+              pathAction: []
+              checkOriginMode: "asn,iprange"
+              fairQueueProfile: "default"
+              throttleProfile: "default"
+          - id: "download-block-admin"
+            dynamic: false
+            actions:
+              pathAction: ["block"]
+              checkOriginMode: "asn,iprange"
+              fairQueueProfile: "default"
+              throttleProfile: "default"
+              blockReason: "blocked by rule block_admin"
+          - id: "download-public-share"
+            dynamic: false
+            actions:
+              pathAction: ["skip-origin"]
+              checkOriginMode: "asn,iprange"
+              fairQueueProfile: "default"
+              throttleProfile: "default"
+          - id: "download-public-share-passthrough"
+            dynamic: false
+            actions:
+              pathAction: ["asis"]
+              checkOriginMode: "asn,iprange"
+              fairQueueProfile: "default"
+              throttleProfile: "default"
+        pathRules:
+          - pattern: "/admin/**"
+            profileId: "download-block-admin"
+            priority: 300
+          - pattern: "/internal/**"
+            profileId: "download-block-admin"
+            priority: 300
+          - pattern: "/share/**"
+            profileId: "download-public-share"
+            priority: 200
+          - pattern: "/share/public/**"
+            profileId: "download-public-share-passthrough"
+            priority: 100
     powdet: # Same semantics as staging powdet; prod endpoints/tokens
       enabled: true
       listenPort: 2370
