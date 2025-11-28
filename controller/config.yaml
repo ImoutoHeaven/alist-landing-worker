@@ -185,11 +185,11 @@ envs:
         postgrestUrl: "https://postgrest-staging.example.com" # PostgREST endpoint for download tables; required if mode set
         verifyHeader: ["X-Postgrest-Auth"] # Headers carrying PostgREST auth; length must match verifySecret
         verifySecret: ["replace-with-postgrest-secret"] # Values for PostgREST auth headers
-        cacheTable: "download_cache" # Table storing download cache entries
+        cacheTable: "DOWNLOAD_CACHE_TABLE" # Table storing download cache entries (must match init2.sql)
         linkTTLSeconds: 1800 # TTL for cached download links; seconds >0
         cleanupPercentage: 1 # Chance (0-100) of running cache cleanup per request
         idleTimeoutSeconds: 0 # Idle timeout before evicting sessions; 0 disables
-        lastActiveTable: "download_last_active" # Table for tracking last active time
+        lastActiveTable: "DOWNLOAD_LAST_ACTIVE_TABLE" # Table for tracking last active time (must match init2.sql)
         rateLimit:
           enabled: false # Toggle IP rate limiting on download worker (default=false)
           windowSeconds: 0 # Rate limit window in seconds; >0 when enabled
@@ -198,7 +198,7 @@ envs:
           ipv6Suffix: "/60" # IPv6 bucket size for rate limiting (CIDR suffix)
           blockSeconds: 600 # Block duration when limit exceeded; seconds >=0
           pgErrorHandle: "fail-closed" # Behavior on DB errors; allowed: fail-closed|fail-open
-          tableName: "download_ip_ratelimit" # Table storing rate limit counters
+          tableName: "DOWNLOAD_IP_RATELIMIT_TABLE" # Table storing rate limit counters (must match init2.sql)
           cleanupPercentage: 1 # Chance (0-100) of cleaning rate-limit table
       fairQueue:
         enabled: true # Enable Fair Queue via slot-handler (default=true)
@@ -233,7 +233,7 @@ envs:
           fastMinSampleCount: 4 # Sample size for fast path evaluation; >=0
           protectHttpCodes: [429, 499, 500, 502, 503, 504] # Status codes considered errors; list of ints
           cleanupPercentage: 1 # Chance (0-100) to clean throttle table
-          tableName: "download_throttle" # Table storing throttle state
+          tableName: "THROTTLE_PROTECTION" # Table storing throttle state (must match init2.sql)
       originBindingDefault: "asn,iprange" # Default origin binding mode; allowed tokens: ip|iprange|country|continent|region|city|asn (comma-separated)
       pathRules: # Deprecated by paths.* below; kept empty to avoid legacy mixing
         blacklist: []
@@ -519,11 +519,11 @@ envs:
         postgrestUrl: "https://postgrest.example.com"
         verifyHeader: ["X-Postgrest-Auth"]
         verifySecret: ["replace-with-postgrest-secret"]
-        cacheTable: "download_cache"
+        cacheTable: "DOWNLOAD_CACHE_TABLE"
         linkTTLSeconds: 1800
         cleanupPercentage: 1
         idleTimeoutSeconds: 0
-        lastActiveTable: "download_last_active"
+        lastActiveTable: "DOWNLOAD_LAST_ACTIVE_TABLE"
         rateLimit:
           enabled: false
           windowSeconds: 0
@@ -532,7 +532,7 @@ envs:
           ipv6Suffix: "/60"
           blockSeconds: 600
           pgErrorHandle: "fail-closed"
-          tableName: "download_ip_ratelimit"
+          tableName: "DOWNLOAD_IP_RATELIMIT_TABLE"
           cleanupPercentage: 1
       fairQueue:
         enabled: true
@@ -562,7 +562,7 @@ envs:
           fastMinSampleCount: 4
           protectHttpCodes: [429, 499, 500, 502, 503, 504]
           cleanupPercentage: 1
-          tableName: "download_throttle"
+          tableName: "THROTTLE_PROTECTION"
       originBindingDefault: "asn,iprange" # Default origin binding mode; allowed tokens: ip|iprange|country|continent|region|city|asn
       pathRules: # Deprecated by paths.* below; kept empty to avoid legacy mixing
         blacklist: []
