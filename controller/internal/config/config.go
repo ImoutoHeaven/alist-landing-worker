@@ -831,7 +831,7 @@ func (d *LandingDBConfig) ensureDefaults(envName string) error {
 		d.IdleTimeoutSeconds = defaultLandingIdleTimeout
 	}
 	if d.IdleTable == "" {
-		d.IdleTable = "DOWNLOAD_LAST_ACTIVE_TABLE"
+		d.IdleTable = "landing_idle"
 	}
 
 	if d.Mode == "custom-pg-rest" {
@@ -991,7 +991,7 @@ func (d *DownloadDBConfig) ensureDefaults(envName string) error {
 	}
 
 	if d.CacheTable == "" {
-		d.CacheTable = "download_cache"
+		d.CacheTable = "DOWNLOAD_CACHE_TABLE"
 	}
 	if d.LinkTTLSeconds <= 0 {
 		d.LinkTTLSeconds = defaultDownloadLinkTTLSeconds
@@ -1003,12 +1003,12 @@ func (d *DownloadDBConfig) ensureDefaults(envName string) error {
 		d.IdleTimeoutSeconds = defaultDownloadIdleTimeout
 	}
 	if d.LastActiveTable == "" {
-		d.LastActiveTable = "download_last_active"
+		d.LastActiveTable = "DOWNLOAD_LAST_ACTIVE_TABLE"
 	}
 
 	d.RateLimit.ensureDefaults()
 	if d.RateLimit.TableName == "" {
-		d.RateLimit.TableName = "download_ip_ratelimit"
+		d.RateLimit.TableName = "DOWNLOAD_IP_RATELIMIT_TABLE"
 	}
 	if d.RateLimit.CleanupPercentage <= 0 {
 		d.RateLimit.CleanupPercentage = d.CleanupPercentage
@@ -1088,7 +1088,7 @@ func (p *DownloadThrottleProfile) ensureDefaults() {
 		p.CleanupPercentage = defaultDownloadCleanupPercent
 	}
 	if p.TableName == "" {
-		p.TableName = "download_throttle"
+		p.TableName = "THROTTLE_PROTECTION"
 	}
 }
 

@@ -1007,7 +1007,7 @@ const resolveConfig = (env = {}, bootstrap = null) => {
   }
 
   const idleTimeoutRaw = `${idleTimeoutSeconds}s`;
-  const idleTableName = normalizeString(dbConfig.idleTable, 'DOWNLOAD_LAST_ACTIVE_TABLE') || 'DOWNLOAD_LAST_ACTIVE_TABLE';
+  const idleTableName = normalizeString(dbConfig.idleTable, 'landing_idle') || 'landing_idle';
 
   const additionalConfig = landingBootstrap.additional && typeof landingBootstrap.additional === 'object'
     ? landingBootstrap.additional
