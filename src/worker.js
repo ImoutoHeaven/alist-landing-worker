@@ -2203,6 +2203,14 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
 
   const clientIP = extractClientIP(request);
 
+  // Use the actual target path for controller decision instead of /info.
+  const normalizedTargetPath = decodedPath.startsWith('/') ? decodedPath : `/${decodedPath}`;
+  const controllerStateForInfo = await fetchControllerState(request, env, { filepathOverride: normalizedTargetPath });
+  if (!controllerStateForInfo || !controllerStateForInfo.bootstrap || !controllerStateForInfo.decision) {
+    return respondJson(origin, { code: 503, message: 'controller state unavailable' }, 503);
+  }
+  ctx.controllerState = controllerStateForInfo;
+
   if (config.enableCfRatelimiter) {
     try {
       const cfResult = await checkCfRatelimit(

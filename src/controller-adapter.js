@@ -228,7 +228,13 @@ const mergeLandingDecision = (base, dynamic) => {
   return merged;
 };
 
-export async function fetchControllerState(request, env) {
+/**
+ * Fetch bootstrap and decision for the given request.
+ * @param {Request} request
+ * @param {Record<string, any>} env
+ * @param {{ filepathOverride?: string }} [options]
+ */
+export async function fetchControllerState(request, env, options = {}) {
   if (!hasControllerBase(env) || !canUseBootstrap(env)) {
     return null;
   }
@@ -236,7 +242,9 @@ export async function fetchControllerState(request, env) {
   try {
     const bootstrap = await getBootstrapConfig(env);
     const ctx = buildDecisionContext(request);
-    const filepath = normalizePath(ctx.path || '/');
+    const effectivePath = options.filepathOverride ? normalizePath(options.filepathOverride) : normalizePath(ctx.path || '/');
+    ctx.path = effectivePath;
+    const filepath = effectivePath;
     const rule = matchPathRule(bootstrap?.pathRules || [], filepath);
     const defaultProfileId = pickString(bootstrap?.global?.defaultProfileId, 'default');
     const profileId = pickString(rule?.profileId, defaultProfileId);
