@@ -1,5 +1,6 @@
 # Example controller config with inline notes. Replace placeholder secrets
 # before deploying to real environments.
+# NOTE: controller-overhaul 只消费 paths.*（global/pathProfiles/pathRules）；下面的 legacy pathRules 字段仅为兼容文档占位，实际会被忽略。
 apiToken: "replace-with-controller-api-token" # Required Bearer token protecting all controller HTTP APIs; keep non-empty
 bootstrapVersion: "bootstrap-2025-11-25" # Version string echoed in /bootstrap responses for cache invalidation; bump to force refresh
 rulesVersion: "decision-2025-11-25" # Version tag for /decision payloads; bump to invalidate decision cache
@@ -46,7 +47,7 @@ envs:
       ipv4Only: false # Force IPv4-only traffic handling on landing; default=false
       workerAddresses:
         - "https://download-staging.example.com" # Download worker endpoints for issued tickets; non-empty list in prod
-      pathRules: # Deprecated by paths.* below; kept empty to avoid legacy mixing
+      pathRules: # Ignored by controller-overhaul; kept only as legacy placeholder (controller 仅看 paths.*)
         blacklist: []
         whitelist: []
         except: []
@@ -235,7 +236,7 @@ envs:
           cleanupPercentage: 1 # Chance (0-100) to clean throttle table
           tableName: "THROTTLE_PROTECTION" # Table storing throttle state (must match init2.sql)
       originBindingDefault: "asn,iprange" # Default origin binding mode; allowed tokens: ip|iprange|country|continent|region|city|asn (comma-separated)
-      pathRules: # Deprecated by paths.* below; kept empty to avoid legacy mixing
+      pathRules: # Ignored by controller-overhaul; kept only as legacy placeholder (controller 仅看 paths.*)
         blacklist: []
         whitelist: []
         except: []
@@ -403,7 +404,7 @@ envs:
       ipv4Only: false
       workerAddresses:
         - "https://download.example.com"
-      pathRules: # Deprecated by paths.* below; kept empty to avoid legacy mixing
+      pathRules: # Ignored by controller-overhaul; kept only as legacy placeholder (controller 仅看 paths.*)
         blacklist: []
         whitelist: []
         except: []
@@ -564,7 +565,7 @@ envs:
           cleanupPercentage: 1
           tableName: "THROTTLE_PROTECTION"
       originBindingDefault: "asn,iprange" # Default origin binding mode; allowed tokens: ip|iprange|country|continent|region|city|asn
-      pathRules: # Deprecated by paths.* below; kept empty to avoid legacy mixing
+      pathRules: # Ignored by controller-overhaul; kept only as legacy placeholder (controller 仅看 paths.*)
         blacklist: []
         whitelist: []
         except: []

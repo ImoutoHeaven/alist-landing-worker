@@ -120,8 +120,8 @@ type PathGlobal struct {
 // PathConfig groups profiles, rules, and global defaults.
 type PathConfig struct {
 	Global   PathGlobal    `yaml:"global" json:"global"`
-	Profiles []PathProfile `yaml:"profiles" json:"pathProfiles"`
-	Rules    []PathRule    `yaml:"rules" json:"pathRules"`
+	Profiles []PathProfile `yaml:"pathProfiles" json:"pathProfiles"`
+	Rules    []PathRule    `yaml:"pathRules" json:"pathRules"`
 }
 
 // CommonConfig holds shared upstream and auth settings.
@@ -753,6 +753,13 @@ func (l *LandingConfig) ensureDefaults(envName string) error {
 		return fmt.Errorf("landing.pageSecret is required for env %s", envName)
 	}
 
+	if len(l.Paths.Profiles) == 0 {
+		return fmt.Errorf("landing.paths.profiles must not be empty for env %s", envName)
+	}
+	if len(l.Paths.Rules) == 0 {
+		return fmt.Errorf("landing.paths.rules must not be empty for env %s", envName)
+	}
+
 	if l.Turnstile.TokenTTLSeconds <= 0 {
 		l.Turnstile.TokenTTLSeconds = 600
 	}
@@ -949,6 +956,13 @@ func (a *LandingAdditionalConfig) ensureDefaults() {
 func (d *DownloadConfig) ensureDefaults(common CommonConfig, envName string) error {
 	if d.Address == "" {
 		return fmt.Errorf("download.address is required for env %s", envName)
+	}
+
+	if len(d.Paths.Profiles) == 0 {
+		return fmt.Errorf("download.paths.profiles must not be empty for env %s", envName)
+	}
+	if len(d.Paths.Rules) == 0 {
+		return fmt.Errorf("download.paths.rules must not be empty for env %s", envName)
 	}
 
 	if err := d.DB.ensureDefaults(envName); err != nil {
@@ -1527,22 +1541,15 @@ func generateLandingPathConfig(cfg LandingConfig) (PathGlobal, []PathProfile, []
 }
 
 // BuildPathSet returns global defaults, profiles, and rules for the given role.
-// If explicit paths.* config is present, it takes precedence; otherwise legacy
-// pathRules will be converted into profiles/rules to keep behavior compatible.
+// Only paths.* is honored; legacy pathRules are ignored to avoid hybrid behavior.
 func BuildPathSet(envCfg EnvConfig, role string) (PathGlobal, []PathProfile, []PathRule) {
 	switch role {
 	case "landing":
-		if len(envCfg.Landing.Paths.Profiles) > 0 || len(envCfg.Landing.Paths.Rules) > 0 {
-			global := ensurePathGlobal(envCfg.Landing.Paths.Global, envCfg.Landing.Paths.Profiles)
-			return global, envCfg.Landing.Paths.Profiles, envCfg.Landing.Paths.Rules
-		}
-		return generateLandingPathConfig(envCfg.Landing)
+		global := ensurePathGlobal(envCfg.Landing.Paths.Global, envCfg.Landing.Paths.Profiles)
+		return global, envCfg.Landing.Paths.Profiles, envCfg.Landing.Paths.Rules
 	case "download":
-		if len(envCfg.Download.Paths.Profiles) > 0 || len(envCfg.Download.Paths.Rules) > 0 {
-			global := ensurePathGlobal(envCfg.Download.Paths.Global, envCfg.Download.Paths.Profiles)
-			return global, envCfg.Download.Paths.Profiles, envCfg.Download.Paths.Rules
-		}
-		return generateDownloadPathConfig(envCfg.Download)
+		global := ensurePathGlobal(envCfg.Download.Paths.Global, envCfg.Download.Paths.Profiles)
+		return global, envCfg.Download.Paths.Profiles, envCfg.Download.Paths.Rules
 	default:
 		return PathGlobal{}, nil, nil
 	}
