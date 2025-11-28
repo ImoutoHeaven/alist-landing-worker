@@ -2203,14 +2203,6 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
 
   const clientIP = extractClientIP(request);
 
-  // Use the actual target path for controller decision instead of /info.
-  const normalizedTargetPath = decodedPath.startsWith('/') ? decodedPath : `/${decodedPath}`;
-  const controllerStateForInfo = await fetchControllerState(request, env, { filepathOverride: normalizedTargetPath });
-  if (!controllerStateForInfo || !controllerStateForInfo.bootstrap || !controllerStateForInfo.decision) {
-    return respondJson(origin, { code: 503, message: 'controller state unavailable' }, 503);
-  }
-  ctx.controllerState = controllerStateForInfo;
-
   if (config.enableCfRatelimiter) {
     try {
       const cfResult = await checkCfRatelimit(
@@ -4027,9 +4019,30 @@ export default {
 
       const isInfoPath = pathname === '/info';
 
+      if (isInfoPath && request.method !== 'GET') {
+        const origin = request.headers.get('origin') || '*';
+        return respondJson(origin, { code: 405, message: 'method not allowed' }, 405);
+      }
+
+      let filepathOverride = null;
+      if (isInfoPath) {
+        const rawPath = url.searchParams.get('path');
+        if (!rawPath) {
+          const origin = request.headers.get('origin') || '*';
+          return respondJson(origin, { code: 400, message: 'path is required' }, 400);
+        }
+        try {
+          const decodedPath = decodeURIComponent(rawPath);
+          filepathOverride = decodedPath.startsWith('/') ? decodedPath : `/${decodedPath}`;
+        } catch {
+          const origin = request.headers.get('origin') || '*';
+          return respondJson(origin, { code: 400, message: 'invalid path encoding' }, 400);
+        }
+      }
+
       let controllerState = null;
       try {
-        controllerState = await fetchControllerState(request, env);
+        controllerState = await fetchControllerState(request, env, filepathOverride ? { filepathOverride } : undefined);
       } catch (error) {
         console.error('[controller] state fetch error:', error instanceof Error ? error.message : String(error));
       }
@@ -4048,10 +4061,6 @@ export default {
       if (isInfoPath) {
         const ipv4Error = ensureIPv4(request, config.ipv4Only);
         if (ipv4Error) return ipv4Error;
-        if (request.method !== 'GET') {
-          const origin = request.headers.get('origin') || '*';
-          return respondJson(origin, { code: 405, message: 'method not allowed' }, 405);
-        }
         return handleInfo(request, env, config, rateLimiter, ctx);
       }
 
