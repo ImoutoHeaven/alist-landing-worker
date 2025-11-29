@@ -620,9 +620,7 @@ func (e *EnvConfig) validate(envName string) error {
 		e.Common.SignSecret = e.Common.TokenHMACKey
 	}
 
-	if e.Download.OriginBindingDefault == "" {
-		return fmt.Errorf("download.originBindingDefault is required for env %s", envName)
-	}
+	e.Download.OriginBindingDefault = strings.TrimSpace(e.Download.OriginBindingDefault)
 
 	if len(e.Landing.Captcha.DefaultCombo) == 0 {
 		e.Landing.Captcha.DefaultCombo = []string{"verify-altcha"}

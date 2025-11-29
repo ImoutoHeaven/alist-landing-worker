@@ -235,7 +235,7 @@ envs:
           protectHttpCodes: [429, 499, 500, 502, 503, 504] # Status codes considered errors; list of ints
           cleanupPercentage: 1 # Chance (0-100) to clean throttle table
           tableName: "THROTTLE_PROTECTION" # Table storing throttle state (must match init2.sql)
-      originBindingDefault: "asn,iprange" # Default origin binding mode; allowed tokens: ip|iprange|country|continent|region|city|asn (comma-separated)
+      originBindingDefault: "asn,iprange" # Default origin binding mode; allowed tokens: ip|iprange|country|continent|region|city|asn (comma-separated); empty string disables origin binding (no origin snapshot check)
       pathRules: # Ignored by controller-overhaul; kept only as legacy placeholder (controller 仅看 paths.*)
         blacklist: []
         whitelist: []
@@ -564,7 +564,7 @@ envs:
           protectHttpCodes: [429, 499, 500, 502, 503, 504]
           cleanupPercentage: 1
           tableName: "THROTTLE_PROTECTION"
-      originBindingDefault: "asn,iprange" # Default origin binding mode; allowed tokens: ip|iprange|country|continent|region|city|asn
+      originBindingDefault: "asn,iprange" # Default origin binding mode; allowed tokens: ip|iprange|country|continent|region|city|asn; empty string disables origin binding (no origin snapshot check)
       pathRules: # Ignored by controller-overhaul; kept only as legacy placeholder (controller 仅看 paths.*)
         blacklist: []
         whitelist: []
