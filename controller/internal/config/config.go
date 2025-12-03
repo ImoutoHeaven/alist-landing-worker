@@ -80,6 +80,10 @@ const (
 	defaultSlotHandlerReleaseWaiter = "download_release_fq_waiter"
 	defaultSlotHandlerTryAcquire    = "download_try_acquire_slot"
 	defaultSlotHandlerReleaseSlot   = "download_release_slot"
+	defaultWeightedHotPendingFactor = 4
+	defaultWeightedHotPendingMin    = 16
+	defaultWeightedBaseWeight       = 1.0
+	defaultWeightedPerWait          = 1.0
 	defaultControllerListenAddr     = ":8080"
 )
 
@@ -484,22 +488,34 @@ type SlotHandlerFairQueueCleanupConfig struct {
 
 // SlotHandlerFairQueueConfig matches slot-handler fair queue tuning.
 type SlotHandlerFairQueueConfig struct {
-	MaxWaitMs                  int64                             `yaml:"maxWaitMs" json:"maxWaitMs"`
-	PollIntervalMs             int64                             `yaml:"pollIntervalMs" json:"pollIntervalMs"`
-	PollWindowMs               int64                             `yaml:"pollWindowMs" json:"pollWindowMs"`
-	MinSlotHoldMs              int64                             `yaml:"minSlotHoldMs" json:"minSlotHoldMs"`
-	SmoothReleaseIntervalMs    *int64                            `yaml:"smoothReleaseIntervalMs" json:"smoothReleaseIntervalMs,omitempty"`
-	SessionIdleSeconds         int                               `yaml:"sessionIdleSeconds" json:"sessionIdleSeconds"`
-	MaxSlotPerHost             int                               `yaml:"maxSlotPerHost" json:"maxSlotPerHost"`
-	MaxSlotPerIP               int                               `yaml:"maxSlotPerIp" json:"maxSlotPerIp"`
-	MaxWaitersPerIP            int                               `yaml:"maxWaitersPerIp" json:"maxWaitersPerIp"`
-	MaxWaitersPerHost          int                               `yaml:"maxWaitersPerHost" json:"maxWaitersPerHost"`
-	ZombieTimeoutSeconds       int                               `yaml:"zombieTimeoutSeconds" json:"zombieTimeoutSeconds"`
-	IPCooldownSeconds          int                               `yaml:"ipCooldownSeconds" json:"ipCooldownSeconds"`
-	RPC                        SlotHandlerRPCConfig              `yaml:"rpc" json:"rpc"`
-	Cleanup                    SlotHandlerFairQueueCleanupConfig `yaml:"cleanup" json:"cleanup"`
-	DefaultGrantedCleanupDelay int                               `yaml:"defaultGrantedCleanupDelay" json:"defaultGrantedCleanupDelay"`
-	maxWaitersPerHostSet       bool                              `yaml:"-" json:"-"`
+	MaxWaitMs                  int64                              `yaml:"maxWaitMs" json:"maxWaitMs"`
+	PollIntervalMs             int64                              `yaml:"pollIntervalMs" json:"pollIntervalMs"`
+	PollWindowMs               int64                              `yaml:"pollWindowMs" json:"pollWindowMs"`
+	MinSlotHoldMs              int64                              `yaml:"minSlotHoldMs" json:"minSlotHoldMs"`
+	SmoothReleaseIntervalMs    *int64                             `yaml:"smoothReleaseIntervalMs" json:"smoothReleaseIntervalMs,omitempty"`
+	SessionIdleSeconds         int                                `yaml:"sessionIdleSeconds" json:"sessionIdleSeconds"`
+	MaxSlotPerHost             int                                `yaml:"maxSlotPerHost" json:"maxSlotPerHost"`
+	MaxSlotPerIP               int                                `yaml:"maxSlotPerIp" json:"maxSlotPerIp"`
+	MaxWaitersPerIP            int                                `yaml:"maxWaitersPerIp" json:"maxWaitersPerIp"`
+	MaxWaitersPerHost          int                                `yaml:"maxWaitersPerHost" json:"maxWaitersPerHost"`
+	ZombieTimeoutSeconds       int                                `yaml:"zombieTimeoutSeconds" json:"zombieTimeoutSeconds"`
+	IPCooldownSeconds          int                                `yaml:"ipCooldownSeconds" json:"ipCooldownSeconds"`
+	WeightedScheduler          SlotHandlerWeightedSchedulerConfig `yaml:"weightedScheduler" json:"weightedScheduler"`
+	RPC                        SlotHandlerRPCConfig               `yaml:"rpc" json:"rpc"`
+	Cleanup                    SlotHandlerFairQueueCleanupConfig  `yaml:"cleanup" json:"cleanup"`
+	DefaultGrantedCleanupDelay int                                `yaml:"defaultGrantedCleanupDelay" json:"defaultGrantedCleanupDelay"`
+	maxWaitersPerHostSet       bool                               `yaml:"-" json:"-"`
+}
+
+type SlotHandlerWeightedSchedulerConfig struct {
+	Enabled           bool    `yaml:"enabled" json:"enabled"`
+	HotPendingFactor  int     `yaml:"hotPendingFactor" json:"hotPendingFactor"`
+	HotPendingMin     int     `yaml:"hotPendingMin" json:"hotPendingMin"`
+	ColdAvgWaitMs     int64   `yaml:"coldAvgWaitMs" json:"coldAvgWaitMs"`
+	HotAvgWaitMs      int64   `yaml:"hotAvgWaitMs" json:"hotAvgWaitMs"`
+	MaxProbesPerCycle int     `yaml:"maxProbesPerCycle" json:"maxProbesPerCycle"`
+	BaseWeight        float64 `yaml:"baseWeight" json:"baseWeight"`
+	WeightPerWait     float64 `yaml:"weightPerWait" json:"weightPerWait"`
 }
 
 // SlotHandlerConfig is the slot-handler bootstrap payload.
@@ -1268,6 +1284,8 @@ func (f *SlotHandlerFairQueueConfig) ensureDefaults() error {
 		f.DefaultGrantedCleanupDelay = defaultSlotHandlerCleanupDelay
 	}
 
+	f.WeightedScheduler.ensureDefaults(*f)
+
 	if f.RPC.ThrottleCheckFunc == "" {
 		f.RPC.ThrottleCheckFunc = defaultSlotHandlerThrottleFunc
 	}
@@ -1286,6 +1304,42 @@ func (f *SlotHandlerFairQueueConfig) ensureDefaults() error {
 
 	f.Cleanup.ensureDefaults()
 	return nil
+}
+
+func (w *SlotHandlerWeightedSchedulerConfig) ensureDefaults(f SlotHandlerFairQueueConfig) {
+	if w.HotPendingFactor <= 0 {
+		w.HotPendingFactor = defaultWeightedHotPendingFactor
+	}
+	if w.HotPendingMin <= 0 {
+		w.HotPendingMin = defaultWeightedHotPendingMin
+	}
+	pollMs := f.PollIntervalMs
+	if pollMs <= 0 {
+		pollMs = defaultSlotHandlerPollInterval
+	}
+	if w.ColdAvgWaitMs <= 0 {
+		w.ColdAvgWaitMs = pollMs
+	}
+	if w.HotAvgWaitMs <= 0 {
+		hold := f.MinSlotHoldMs
+		if hold < 0 {
+			hold = 0
+		}
+		w.HotAvgWaitMs = 3*pollMs + hold
+	}
+	if w.MaxProbesPerCycle <= 0 {
+		maxProbes := f.MaxSlotPerHost
+		if maxProbes <= 0 {
+			maxProbes = defaultSlotHandlerMaxSlotHost
+		}
+		w.MaxProbesPerCycle = maxProbes
+	}
+	if w.BaseWeight <= 0 {
+		w.BaseWeight = defaultWeightedBaseWeight
+	}
+	if w.WeightPerWait <= 0 {
+		w.WeightPerWait = defaultWeightedPerWait
+	}
 }
 
 func (b *SlotHandlerBackendConfig) ensureDefaults() error {
