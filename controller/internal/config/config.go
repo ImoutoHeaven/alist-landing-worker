@@ -70,6 +70,7 @@ const (
 	defaultSlotHandlerMaxSlotHost   = 5
 	defaultSlotHandlerMaxSlotIP     = 1
 	defaultSlotHandlerMaxWaitHost   = 50
+	defaultSlotHandlerGlobalWaiters = 500
 	defaultSlotHandlerSessionIdle   = 90
 	defaultSlotHandlerZombieTimeout = 30
 	defaultSlotHandlerCleanupInt    = 1800
@@ -493,6 +494,7 @@ type SlotHandlerFairQueueConfig struct {
 	PollWindowMs               int64                              `yaml:"pollWindowMs" json:"pollWindowMs"`
 	MinSlotHoldMs              int64                              `yaml:"minSlotHoldMs" json:"minSlotHoldMs"`
 	SmoothReleaseIntervalMs    *int64                             `yaml:"smoothReleaseIntervalMs" json:"smoothReleaseIntervalMs,omitempty"`
+	GlobalMaxWaiters           int                                `yaml:"globalMaxWaiters" json:"globalMaxWaiters"`
 	SessionIdleSeconds         int                                `yaml:"sessionIdleSeconds" json:"sessionIdleSeconds"`
 	MaxSlotPerHost             int                                `yaml:"maxSlotPerHost" json:"maxSlotPerHost"`
 	MaxSlotPerIP               int                                `yaml:"maxSlotPerIp" json:"maxSlotPerIp"`
@@ -1255,6 +1257,9 @@ func (f *SlotHandlerFairQueueConfig) ensureDefaults() error {
 	}
 	if f.PollWindowMs <= 0 {
 		f.PollWindowMs = defaultSlotHandlerPollWindow
+	}
+	if f.GlobalMaxWaiters <= 0 {
+		f.GlobalMaxWaiters = defaultSlotHandlerGlobalWaiters
 	}
 	if f.MinSlotHoldMs < 0 {
 		f.MinSlotHoldMs = 0

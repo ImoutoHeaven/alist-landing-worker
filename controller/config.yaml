@@ -344,6 +344,7 @@ envs:
         pollWindowMs: 6000 # Poll window length; ms >0
         minSlotHoldMs: 800 # Minimum slot hold duration before release; ms >0
         smoothReleaseIntervalMs: null # Interval for smooth release; null disables smoothing
+        globalMaxWaiters: 500 # Max pending sessions accepted by slot-handler; <=0 uses default
         sessionIdleSeconds: 90 # Session idle timeout; seconds >=0
         maxSlotPerHost: 5 # Slot cap per host; >=0
         maxSlotPerIp: 1 # Slot cap per IP; >=0
