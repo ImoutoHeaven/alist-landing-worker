@@ -351,6 +351,15 @@ envs:
         maxWaitersPerHost: 50 # Max queued requests per host; >=0
         zombieTimeoutSeconds: 30 # Timeout for zombie sessions; seconds >=0
         ipCooldownSeconds: 0 # Cooldown for IP after release; seconds >=0
+        weightedScheduler:
+          enabled: false # Toggle weighted scheduler; false keeps legacy behavior
+          hotPendingFactor: 4 # hotspot pending threshold multiplier vs maxSlotPerHost
+          hotPendingMin: 16 # minimum pending to consider a host hot
+          coldAvgWaitMs: 500 # avg wait (ms) below which host is treated cold
+          hotAvgWaitMs: 2300 # avg wait (ms) above which host is hot (≈3*pollInterval+minSlotHold)
+          maxProbesPerCycle: 5 # max TryAcquire attempts per poll cycle per host
+          baseWeight: 1.0 # base weight for weighted round-robin
+          weightPerWait: 1.0 # weight increment per failed TryAcquire
         rpc:
           throttleCheckFunc: "download_check_throttle_protection" # RPC name to check throttle
           registerWaiterFunc: "download_register_fq_waiter" # RPC name to register waiter
@@ -654,6 +663,15 @@ envs:
         maxWaitersPerHost: 50
         zombieTimeoutSeconds: 30
         ipCooldownSeconds: 0
+        weightedScheduler:
+          enabled: false # Toggle weighted scheduler; false keeps legacy behavior
+          hotPendingFactor: 4 # hotspot pending threshold multiplier vs maxSlotPerHost
+          hotPendingMin: 16 # minimum pending to consider a host hot
+          coldAvgWaitMs: 500 # avg wait (ms) below which host is treated cold
+          hotAvgWaitMs: 2300 # avg wait (ms) above which host is hot (≈3*pollInterval+minSlotHold)
+          maxProbesPerCycle: 5 # max TryAcquire attempts per poll cycle per host
+          baseWeight: 1.0 # base weight for weighted round-robin
+          weightPerWait: 1.0 # weight increment per failed TryAcquire
         rpc:
           throttleCheckFunc: "download_check_throttle_protection"
           registerWaiterFunc: "download_register_fq_waiter"
