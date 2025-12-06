@@ -2844,14 +2844,18 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
     const powVerify = await verifyPowdet(config, payloadChallenge, payloadNonce);
     if (!powVerify.ok) {
       const message = powVerify.message || 'powdet verification failed';
-      if (powdetVerifyFailKey) {
+      const status = Number(powVerify.status);
+      const isBusinessFailure = Number.isFinite(status) && status >= 400 && status < 500;
+      if (isBusinessFailure && powdetVerifyFailKey) {
         const ttlSeconds = 60;
         const now = nowMs();
         lruPut(POWDET_VERIFY_FAIL_LRU, powdetVerifyFailKey, {
           untilMs: now + ttlSeconds * 1000,
         });
       }
-      await slowFailDelay();
+      if (isBusinessFailure) {
+        await slowFailDelay();
+      }
       return respondJson(origin, { code: 463, message }, 403);
     }
   }
