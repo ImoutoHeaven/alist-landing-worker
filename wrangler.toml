@@ -21,25 +21,25 @@ persist = true
 # - ENABLE_CF_RATELIMITER / CF_RATELIMITER_BINDING（可选）
 # 验证链/crypt/限流/路径策略均由 controller.common / landing 下发，勿在 wrangler 配置策略 env。
 #
-# .dev.vars 示例：
-# ENV=staging
-# ROLE=landing
-# INSTANCE_ID=landing-dev-1
-# APP_NAME=alist-landing-worker
-# APP_VERSION=dev
-# CONTROLLER_URL=https://controller.example.com
-# CONTROLLER_API_PREFIX=/api/v0
-# CONTROLLER_API_TOKEN=replace-with-controller-token
-# BOOTSTRAP_CACHE_MODE=d1
-# METRICS_MODE=do
-# CACHE_D1=CACHE_D1
-# INIT_TABLES=false
-# BOOTSTRAP_DO=BootstrapDO
-# METRICS_DO=MetricsDO
-# BOOTSTRAP_KV=BOOTSTRAP_KV
-# INTERNAL_API_TOKEN=replace-with-internal-token
-# ENABLE_CF_RATELIMITER=false
-# CF_RATELIMITER_BINDING=CF_RATE_LIMITER
+# .dev.vars 示例（注意 TOML 语法需要用双引号包裹字符串）：
+# ENV="staging"
+# ROLE="landing"
+# INSTANCE_ID="landing-dev-1"
+# APP_NAME="alist-landing-worker"
+# APP_VERSION="dev"
+# CONTROLLER_URL="https://controller.example.com"
+# CONTROLLER_API_PREFIX="/api/v0"
+# CONTROLLER_API_TOKEN="replace-with-controller-token"
+# BOOTSTRAP_CACHE_MODE="d1"
+# METRICS_MODE="do"
+# CACHE_D1="CACHE_D1"
+# INIT_TABLES="false"
+# BOOTSTRAP_DO="BootstrapDO"
+# METRICS_DO="MetricsDO"
+# BOOTSTRAP_KV="BOOTSTRAP_KV"
+# INTERNAL_API_TOKEN="replace-with-internal-token"
+# ENABLE_CF_RATELIMITER="false"
+# CF_RATELIMITER_BINDING="CF_RATE_LIMITER"
 # 如需启用 CF 原生限流，请配置 [[rate_limit]] binding 名称与 CF_RATELIMITER_BINDING 一致。
 
 # Optional: D1 cache binding example

@@ -31,30 +31,31 @@ npm run build
 
 ### 1.3 Minimal `.dev.vars`（controller-overhaul 模式）
 
-在项目根目录创建 `.dev.vars`（仅包含基础接入，所有策略与 download worker 列表由 controller 配置下发）：
+在项目根目录创建 `.dev.vars`（仅包含基础接入，所有策略与 download worker 列表由 controller 配置下发）。  
+注意：`.dev.vars` 使用的是 TOML 语法，字符串值必须用双引号包裹：
 
 ```bash
-ENV=staging
-ROLE=landing
-INSTANCE_ID=landing-dev-1
-APP_NAME=alist-landing-worker
-APP_VERSION=dev
+ENV="staging"
+ROLE="landing"
+INSTANCE_ID="landing-dev-1"
+APP_NAME="alist-landing-worker"
+APP_VERSION="dev"
 
-CONTROLLER_URL=https://controller.example.com
-CONTROLLER_API_PREFIX=/api/v0
-CONTROLLER_API_TOKEN=replace-with-controller-token
+CONTROLLER_URL="https://controller.example.com"
+CONTROLLER_API_PREFIX="/api/v0"
+CONTROLLER_API_TOKEN="replace-with-controller-token"
 
-BOOTSTRAP_CACHE_MODE=d1
-METRICS_MODE=do
-CACHE_D1=CACHE_D1
-INIT_TABLES=false
-BOOTSTRAP_DO=BootstrapDO
-METRICS_DO=MetricsDO
-BOOTSTRAP_KV=BOOTSTRAP_KV
+BOOTSTRAP_CACHE_MODE="d1"
+METRICS_MODE="do"
+CACHE_D1="CACHE_D1"
+INIT_TABLES="false"
+BOOTSTRAP_DO="BootstrapDO"
+METRICS_DO="MetricsDO"
+BOOTSTRAP_KV="BOOTSTRAP_KV"
 
-INTERNAL_API_TOKEN=replace-with-internal-token
-ENABLE_CF_RATELIMITER=false
-CF_RATELIMITER_BINDING=CF_RATE_LIMITER
+INTERNAL_API_TOKEN="replace-with-internal-token"
+ENABLE_CF_RATELIMITER="false"
+CF_RATELIMITER_BINDING="CF_RATE_LIMITER"
 ```
 
 说明：
