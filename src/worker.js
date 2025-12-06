@@ -66,6 +66,95 @@ const ALTCHA_DEFAULT_ALGORITHM = 'SHA-256';
 const ALTCHA_ALGORITHM_POOL = ['SHA-256', 'SHA-384', 'SHA-512'];
 const POWDET_DIFFICULTY_TABLE = 'POWDET_DIFFICULTY_STATE';
 const POWDET_DEFAULT_TABLE = 'POW_CHALLENGE_TICKET';
+
+// Unified slow-fail delay for fail-fast paths
+const SLOW_FAIL_DELAY_MS = 5000;
+const slowFailDelay = async () => {
+  if (SLOW_FAIL_DELAY_MS > 0) {
+    await new Promise((resolve) => setTimeout(resolve, SLOW_FAIL_DELAY_MS));
+  }
+};
+
+const nowMs = () => Date.now();
+
+const normalizePositiveSeconds = (value, fallback = 0) => {
+  const num = Number(value);
+  if (Number.isFinite(num) && num > 0) return num;
+  const fb = Number(fallback);
+  return Number.isFinite(fb) && fb > 0 ? fb : 0;
+};
+
+// Rate limit: ipSubnet -> untilMs, TTL cleanup on read
+const RL_IP_RANGE_STATE = new Map();
+
+function markIpRangeRateLimited(ipSubnet, retryAfterSeconds) {
+  const key = typeof ipSubnet === 'string' ? ipSubnet.trim() : '';
+  if (!key) return;
+  const sec = normalizePositiveSeconds(retryAfterSeconds, 0);
+  if (!sec) return;
+  const until = nowMs() + sec * 1000;
+  const prev = RL_IP_RANGE_STATE.get(key);
+  if (!prev || until > prev.untilMs) {
+    RL_IP_RANGE_STATE.set(key, { untilMs: until });
+  }
+}
+
+function getIpRangeRateLimitRemaining(ipSubnet, now = nowMs()) {
+  const key = typeof ipSubnet === 'string' ? ipSubnet.trim() : '';
+  if (!key) return 0;
+  const entry = RL_IP_RANGE_STATE.get(key);
+  if (!entry || !entry.untilMs || entry.untilMs <= now) {
+    if (entry && entry.untilMs && entry.untilMs <= now) {
+      RL_IP_RANGE_STATE.delete(key);
+    }
+    return 0;
+  }
+  return Math.ceil((entry.untilMs - now) / 1000);
+}
+
+const createLruCache = (capacity) => ({
+  capacity,
+  entries: new Map(),
+});
+
+function lruGet(cache, key, now = nowMs()) {
+  if (!cache || !key) return null;
+  const { entries } = cache;
+  if (!entries.has(key)) return null;
+  const value = entries.get(key);
+  if (!value || !value.untilMs || value.untilMs <= now) {
+    entries.delete(key);
+    return null;
+  }
+  entries.delete(key);
+  entries.set(key, value);
+  return value;
+}
+
+function lruPut(cache, key, value) {
+  if (!cache || !key || !value) return;
+  const { capacity, entries } = cache;
+  if (entries.has(key)) {
+    entries.delete(key);
+    entries.set(key, value);
+    return;
+  }
+  if (entries.size >= capacity) {
+    const firstKey = entries.keys().next().value;
+    if (firstKey !== undefined) {
+      entries.delete(firstKey);
+    }
+  }
+  entries.set(key, value);
+}
+
+const RL_IP_FILE_LRU = createLruCache(512); // `${ipSubnet}|${filepathHash}`
+const ALTCHA_BLOCK_LRU = createLruCache(256); // ipRange
+const POWDET_BLOCK_LRU = createLruCache(256); // ipRange
+const ALTCHA_TOKEN_REPLAY_LRU = createLruCache(512); // altchaTokenHash
+const POWDET_REPLAY_LRU = createLruCache(512); // powdetChallengeHash
+const POWDET_VERIFY_FAIL_LRU = createLruCache(512); // `${ipRange}|${challengeHash}` or challengeHash
+
 const getNormalizedDbMode = (config) => {
   if (!config || typeof config.dbMode !== 'string') {
     return '';
@@ -2202,6 +2291,17 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
   }
 
   const clientIP = extractClientIP(request);
+  const ipSubnet = clientIP
+    ? calculateIPSubnet(clientIP, config.ipv4Suffix, config.ipv6Suffix)
+    : '';
+  let filepathHash = null;
+  if (decodedPath) {
+    try {
+      filepathHash = await sha256Hash(decodedPath);
+    } catch (error) {
+      console.error('[Path Hash] Failed to hash filepath:', error instanceof Error ? error.message : String(error));
+    }
+  }
 
   if (config.enableCfRatelimiter) {
     try {
@@ -2223,6 +2323,33 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
       const message = error instanceof Error ? error.message : String(error);
       console.error('[CF Rate Limiter] Error during check (info):', message);
       // fail-open
+    }
+  }
+
+  if (config.rateLimitEnabled && ipSubnet) {
+    const cachedIpRemaining = getIpRangeRateLimitRemaining(ipSubnet);
+    if (cachedIpRemaining > 0) {
+      await slowFailDelay();
+      return respondRateLimitExceeded(
+        origin,
+        ipSubnet,
+        config.ipSubnetLimit || 0,
+        config.windowTime,
+        cachedIpRemaining
+      );
+    }
+    if (filepathHash) {
+      const ipFileKey = `${ipSubnet}|${filepathHash}`;
+      const now = nowMs();
+      const cachedIpFile = lruGet(RL_IP_FILE_LRU, ipFileKey, now);
+      if (cachedIpFile && cachedIpFile.untilMs && cachedIpFile.untilMs > now) {
+        const remaining = Math.ceil((cachedIpFile.untilMs - now) / 1000);
+        const windowLabel = config.fileWindowTime || config.windowTime;
+        const limitValue = config.fileLimit || 0;
+        const subject = `${ipSubnet} + ${decodedPath || '/'}`;
+        await slowFailDelay();
+        return respondRateLimitExceeded(origin, subject, limitValue, windowLabel, remaining);
+      }
     }
   }
 
@@ -2303,10 +2430,27 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
     ? await computeAltchaIpScope(clientIP, config.ipv4Suffix, config.ipv6Suffix)
     : null;
   if (needAltcha && config.altchaDynamicEnabled && altchaScope?.ipHash) {
+    if (altchaScope.ipRange) {
+      const now = nowMs();
+      const cachedBlock = lruGet(ALTCHA_BLOCK_LRU, altchaScope.ipRange, now);
+      if (cachedBlock && cachedBlock.untilMs && cachedBlock.untilMs > now) {
+        const remaining = Math.ceil((cachedBlock.untilMs - now) / 1000);
+        await slowFailDelay();
+        return respondAltchaBlocked(origin, remaining);
+      }
+    }
     const nowSeconds = Math.floor(Date.now() / 1000);
     const state = await fetchAltchaDifficultyState(config, env, altchaScope.ipHash);
     const difficultyResult = getAltchaDifficultyForClient(state, nowSeconds, config.altchaDynamic);
     if (difficultyResult.blocked) {
+      const retry = normalizePositiveSeconds(difficultyResult.retryAfterSeconds, 0);
+      if (retry > 0 && altchaScope.ipRange) {
+        const now = nowMs();
+        lruPut(ALTCHA_BLOCK_LRU, altchaScope.ipRange, {
+          untilMs: now + retry * 1000,
+        });
+      }
+      await slowFailDelay();
       return respondAltchaBlocked(origin, difficultyResult.retryAfterSeconds);
     }
   }
@@ -2316,10 +2460,27 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
     powdetScope = altchaScope || (await computeAltchaIpScope(clientIP, config.ipv4Suffix, config.ipv6Suffix));
   }
   if (needPowdet && config.powdetDynamic && powdetScope?.ipHash) {
+    if (powdetScope.ipRange) {
+      const now = nowMs();
+      const cachedBlock = lruGet(POWDET_BLOCK_LRU, powdetScope.ipRange, now);
+      if (cachedBlock && cachedBlock.untilMs && cachedBlock.untilMs > now) {
+        const remaining = Math.ceil((cachedBlock.untilMs - now) / 1000);
+        await slowFailDelay();
+        return respondJson(origin, { code: 429, message: 'powdet blocked', retryAfter: remaining }, 429);
+      }
+    }
     const nowSeconds = Math.floor(Date.now() / 1000);
     const powState = await fetchPowdetDifficultyState(config, env, powdetScope.ipHash);
     const powDifficulty = getPowdetDifficultyForClient(powState, nowSeconds, config.powdetDynamic);
     if (powDifficulty.blocked) {
+      const retry = normalizePositiveSeconds(powDifficulty.retryAfterSeconds, 0);
+      if (retry > 0 && powdetScope.ipRange) {
+        const now = nowMs();
+        lruPut(POWDET_BLOCK_LRU, powdetScope.ipRange, {
+          untilMs: now + retry * 1000,
+        });
+      }
+      await slowFailDelay();
       return respondJson(origin, { code: 429, message: 'powdet blocked', retryAfter: powDifficulty.retryAfterSeconds }, 429);
     }
   }
@@ -2458,15 +2619,6 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
   };
 
   const encodedPath = path;
-
-  let filepathHash = null;
-  if (decodedPath) {
-    try {
-      filepathHash = await sha256Hash(decodedPath);
-    } catch (error) {
-      console.error('[Turnstile Binding] Failed to hash filepath:', error instanceof Error ? error.message : String(error));
-    }
-  }
 
   let altchaTokenHash = null;
   let expectedTurnstileCData = '';
@@ -2657,12 +2809,6 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
       return respondJson(origin, { code: 463, message: 'powdet binding mismatch' }, 403);
     }
 
-    const powVerify = await verifyPowdet(config, payloadChallenge, payloadNonce);
-    if (!powVerify.ok) {
-      const message = powVerify.message || 'powdet verification failed';
-      return respondJson(origin, { code: 463, message }, 403);
-    }
-
     powdetExpireAt = payloadExpireAt;
     try {
       powdetChallengeHash = await sha256Hash(payloadChallenge);
@@ -2671,6 +2817,42 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
       if (hasDbMode) {
         return respondJson(origin, { code: 500, message: 'powdet hashing failed' }, 500);
       }
+    }
+
+    if (powdetChallengeHash) {
+      const now = nowMs();
+      const cachedReplay = lruGet(POWDET_REPLAY_LRU, powdetChallengeHash, now);
+      if (cachedReplay && cachedReplay.untilMs && cachedReplay.untilMs > now) {
+        await slowFailDelay();
+        return respondJson(origin, { code: 463, message: 'powdet challenge reused' }, 403);
+      }
+    }
+
+    let powdetVerifyFailKey = null;
+    if (powdetChallengeHash) {
+      powdetVerifyFailKey = powdetScope?.ipRange
+        ? `${powdetScope.ipRange}|${powdetChallengeHash}`
+        : powdetChallengeHash;
+      const now = nowMs();
+      const cachedVerifyFail = lruGet(POWDET_VERIFY_FAIL_LRU, powdetVerifyFailKey, now);
+      if (cachedVerifyFail && cachedVerifyFail.untilMs && cachedVerifyFail.untilMs > now) {
+        await slowFailDelay();
+        return respondJson(origin, { code: 463, message: 'powdet verification failed' }, 403);
+      }
+    }
+
+    const powVerify = await verifyPowdet(config, payloadChallenge, payloadNonce);
+    if (!powVerify.ok) {
+      const message = powVerify.message || 'powdet verification failed';
+      if (powdetVerifyFailKey) {
+        const ttlSeconds = 60;
+        const now = nowMs();
+        lruPut(POWDET_VERIFY_FAIL_LRU, powdetVerifyFailKey, {
+          untilMs: now + ttlSeconds * 1000,
+        });
+      }
+      await slowFailDelay();
+      return respondJson(origin, { code: 463, message }, 403);
     }
   }
 
@@ -2682,6 +2864,14 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
       console.error('[ALTCHA] Failed to compute token hash:', error instanceof Error ? error.message : String(error));
       if (hasDbMode) {
         return respondJson(origin, { code: 500, message: 'ALTCHA token hashing failed' }, 500);
+      }
+    }
+    if (altchaTokenHash) {
+      const now = nowMs();
+      const cachedReplay = lruGet(ALTCHA_TOKEN_REPLAY_LRU, altchaTokenHash, now);
+      if (cachedReplay && cachedReplay.untilMs && cachedReplay.untilMs > now) {
+        await slowFailDelay();
+        return respondJson(origin, { code: 463, message: 'ALTCHA token validation failed' }, 403);
       }
     }
   }
@@ -2842,6 +3032,21 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
             };
             const message = altchaErrorMessages[altchaResult.errorCode] || 'ALTCHA token validation failed';
             console.warn('[ALTCHA] Token rejected:', message);
+            const expiresAt = Number.isFinite(altchaResult.expiresAt) ? altchaResult.expiresAt : null;
+            const nowSeconds = Math.floor(Date.now() / 1000);
+            let ttlSeconds = 0;
+            if (expiresAt && expiresAt > nowSeconds) {
+              ttlSeconds = expiresAt - nowSeconds;
+            } else {
+              ttlSeconds = normalizePositiveSeconds(config.altchaTokenExpire, 180);
+            }
+            if (ttlSeconds > 0) {
+              const now = nowMs();
+              lruPut(ALTCHA_TOKEN_REPLAY_LRU, altchaTokenHash, {
+                untilMs: now + ttlSeconds * 1000,
+              });
+            }
+            await slowFailDelay();
             return respondJson(origin, { code: 463, message }, 403);
           }
         }
@@ -2854,6 +3059,20 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
           unifiedResult.rateLimit
         );
         if (rateLimitResponse) {
+          const now = nowMs();
+          const rl = unifiedResult.rateLimit || {};
+          const ipSubnetForBlock = rl.ipSubnet || ipSubnet || clientIP || '';
+          if (ipSubnetForBlock && rl.ipAllowed === false && rl.ipRetryAfter) {
+            markIpRangeRateLimited(ipSubnetForBlock, rl.ipRetryAfter);
+          }
+          if (ipSubnetForBlock && filepathHash && rl.fileAllowed === false && rl.fileRetryAfter) {
+            const retry = normalizePositiveSeconds(rl.fileRetryAfter, 0);
+            if (retry > 0) {
+              const key = `${ipSubnetForBlock}|${filepathHash}`;
+              lruPut(RL_IP_FILE_LRU, key, { untilMs: now + retry * 1000 });
+            }
+          }
+          await slowFailDelay();
           return rateLimitResponse;
         }
 
@@ -2865,6 +3084,22 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
         if (needPowdet) {
           const powResult = unifiedResult.powdet;
           if (!powResult || powResult.consumed === false) {
+            if (powdetChallengeHash) {
+              const now = nowMs();
+              const nowSeconds = Math.floor(now / 1000);
+              let ttlSeconds = 0;
+              if (Number.isFinite(powdetExpireAt) && powdetExpireAt > nowSeconds) {
+                ttlSeconds = powdetExpireAt - nowSeconds;
+              } else {
+                ttlSeconds = normalizePositiveSeconds(config.powdetExpireSeconds, 180);
+              }
+              if (ttlSeconds > 0) {
+                lruPut(POWDET_REPLAY_LRU, powdetChallengeHash, {
+                  untilMs: now + ttlSeconds * 1000,
+                });
+              }
+            }
+            await slowFailDelay();
             return respondJson(origin, { code: 463, message: 'powdet challenge reused' }, 403);
           }
         }
@@ -2953,6 +3188,19 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
 
       const rateLimitResponse = maybeRespondRateLimit(origin, clientIP, decodedPath, config, rateLimitResult);
       if (rateLimitResponse) {
+        const now = nowMs();
+        const ipSubnetForBlock = rateLimitResult.ipSubnet || ipSubnet || clientIP || '';
+        if (ipSubnetForBlock && rateLimitResult.ipAllowed === false && rateLimitResult.ipRetryAfter) {
+          markIpRangeRateLimited(ipSubnetForBlock, rateLimitResult.ipRetryAfter);
+        }
+        if (ipSubnetForBlock && filepathHash && rateLimitResult.fileAllowed === false && rateLimitResult.fileRetryAfter) {
+          const retry = normalizePositiveSeconds(rateLimitResult.fileRetryAfter, 0);
+          if (retry > 0) {
+            const key = `${ipSubnetForBlock}|${filepathHash}`;
+            lruPut(RL_IP_FILE_LRU, key, { untilMs: now + retry * 1000 });
+          }
+        }
+        await slowFailDelay();
         return rateLimitResponse;
       }
     }
@@ -3516,6 +3764,9 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
 
   const origin = request.headers.get('origin') || '*';
   const clientIP = extractClientIP(request);
+  const ipSubnet = clientIP
+    ? calculateIPSubnet(clientIP, config.ipv4Suffix, config.ipv6Suffix)
+    : '';
 
   const maybeEnforceCfRateLimiter = async () => {
     if (!config.enableCfRatelimiter) {
@@ -3585,6 +3836,15 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
     return respondJson(origin, { code: 400, message: 'invalid path encoding' }, 400);
   }
 
+  let filepathHash = null;
+  if (decodedPath) {
+    try {
+      filepathHash = await sha256Hash(decodedPath);
+    } catch (error) {
+      console.error('[Rate Limit] Failed to hash filepath:', error instanceof Error ? error.message : String(error));
+    }
+  }
+
   const actionTokens = landingCtx.actionTokens;
   const parsedNeeds = landingCtx.parsedNeeds;
   const { forceWebDownloader, forceClientDecrypt } = landingCtx;
@@ -3608,6 +3868,33 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
     !needWebDownloader && !needClientDecrypt &&
     (forceRedirect || (landingCtx.fastRedirect && !forceWeb && !needsVerification));
   const shouldRedirect = fastRedirectCandidate;
+
+  if (config.rateLimitEnabled && ipSubnet) {
+    const cachedIpRemaining = getIpRangeRateLimitRemaining(ipSubnet);
+    if (cachedIpRemaining > 0) {
+      await slowFailDelay();
+      return respondRateLimitExceeded(
+        origin,
+        ipSubnet,
+        config.ipSubnetLimit || 0,
+        config.windowTime,
+        cachedIpRemaining
+      );
+    }
+    if (filepathHash) {
+      const ipFileKey = `${ipSubnet}|${filepathHash}`;
+      const now = nowMs();
+      const cachedIpFile = lruGet(RL_IP_FILE_LRU, ipFileKey, now);
+      if (cachedIpFile && cachedIpFile.untilMs && cachedIpFile.untilMs > now) {
+        const remaining = Math.ceil((cachedIpFile.untilMs - now) / 1000);
+        const windowLabel = config.fileWindowTime || config.windowTime;
+        const limitValue = config.fileLimit || 0;
+        const subject = `${ipSubnet} + ${decodedPath || '/'}`;
+        await slowFailDelay();
+        return respondRateLimitExceeded(origin, subject, limitValue, windowLabel, remaining);
+      }
+    }
+  }
 
   const verifyResult = await verifySignature(config.signSecret, decodedPath, sign);
   if (verifyResult) {
@@ -3675,6 +3962,20 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
             unifiedResult.rateLimit
           );
           if (rateLimitResponse) {
+            const now = nowMs();
+            const rl = unifiedResult.rateLimit || {};
+            const ipSubnetForBlock = rl.ipSubnet || ipSubnet || clientIP || '';
+            if (ipSubnetForBlock && rl.ipAllowed === false && rl.ipRetryAfter) {
+              markIpRangeRateLimited(ipSubnetForBlock, rl.ipRetryAfter);
+            }
+            if (ipSubnetForBlock && filepathHash && rl.fileAllowed === false && rl.fileRetryAfter) {
+              const retry = normalizePositiveSeconds(rl.fileRetryAfter, 0);
+              if (retry > 0) {
+                const key = `${ipSubnetForBlock}|${filepathHash}`;
+                lruPut(RL_IP_FILE_LRU, key, { untilMs: now + retry * 1000 });
+              }
+            }
+            await slowFailDelay();
             return rateLimitResponse;
           }
 
@@ -3707,6 +4008,19 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
 
         const rateLimitResponse = maybeRespondRateLimit(origin, clientIP, decodedPath, config, rateLimitResult);
         if (rateLimitResponse) {
+          const now = nowMs();
+          const ipSubnetForBlock = rateLimitResult.ipSubnet || ipSubnet || clientIP || '';
+          if (ipSubnetForBlock && rateLimitResult.ipAllowed === false && rateLimitResult.ipRetryAfter) {
+            markIpRangeRateLimited(ipSubnetForBlock, rateLimitResult.ipRetryAfter);
+          }
+          if (ipSubnetForBlock && filepathHash && rateLimitResult.fileAllowed === false && rateLimitResult.fileRetryAfter) {
+            const retry = normalizePositiveSeconds(rateLimitResult.fileRetryAfter, 0);
+            if (retry > 0) {
+              const key = `${ipSubnetForBlock}|${filepathHash}`;
+              lruPut(RL_IP_FILE_LRU, key, { untilMs: now + retry * 1000 });
+            }
+          }
+          await slowFailDelay();
           return rateLimitResponse;
         }
       }
@@ -3798,10 +4112,27 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
   let altchaEffectiveExponent = 0;
   if (!shouldRedirect && needsAltchaChallenge) {
     if (config.altchaDynamicEnabled && config.dbMode && altchaScopeForChallenge?.ipHash) {
+      if (altchaScopeForChallenge.ipRange) {
+        const now = nowMs();
+        const cachedBlock = lruGet(ALTCHA_BLOCK_LRU, altchaScopeForChallenge.ipRange, now);
+        if (cachedBlock && cachedBlock.untilMs && cachedBlock.untilMs > now) {
+          const remaining = Math.ceil((cachedBlock.untilMs - now) / 1000);
+          await slowFailDelay();
+          return respondAltchaBlocked(origin, remaining);
+        }
+      }
       const nowSeconds = Math.floor(Date.now() / 1000);
       const state = await fetchAltchaDifficultyState(config, env, altchaScopeForChallenge.ipHash);
       const difficultyResult = getAltchaDifficultyForClient(state, nowSeconds, config.altchaDynamic);
       if (difficultyResult.blocked) {
+        const retry = normalizePositiveSeconds(difficultyResult.retryAfterSeconds, 0);
+        if (retry > 0 && altchaScopeForChallenge.ipRange) {
+          const now = nowMs();
+          lruPut(ALTCHA_BLOCK_LRU, altchaScopeForChallenge.ipRange, {
+            untilMs: now + retry * 1000,
+          });
+        }
+        await slowFailDelay();
         return respondAltchaBlocked(origin, difficultyResult.retryAfterSeconds);
       }
       altchaChallengeDifficulty = difficultyResult.difficulty;
@@ -3830,10 +4161,27 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
   let powdetDifficultyLevel = Number.isFinite(config.powdetStaticLevel) ? config.powdetStaticLevel : 12;
   if (!shouldRedirect && needsPowdetChallenge) {
     if (config.powdetDynamic && config.dbMode && powdetScopeForChallenge?.ipHash) {
+      if (powdetScopeForChallenge.ipRange) {
+        const now = nowMs();
+        const cachedBlock = lruGet(POWDET_BLOCK_LRU, powdetScopeForChallenge.ipRange, now);
+        if (cachedBlock && cachedBlock.untilMs && cachedBlock.untilMs > now) {
+          const remaining = Math.ceil((cachedBlock.untilMs - now) / 1000);
+          await slowFailDelay();
+          return respondJson(origin, { code: 429, message: 'powdet blocked', retryAfter: remaining }, 429);
+        }
+      }
       const nowSeconds = Math.floor(Date.now() / 1000);
       const powState = await fetchPowdetDifficultyState(config, env, powdetScopeForChallenge.ipHash);
       const powDifficulty = getPowdetDifficultyForClient(powState, nowSeconds, config.powdetDynamic);
       if (powDifficulty.blocked) {
+        const retry = normalizePositiveSeconds(powDifficulty.retryAfterSeconds, 0);
+        if (retry > 0 && powdetScopeForChallenge.ipRange) {
+          const now = nowMs();
+          lruPut(POWDET_BLOCK_LRU, powdetScopeForChallenge.ipRange, {
+            untilMs: now + retry * 1000,
+          });
+        }
+        await slowFailDelay();
         return respondJson(origin, { code: 429, message: 'powdet blocked', retryAfter: powDifficulty.retryAfterSeconds }, 429);
       }
       powdetDifficultyLevel = powDifficulty.difficultyLevel;
