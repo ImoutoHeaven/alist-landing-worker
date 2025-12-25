@@ -72,6 +72,11 @@ export default {
     const expected = await hmacSha256Sign(path, signMeta.expire);
     if (expected !== sign) return deny("sign mismatch");
 
-    return fetch(request);
+    const origin = await fetch(request);
+    return new Response(origin.body, {
+      status: origin.status,
+      statusText: origin.statusText,
+      headers: new Headers(origin.headers),
+    });
   },
 };
