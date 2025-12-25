@@ -89,7 +89,7 @@ Landing worker 校验 URL 中的原始 `sign`，并为 download worker 生成最
      - `filesize` – 文件大小（来自 AList 或缓存）
      - `expireTime` – 有效期时间戳
      - `idle_timeout` – download worker 侧空闲超时
-     - `encrypt` – AES-256-GCM 加密的 origin snapshot（IP + Geo + ASN）
+     - `encrypt` – AES-256-GCM 加密的 origin snapshot（IP + Geo + ASN + issuer）
      - `isCrypted` – 当前路径是否作为加密文件处理
    - 序列化后 Base64 编码为 `additionalInfo`（去掉尾部 `=`）。
    - 签名：`additionalInfoSign = HMAC-SHA256(additionalInfo, expire)`。
@@ -124,7 +124,7 @@ Download worker（例如 `simple-alist-cf-proxy`）应当：
 完整环境变量列表请参考 `wrangler.toml` 注释与 `DEPLOYMENT.md`。核心项包括：
 
 - **基础：**
-  - `TOKEN`, `SIGN_SECRET`, `controller.landing.workerAddresses`, `ALIST_ADDRESS`
+  - `TOKEN`, `SIGN_SECRET`, `controller.common.workerAddresses`, `controller.common.landingWorkerAddresses`, `ALIST_ADDRESS`
 - **安全：**
   - Turnstile：`UNDER_ATTACK`, `TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET_KEY`, `TURNSTILE_TOKEN_*`
   - ALTCHA：`ALTCHA_ENABLED`, `ALTCHA_*`, `PAGE_SECRET`

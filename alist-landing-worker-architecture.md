@@ -340,7 +340,7 @@ Landing worker 对「验证码」类验证（Turnstile、ALTCHA）做了上下�
      - `path` / `size` / `is_dir` / 名称等；
 7. 构造下载票据：
    - 选取 download worker 地址：
-    - `selectRandomWorker(controller.landing.workerAddresses)`：从 controller 下发列表中随机；
+    - `selectRandomWorker(controller.common.workerAddresses)`：从 controller 下发列表中随机；
    - 生成 download worker 需要的签名：
      - `sign`：`HMAC-SHA256(path, expire)`（download worker 的 `SIGN_CHECK`）
      - `hashSign`：`HMAC-SHA256(base64(path), expire)`（`HASH_CHECK`）
@@ -351,7 +351,7 @@ Landing worker 对「验证码」类验证（Turnstile、ALTCHA）做了上下�
        - `filesize`（来自 AList 或 size cache）
        - `expireTime`（二次用来控制 download worker 侧链接寿命）
        - `idle_timeout`（结合 `IDLE_TIMEOUT` 等，在 download worker 内做「空闲会话」判定）
-     - `encrypt` 字段：使用 AES-256-GCM 对「origin snapshot」加密（包含 IP / Geo / ASN 等）：
+     - `encrypt` 字段：使用 AES-256-GCM 对「origin snapshot」加密（包含 IP / Geo / ASN / issuer 等）：
        - 密钥由 TOKEN 派生，download worker 用同一 TOKEN 解密；
      - 对 `additionalInfo` 整体做 HMAC（`additionalInfoSign`），由 download worker 端 `ADDITION_CHECK` / `ADDITION_EXPIRETIME_CHECK` 验证。
    - 所有字段组合成最终 download URL，与 meta 一起作为 `/info` 的 JSON 返回。
@@ -454,7 +454,7 @@ Landing worker 的 DB schema 由 `init.sql` 定义，仅服务 `DB_MODE="custom-
 这里只总结与架构/模块相关的关键项，具体说明参考 `wrangler.toml` 中注释：
 
 - 基础：
-  - `TOKEN` / `SIGN_SECRET` / `controller.landing.workerAddresses` / `ALIST_ADDRESS`
+- `TOKEN` / `SIGN_SECRET` / `controller.common.workerAddresses` / `controller.common.landingWorkerAddresses` / `ALIST_ADDRESS`
 - Turnstile：
   - `UNDER_ATTACK`, `TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET_KEY`, `TURNSTILE_TOKEN_BINDING`, `TURNSTILE_TOKEN_TTL`, `TURNSTILE_TOKEN_TABLE` 等
 - ALTCHA：

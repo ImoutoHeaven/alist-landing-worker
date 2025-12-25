@@ -92,6 +92,17 @@ func boolPtr(v bool) *bool {
 	return &v
 }
 
+func normalizeAddressList(values []string) []string {
+	cleaned := make([]string, 0, len(values))
+	for _, addr := range values {
+		trimmed := strings.TrimSpace(addr)
+		if trimmed != "" {
+			cleaned = append(cleaned, trimmed)
+		}
+	}
+	return cleaned
+}
+
 // PathProfile describes a reusable action set for path matching.
 type PathProfile struct {
 	ID      string         `yaml:"id" json:"id"`
@@ -136,6 +147,8 @@ type CommonConfig struct {
 	TokenHMACKeyID string            `yaml:"tokenHmacKeyId" json:"tokenHmacKeyId"`
 	TokenHMACKey   string            `yaml:"tokenHmacKey" json:"tokenHmacKey"`
 	SignSecret     string            `yaml:"signSecret" json:"signSecret"`
+	WorkerAddresses []string         `yaml:"workerAddresses" json:"workerAddresses"`
+	LandingWorkerAddresses []string  `yaml:"landingWorkerAddresses" json:"landingWorkerAddresses"`
 }
 
 // LandingCaptchaConfig carries captcha defaults for landing.
@@ -308,7 +321,6 @@ type LandingConfig struct {
 	FastRedirect         bool                       `yaml:"fastRedirect" json:"fastRedirect"`
 	AutoRedirect         bool                       `yaml:"autoRedirect" json:"autoRedirect"`
 	IPv4Only             bool                       `yaml:"ipv4Only" json:"ipv4Only"`
-	WorkerAddresses      []string                   `yaml:"workerAddresses" json:"workerAddresses"`
 	DB                   LandingDBConfig            `yaml:"db" json:"db"`
 	Crypt                LandingCryptConfig         `yaml:"crypt" json:"crypt"`
 	WebDownloader        LandingWebDownloaderConfig `yaml:"webDownloader" json:"webDownloader"`
@@ -637,6 +649,14 @@ func (e *EnvConfig) validate(envName string) error {
 	if e.Common.SignSecret == "" {
 		e.Common.SignSecret = e.Common.TokenHMACKey
 	}
+	e.Common.WorkerAddresses = normalizeAddressList(e.Common.WorkerAddresses)
+	if len(e.Common.WorkerAddresses) == 0 {
+		return fmt.Errorf("common.workerAddresses is required for env %s", envName)
+	}
+	e.Common.LandingWorkerAddresses = normalizeAddressList(e.Common.LandingWorkerAddresses)
+	if len(e.Common.LandingWorkerAddresses) == 0 {
+		return fmt.Errorf("common.landingWorkerAddresses is required for env %s", envName)
+	}
 
 	e.Download.OriginBindingDefault = strings.TrimSpace(e.Download.OriginBindingDefault)
 
@@ -822,18 +842,6 @@ func (l *LandingConfig) ensureDefaults(envName string) error {
 	if (l.WebDownloader.Enabled || l.ClientDecryptEnabled) && strings.TrimSpace(l.Crypt.DataKey) == "" {
 		return fmt.Errorf("landing.crypt.dataKey is required for env %s when webDownloader or clientDecrypt is enabled", envName)
 	}
-
-	cleaned := make([]string, 0, len(l.WorkerAddresses))
-	for _, addr := range l.WorkerAddresses {
-		trimmed := strings.TrimSpace(addr)
-		if trimmed != "" {
-			cleaned = append(cleaned, trimmed)
-		}
-	}
-	if len(cleaned) == 0 {
-		return fmt.Errorf("landing.workerAddresses is required for env %s", envName)
-	}
-	l.WorkerAddresses = cleaned
 
 	return nil
 }

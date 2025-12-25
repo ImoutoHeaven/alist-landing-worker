@@ -7,7 +7,7 @@
 
 这里只给出实用向的部署和配置步骤。
 
-> **重要**：当前 `controller-overhaul` 分支已由 controller 统一下发策略与 download worker 列表。历史变量如 `WORKER_ADDRESS_DOWNLOAD` 不再在 wrangler/env 中配置，而是通过 `controller/config.yaml` 的 `landing.workerAddresses` 提供。下文旧版 env 示例仅供参考，实际部署请以 controller 配置为准。
+> **重要**：当前 `controller-overhaul` 分支已由 controller 统一下发策略与 download worker 列表。历史变量如 `WORKER_ADDRESS_DOWNLOAD` 不再在 wrangler/env 中配置，而是通过 `controller/config.yaml` 的 `common.workerAddresses` 提供，同时使用 `common.landingWorkerAddresses` 限定允许的 landing 域名。下文旧版 env 示例仅供参考，实际部署请以 controller 配置为准。
 
 ---
 
@@ -56,7 +56,7 @@ CF_RATELIMITER_BINDING="CF_RATE_LIMITER"
 
 说明：
 - bootstrap 缓存模式支持 direct / d1；使用 d1 时需绑定 `CACHE_D1`，`INIT_TABLES=true` 仅在开发/新环境下启用自动建表，生产推荐由迁移创建表结构；决策仅支持 direct 调用 controller。
-- download worker 列表与策略均在 `controller/config.yaml` 配置（如 `landing.workerAddresses`），wrangler/env 不再填写 `WORKER_ADDRESS_DOWNLOAD` 等策略变量。  
+- download worker 列表与策略均在 `controller/config.yaml` 配置（如 `common.workerAddresses` / `common.landingWorkerAddresses`），wrangler/env 不再填写 `WORKER_ADDRESS_DOWNLOAD` 等策略变量。  
 - 其他策略（Turnstile/ALTCHA/powdet/限流/路径等）同样由 controller 下发，保持 env 纯 infra。  
 
 ### 1.4 Local Development
@@ -93,8 +93,10 @@ npm run deploy
   - 所有签名与 origin snapshot 加密的基础密钥。  
 - `SIGN_SECRET`（可选，Secret）  
   - 若设置，则用它替代 `TOKEN` 做 HMAC；未设置时等同于 `TOKEN`。  
-- `controller.landing.workerAddresses`（必填，配置于 controller）  
+- `controller.common.workerAddresses`（必填，配置于 controller）  
   - 由 controller 下发 download worker 列表，wrangler/env 不再配置 `WORKER_ADDRESS_DOWNLOAD`。  
+- `controller.common.landingWorkerAddresses`（必填，配置于 controller）  
+  - 允许签发票据的 landing 域名/Origin 白名单。  
 - `ALIST_ADDRESS`  
   - AList API 根地址，例如 `https://alist.example.com`。  
   - 当启用 `IF_APPEND_ADDITIONAL=true`（默认）时必须配置，用于给下载链接附加过期时间。  

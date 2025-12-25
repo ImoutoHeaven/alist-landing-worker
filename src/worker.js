@@ -726,6 +726,39 @@ const hopByHopHeaders = new Set([
   'host',
 ]);
 
+const normalizeOrigin = (value) => {
+  if (typeof value !== 'string') {
+    return '';
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return '';
+  }
+  const candidate = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  try {
+    return new URL(candidate).origin;
+  } catch {
+    return '';
+  }
+};
+
+const normalizeOriginList = (values) => {
+  const normalized = [];
+  const seen = new Set();
+  if (!Array.isArray(values)) {
+    return normalized;
+  }
+  for (const value of values) {
+    const origin = normalizeOrigin(value);
+    if (!origin || seen.has(origin)) {
+      continue;
+    }
+    seen.add(origin);
+    normalized.push(origin);
+  }
+  return normalized;
+};
+
 const resolveConfig = (env = {}, bootstrap = null) => {
   const normalizeString = (value, defaultValue = '') => {
     if (value === undefined || value === null) return defaultValue;
@@ -1114,16 +1147,22 @@ const resolveConfig = (env = {}, bootstrap = null) => {
     throw new Error('controller common.alistBaseUrl is required when additional.appendAdditional is true');
   }
 
-  const workerAddressesList = Array.isArray(landingBootstrap.workerAddresses)
-    ? landingBootstrap.workerAddresses
+  const workerAddressesList = Array.isArray(commonBootstrap.workerAddresses)
+    ? commonBootstrap.workerAddresses
     : [];
-  const normalizedWorkerAddresses = workerAddressesList
-    .map((addr) => (typeof addr === 'string' ? addr.trim() : ''))
-    .filter((addr) => addr.length > 0);
+  const normalizedWorkerAddresses = normalizeOriginList(workerAddressesList);
   if (normalizedWorkerAddresses.length === 0) {
-    throw new Error('controller landing.workerAddresses is required');
+    throw new Error('controller common.workerAddresses is required');
   }
   const workerAddressesValue = normalizedWorkerAddresses.join(',');
+
+  const landingWorkerAddressesList = Array.isArray(commonBootstrap.landingWorkerAddresses)
+    ? commonBootstrap.landingWorkerAddresses
+    : [];
+  const normalizedLandingWorkerAddresses = normalizeOriginList(landingWorkerAddressesList);
+  if (normalizedLandingWorkerAddresses.length === 0) {
+    throw new Error('controller common.landingWorkerAddresses is required');
+  }
 
   if (enableCfRatelimiter) {
     const ratelimiter = env[cfRatelimiterBinding];
@@ -1154,6 +1193,7 @@ const resolveConfig = (env = {}, bootstrap = null) => {
   return {
     token,
     workerAddresses: workerAddressesValue,
+    landingWorkerAddresses: normalizedLandingWorkerAddresses,
     verifyHeader: verifyHeaders,
     verifySecret: verifySecrets,
     ipv4Only,
@@ -1798,7 +1838,7 @@ const ensureIPv4 = (request, ipv4Only) => {
 
 const selectRandomWorker = (workerAddresses) => {
   if (!workerAddresses || typeof workerAddresses !== 'string') {
-    throw new Error('controller landing.workerAddresses is not configured');
+    throw new Error('controller common.workerAddresses is not configured');
   }
   const addresses = workerAddresses
     .split(',')
@@ -1806,7 +1846,7 @@ const selectRandomWorker = (workerAddresses) => {
     .filter((addr) => addr.length > 0);
 
   if (addresses.length === 0) {
-    throw new Error('controller landing.workerAddresses contains no valid addresses');
+    throw new Error('controller common.workerAddresses contains no valid addresses');
   }
 
   const selected = addresses[Math.floor(Math.random() * addresses.length)];
@@ -2002,6 +2042,7 @@ const createAdditionalParams = async (config, request, decodedPath, clientIP, si
   if (!snapshot) {
     throw new Error('origin snapshot unavailable');
   }
+  snapshot.issuer = new URL(request.url).origin;
   const encrypt = await encryptOriginSnapshot(snapshot, config.token);
 
   const payload = JSON.stringify({
@@ -4357,14 +4398,6 @@ export default {
       const url = new URL(request.url);
       const pathname = url.pathname || '/';
 
-      // 控制面 token 校验成功时直接返回，不进入 paths/pathAction。
-      if (pathname.startsWith('/api/v0/')) {
-        const internalResponse = await handleInternalApiIfAny(request, env, ctx);
-        if (internalResponse) {
-          return internalResponse;
-        }
-      }
-
       const isInfoPath = pathname === '/info';
 
       if (isInfoPath && request.method !== 'GET') {
@@ -4405,6 +4438,20 @@ export default {
       const rateLimiter = config.rateLimitEnabled ? createRateLimiter(config.dbMode) : null;
 
       ctx.controllerState = controllerState;
+
+      const requestOrigin = url.origin;
+      if (!config.landingWorkerAddresses.includes(requestOrigin)) {
+        const origin = request.headers.get('origin') || '*';
+        return respondJson(origin, { code: 403, message: 'prohibited source' }, 403);
+      }
+
+      // 控制面 token 校验成功时直接返回，不进入 paths/pathAction。
+      if (pathname.startsWith('/api/v0/')) {
+        const internalResponse = await handleInternalApiIfAny(request, env, ctx);
+        if (internalResponse) {
+          return internalResponse;
+        }
+      }
 
       if (isInfoPath) {
         const ipv4Error = ensureIPv4(request, config.ipv4Only);
