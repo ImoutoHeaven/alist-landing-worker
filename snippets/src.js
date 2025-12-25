@@ -1,18 +1,6 @@
-// Cloudflare Snippet: pre-auth + cache for landing
+// Cloudflare Snippet: pre-auth for landing
 // Set HMAC_SECRET to common.tokenHmacKey (and keep common.signSecret aligned).
 const HMAC_SECRET = "replace-with-common-tokenHmacKey";
-const CACHE_TTL = 7 * 24 * 60 * 60;
-const MAX_CACHE_SIZE = 512 * 1024 * 1024;
-const CACHE_HOST = "cache.local";
-
-// Landing only has sign; keep these false.
-const REQUIRE_HASH_SIGN = false;
-const REQUIRE_WORKER_SIGN = false;
-
-// Optional: restrict checks to a hostname set (empty = all).
-const DOWNLOAD_HOSTS = new Set([
-  // "dl.example.com",
-]);
 
 const encoder = new TextEncoder();
 let hmacKeyPromise = null;
@@ -32,13 +20,6 @@ const getHmacKey = () => {
 
 const base64UrlEncode = (bytes) =>
   btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_");
-
-const base64EncodeUtf8 = (text) => {
-  const bytes = encoder.encode(text);
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary);
-};
 
 const normalizePath = (pathname) => {
   if (typeof pathname !== "string") return null;
@@ -88,96 +69,9 @@ export default {
     if (!signMeta) return deny("sign invalid");
     if (isExpired(signMeta.expire, nowSeconds)) return deny("sign expired");
 
-    const isDownloadHost =
-      DOWNLOAD_HOSTS.size === 0 || DOWNLOAD_HOSTS.has(url.hostname);
-    const requireHashSign = isDownloadHost && REQUIRE_HASH_SIGN;
-    const requireWorkerSign = isDownloadHost && REQUIRE_WORKER_SIGN;
+    const expected = await hmacSha256Sign(path, signMeta.expire);
+    if (expected !== sign) return deny("sign mismatch");
 
-    const hashSign = url.searchParams.get("hashSign") || "";
-    const workerSign = url.searchParams.get("workerSign") || "";
-
-    let hashMeta = null;
-    let workerMeta = null;
-
-    if (requireHashSign) {
-      hashMeta = parseSignature(hashSign);
-      if (!hashMeta) return deny("hashSign invalid");
-      if (isExpired(hashMeta.expire, nowSeconds)) return deny("hashSign expired");
-    }
-
-    if (requireWorkerSign) {
-      workerMeta = parseSignature(workerSign);
-      if (!workerMeta) return deny("workerSign invalid");
-      if (isExpired(workerMeta.expire, nowSeconds)) return deny("workerSign expired");
-    }
-
-    const workerAddr = new URL(request.url).origin;
-    const base64Path = base64EncodeUtf8(path);
-    const workerVerifyData = JSON.stringify({ path, worker_addr: workerAddr });
-
-    const tasks = [
-      hmacSha256Sign(path, signMeta.expire).then((expected) => ({ label: "sign", expected })),
-    ];
-    if (requireHashSign) {
-      tasks.push(
-        hmacSha256Sign(base64Path, hashMeta.expire).then((expected) => ({ label: "hashSign", expected }))
-      );
-    }
-    if (requireWorkerSign) {
-      tasks.push(
-        hmacSha256Sign(workerVerifyData, workerMeta.expire).then((expected) => ({ label: "workerSign", expected }))
-      );
-    }
-
-    const results = await Promise.all(tasks);
-    for (const item of results) {
-      if (item.label === "sign" && item.expected !== sign) return deny("sign mismatch");
-      if (item.label === "hashSign" && item.expected !== hashSign) return deny("hashSign mismatch");
-      if (item.label === "workerSign" && item.expected !== workerSign) return deny("workerSign mismatch");
-    }
-
-    const isGet = request.method === "GET";
-    const hasRange = request.headers.has("range");
-    if (!isGet || hasRange) {
-      return fetch(request);
-    }
-
-    const cache = caches.default;
-    const cacheUrl = new URL(request.url);
-    cacheUrl.protocol = "https:";
-    cacheUrl.username = "";
-    cacheUrl.password = "";
-    cacheUrl.hostname = CACHE_HOST;
-    cacheUrl.port = "";
-    cacheUrl.search = "";
-    cacheUrl.hash = "";
-
-    const cacheKey = new Request(cacheUrl.toString(), { method: "GET" });
-    const cached = await cache.match(cacheKey);
-    if (cached) return cached;
-
-    const origin = await fetch(request);
-    if (origin.status === 200) {
-      const contentLength = origin.headers.get("Content-Length");
-      const transferEncoding = origin.headers.get("Transfer-Encoding");
-      const size = contentLength ? Number.parseInt(contentLength, 10) : NaN;
-      const isChunked =
-        !contentLength &&
-        typeof transferEncoding === "string" &&
-        transferEncoding.toLowerCase().includes("chunked");
-
-      if (!Number.isFinite(size) || size <= MAX_CACHE_SIZE) {
-        if (!isChunked) {
-          const toCache = origin.clone();
-          toCache.headers.set(
-            "Cache-Control",
-            `public, max-age=${CACHE_TTL}, s-maxage=${CACHE_TTL}`
-          );
-          ctx.waitUntil(cache.put(cacheKey, toCache).catch(() => {}));
-        }
-      }
-    }
-
-    return origin;
+    return fetch(request);
   },
 };
