@@ -39,6 +39,7 @@ const (
 	defaultDownloadLinkTTLSeconds   = 1800
 	defaultDownloadCleanupPercent   = 1.0
 	defaultDownloadIdleTimeout      = 0
+	defaultDownloadCacheOverrideMax = "500MB"
 	defaultRateLimitIPv4Suffix      = "/32"
 	defaultRateLimitIPv6Suffix      = "/60"
 	defaultRateLimitBlockSeconds    = 600
@@ -453,6 +454,7 @@ type DownloadConfig struct {
 	OriginBindingDefault  string                             `yaml:"originBindingDefault" json:"originBindingDefault"`
 	OverrideCacheControl  bool                               `yaml:"override-cache-control" json:"overrideCacheControl"`
 	CacheOverrideTime     string                             `yaml:"cache-override-time" json:"cacheOverrideTime"`
+	CacheOverrideMaxSize  string                             `yaml:"cache-override-max-size" json:"cacheOverrideMaxSize"`
 	PathRules             DownloadPathRules                  `yaml:"pathRules" json:"pathRules"`
 	Paths                 PathConfig                         `yaml:"paths" json:"paths"`
 	Auth                  DownloadAuthConfig                 `yaml:"auth" json:"auth"`
@@ -1029,6 +1031,65 @@ func parseCacheOverrideSeconds(value string) (int, bool) {
 	return rounded, true
 }
 
+func parseCacheOverrideMaxSizeBytes(value string) (int64, bool) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return 0, false
+	}
+
+	unit := ""
+	numberPart := trimmed
+	if len(trimmed) >= 2 {
+		lastTwo := strings.ToUpper(trimmed[len(trimmed)-2:])
+		if lastTwo == "KB" || lastTwo == "MB" || lastTwo == "GB" {
+			unit = lastTwo
+			numberPart = strings.TrimSpace(trimmed[:len(trimmed)-2])
+		}
+	}
+	if unit == "" {
+		lastOne := strings.ToUpper(trimmed[len(trimmed)-1:])
+		if lastOne == "B" {
+			unit = lastOne
+			numberPart = strings.TrimSpace(trimmed[:len(trimmed)-1])
+		}
+	}
+
+	if unit == "" || numberPart == "" {
+		return 0, false
+	}
+
+	amount, err := strconv.ParseFloat(numberPart, 64)
+	if err != nil || amount <= 0 {
+		return 0, false
+	}
+
+	multiplier := float64(1)
+	switch unit {
+	case "KB":
+		multiplier = 1024
+	case "MB":
+		multiplier = 1024 * 1024
+	case "GB":
+		multiplier = 1024 * 1024 * 1024
+	case "B":
+		multiplier = 1
+	default:
+		return 0, false
+	}
+
+	bytes := amount * multiplier
+	if bytes <= 0 {
+		return 0, false
+	}
+
+	rounded := int64(math.Round(bytes))
+	if rounded <= 0 {
+		return 0, false
+	}
+
+	return rounded, true
+}
+
 func (d *DownloadConfig) ensureDefaults(common CommonConfig, envName string) error {
 	if d.Address == "" {
 		return fmt.Errorf("download.address is required for env %s", envName)
@@ -1051,6 +1112,13 @@ func (d *DownloadConfig) ensureDefaults(common CommonConfig, envName string) err
 
 	if err := d.FairQueue.ensureDefaults(envName); err != nil {
 		return err
+	}
+
+	if strings.TrimSpace(d.CacheOverrideMaxSize) == "" {
+		d.CacheOverrideMaxSize = defaultDownloadCacheOverrideMax
+	}
+	if _, ok := parseCacheOverrideMaxSizeBytes(d.CacheOverrideMaxSize); !ok {
+		return fmt.Errorf("download.cacheOverrideMaxSize is invalid for env %s (expected <number>[B|KB|MB|GB])", envName)
 	}
 
 	if d.OverrideCacheControl {

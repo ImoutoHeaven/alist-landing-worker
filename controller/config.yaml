@@ -178,6 +178,7 @@ envs:
       address: "https://alist-staging.example.com" # Upstream AList address for download links; must be https://...; required
       override-cache-control: false # Force override upstream Cache-Control in download response; default=false
       cache-override-time: "30m" # Required when override-cache-control=true; supports <number>[s|m|h|d|w|y]
+      cache-override-max-size: "500MB" # Max file size eligible for override; supports <number>[B|KB|MB|GB]
       auth:
         signCheck: true # Enforce signature validation on generated links; default=true
         hashCheck: true # Verify hash on download requests; default=true
@@ -526,6 +527,7 @@ envs:
       address: "https://alist.example.com"
       override-cache-control: false # Force override upstream Cache-Control in download response; default=false
       cache-override-time: "30m" # Required when override-cache-control=true; supports <number>[s|m|h|d|w|y]
+      cache-override-max-size: "500MB" # Max file size eligible for override; supports <number>[B|KB|MB|GB]
       auth:
         signCheck: true
         hashCheck: true
