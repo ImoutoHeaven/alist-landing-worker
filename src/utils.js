@@ -60,45 +60,43 @@ export const parseWindowTime = (value) => {
 export const calculateIPSubnet = (ip, ipv4Suffix, ipv6Suffix) => {
   if (!ip || typeof ip !== 'string') return '';
   const trimmedIP = ip.trim();
+  if (!trimmedIP) return '';
 
-  // Check if IPv6
-  if (trimmedIP.includes(':')) {
-    // IPv6
+  let processingIP = trimmedIP;
+  const lowerIP = trimmedIP.toLowerCase();
+  if (lowerIP.startsWith('::ffff:') && lowerIP.includes('.')) {
+    processingIP = trimmedIP.substring(7);
+  }
+
+  if (processingIP.includes(':') && !processingIP.includes('.')) {
     const suffix = ipv6Suffix || '/60';
     const prefixLength = Number.parseInt(suffix.replace('/', ''), 10);
     if (Number.isNaN(prefixLength) || prefixLength < 0 || prefixLength > 128) {
-      return `${trimmedIP}${suffix}`;
+      return `${processingIP}${suffix}`;
     }
 
     try {
-      // Parse IPv6 address
-      const parts = trimmedIP.split(':');
-      const expanded = [];
-      let emptyIndex = -1;
-
-      for (let i = 0; i < parts.length; i++) {
-        if (parts[i] === '') {
-          if (emptyIndex === -1) emptyIndex = i;
-          continue;
-        }
-        expanded.push(Number.parseInt(parts[i] || '0', 16));
+      const parts = processingIP.split('::');
+      if (parts.length > 2) {
+        return `${processingIP}${suffix}`;
       }
-
-      // Handle :: notation
-      if (emptyIndex !== -1) {
-        const zerosNeeded = 8 - expanded.length;
-        const before = expanded.slice(0, emptyIndex);
-        const after = expanded.slice(emptyIndex);
-        expanded.length = 0;
-        expanded.push(...before, ...Array(zerosNeeded).fill(0), ...after);
+      const left = parts[0] ? parts[0].split(':').filter(Boolean) : [];
+      const right = parts.length === 2 && parts[1] ? parts[1].split(':').filter(Boolean) : [];
+      if (left.length + right.length > 8) {
+        return `${processingIP}${suffix}`;
       }
+      const full = [
+        ...left,
+        ...Array(8 - (left.length + right.length)).fill('0'),
+        ...right,
+      ];
+      const expanded = full.map((h) => Number.parseInt(h, 16) || 0);
 
-      // Apply subnet mask
       const bitsPerGroup = 16;
       const fullGroups = Math.floor(prefixLength / bitsPerGroup);
       const remainingBits = prefixLength % bitsPerGroup;
 
-      for (let i = fullGroups; i < 8; i++) {
+      for (let i = fullGroups; i < 8; i += 1) {
         if (i === fullGroups && remainingBits > 0) {
           const mask = (0xFFFF << (bitsPerGroup - remainingBits)) & 0xFFFF;
           expanded[i] = (expanded[i] || 0) & mask;
@@ -107,35 +105,28 @@ export const calculateIPSubnet = (ip, ipv4Suffix, ipv6Suffix) => {
         }
       }
 
-      // Format as compressed IPv6
-      const hex = expanded.map(n => (n || 0).toString(16));
+      const hex = expanded.map((n) => (n || 0).toString(16));
       return `${hex.join(':')}${suffix}`;
     } catch (error) {
-      return `${trimmedIP}${suffix}`;
+      return `${processingIP}${suffix}`;
     }
   } else {
-    // IPv4
     const suffix = ipv4Suffix || '/32';
     const prefixLength = Number.parseInt(suffix.replace('/', ''), 10);
     if (Number.isNaN(prefixLength) || prefixLength < 0 || prefixLength > 32) {
-      return `${trimmedIP}${suffix}`;
+      return `${processingIP}${suffix}`;
     }
 
     try {
-      // Parse IPv4 address
-      const octets = trimmedIP.split('.').map(o => Number.parseInt(o, 10));
-      if (octets.length !== 4 || octets.some(o => Number.isNaN(o) || o < 0 || o > 255)) {
-        return `${trimmedIP}${suffix}`;
+      const octets = processingIP.split('.').map((o) => Number.parseInt(o, 10));
+      if (octets.length !== 4 || octets.some((o) => Number.isNaN(o) || o < 0 || o > 255)) {
+        return `${processingIP}${suffix}`;
       }
 
-      // Convert to 32-bit integer
       let ipInt = (octets[0] << 24) | (octets[1] << 16) | (octets[2] << 8) | octets[3];
-
-      // Apply subnet mask
       const mask = prefixLength === 0 ? 0 : (0xFFFFFFFF << (32 - prefixLength)) >>> 0;
       ipInt = (ipInt & mask) >>> 0;
 
-      // Convert back to dotted notation
       const subnetOctets = [
         (ipInt >>> 24) & 0xFF,
         (ipInt >>> 16) & 0xFF,
@@ -145,7 +136,7 @@ export const calculateIPSubnet = (ip, ipv4Suffix, ipv6Suffix) => {
 
       return `${subnetOctets.join('.')}${suffix}`;
     } catch (error) {
-      return `${trimmedIP}${suffix}`;
+      return `${processingIP}${suffix}`;
     }
   }
 };
