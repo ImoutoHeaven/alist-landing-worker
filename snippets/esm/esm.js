@@ -1,6 +1,11 @@
 const encoder = new TextEncoder();
 
-const sha256 = async (value) => {
+const HASH_WASM_ESM_URL =
+  "https://cdn.jsdelivr.net/npm/hash-wasm@4.9.0/dist/index.esm.min.js";
+const HASH_WASM_UMD_URL =
+  "https://cdn.jsdelivr.net/npm/hash-wasm@4.9.0/dist/index.umd.min.js";
+
+const sha256Async = async (value) => {
   const data = encoder.encode(value);
   const digest = await crypto.subtle.digest("SHA-256", data);
   return new Uint8Array(digest);
@@ -46,23 +51,89 @@ const normalizeOptions = (options) => {
   const concurrency = Number.isFinite(concurrencyRaw)
     ? Math.max(1, Math.floor(concurrencyRaw))
     : getDefaultConcurrency();
+  const hashWasmUrl =
+    typeof opts.hashWasmUrl === "string" && opts.hashWasmUrl
+      ? opts.hashWasmUrl
+      : HASH_WASM_ESM_URL;
+  const hashWasmWorkerUrl =
+    typeof opts.hashWasmWorkerUrl === "string" && opts.hashWasmWorkerUrl
+      ? opts.hashWasmWorkerUrl
+      : HASH_WASM_UMD_URL;
+  const useWasm = opts.useWasm !== false;
+  const useWorkers = opts.useWorkers !== false;
   return {
     maxMs: Number.isFinite(maxMs) && maxMs > 0 ? maxMs : 0,
     yieldEvery: Number.isFinite(yieldEveryRaw) && yieldEveryRaw > 0 ? Math.floor(yieldEveryRaw) : 500,
     prefix,
     signal: opts.signal,
     concurrency,
+    hashWasmUrl,
+    hashWasmWorkerUrl,
+    useWasm,
+    useWorkers,
   };
 };
 
 const supportsWorkers = () =>
   typeof Worker === "function" && typeof Blob === "function" && typeof URL !== "undefined";
 
+const hashWasmCache = new Map();
+const loadHashWasm = (url) => {
+  const key = url || HASH_WASM_ESM_URL;
+  if (hashWasmCache.has(key)) return hashWasmCache.get(key);
+  const promise = (async () => {
+    if (!key) return null;
+    try {
+      const mod = await import(key);
+      const createSHA256 =
+        (mod && mod.createSHA256) ||
+        (mod && mod.default && mod.default.createSHA256);
+      if (typeof createSHA256 !== "function") {
+        return null;
+      }
+      return createSHA256;
+    } catch {
+      return null;
+    }
+  })();
+  hashWasmCache.set(key, promise);
+  return promise;
+};
+
+const createWasmHasher = async (opts) => {
+  if (!opts.useWasm) return null;
+  const createSHA256 = await loadHashWasm(opts.hashWasmUrl);
+  if (typeof createSHA256 !== "function") return null;
+  const hasher = await createSHA256();
+  if (!hasher || typeof hasher.init !== "function") return null;
+  return hasher;
+};
+
 let workerScriptUrl = null;
-const getWorkerScriptUrl = () => {
+const getWorkerScriptUrl = (hashWasmWorkerUrl) => {
   if (workerScriptUrl) return workerScriptUrl;
   const script = `
 const encoder = new TextEncoder();
+const HASH_WASM_URL = ${JSON.stringify(HASH_WASM_UMD_URL)};
+let wasmHasherPromise = null;
+const loadHashWasm = async (url) => {
+  const target = typeof url === "string" && url ? url : HASH_WASM_URL;
+  if (!target) return null;
+  if (!wasmHasherPromise) {
+    wasmHasherPromise = (async () => {
+      try {
+        importScripts(target);
+        if (!self.hashwasm || typeof self.hashwasm.createSHA256 !== "function") {
+          return null;
+        }
+        return await self.hashwasm.createSHA256();
+      } catch {
+        return null;
+      }
+    })();
+  }
+  return wasmHasherPromise;
+};
 const leadingZeroBits = (bytes) => {
   let count = 0;
   for (const byte of bytes) {
@@ -78,7 +149,7 @@ const leadingZeroBits = (bytes) => {
   }
   return count;
 };
-const sha256 = async (value) => {
+const sha256Async = async (value) => {
   const data = encoder.encode(value);
   const digest = await crypto.subtle.digest("SHA-256", data);
   return new Uint8Array(digest);
@@ -86,20 +157,43 @@ const sha256 = async (value) => {
 self.onmessage = async (event) => {
   const data = event.data || {};
   const base = String(data.base || "");
+  const baseBytes = encoder.encode(base);
   const difficulty = Math.max(1, Math.floor(Number(data.difficulty) || 1));
   const start = Math.max(0, Math.floor(Number(data.start) || 0));
   const step = Math.max(1, Math.floor(Number(data.step) || 1));
   const prefix = typeof data.prefix === "string" ? data.prefix : "";
   const maxMs = Number(data.maxMs) || 0;
+  const useWasm = data.useWasm !== false;
+  const wasmUrl = typeof data.hashWasmWorkerUrl === "string" ? data.hashWasmWorkerUrl : "";
+  const hasher = useWasm ? await loadHashWasm(wasmUrl) : null;
   const startTime = Date.now();
   let counter = start;
+  if (hasher && typeof hasher.init === "function") {
+    for (;;) {
+      if (maxMs && Date.now() - startTime > maxMs) {
+        self.postMessage({ timeout: true });
+        return;
+      }
+      const nonce = prefix + counter.toString(36);
+      const nonceBytes = encoder.encode(nonce);
+      hasher.init();
+      hasher.update(baseBytes);
+      hasher.update(nonceBytes);
+      const digest = hasher.digest("binary");
+      if (leadingZeroBits(digest) >= difficulty) {
+        self.postMessage({ nonce });
+        return;
+      }
+      counter += step;
+    }
+  }
   for (;;) {
     if (maxMs && Date.now() - startTime > maxMs) {
       self.postMessage({ timeout: true });
       return;
     }
     const nonce = prefix + counter.toString(36);
-    const digest = await sha256(base + nonce);
+    const digest = await sha256Async(base + nonce);
     if (leadingZeroBits(digest) >= difficulty) {
       self.postMessage({ nonce });
       return;
@@ -113,7 +207,7 @@ self.onmessage = async (event) => {
   return workerScriptUrl;
 };
 
-const solvePowSingle = async (base, target, opts) => {
+const solvePowSingleSync = async (baseBytes, target, opts, hasher) => {
   const startTime = Date.now();
   let counter = 0;
   for (;;) {
@@ -121,7 +215,33 @@ const solvePowSingle = async (base, target, opts) => {
       throw new Error("pow aborted");
     }
     const nonce = opts.prefix + counter.toString(36);
-    const digest = await sha256(base + nonce);
+    const nonceBytes = encoder.encode(nonce);
+    hasher.init();
+    hasher.update(baseBytes);
+    hasher.update(nonceBytes);
+    const digest = hasher.digest("binary");
+    if (leadingZeroBits(digest) >= target) {
+      return nonce;
+    }
+    counter += 1;
+    if (counter % opts.yieldEvery === 0) {
+      if (opts.maxMs && Date.now() - startTime > opts.maxMs) {
+        throw new Error("pow timeout");
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  }
+};
+
+const solvePowSingleAsync = async (base, target, opts) => {
+  const startTime = Date.now();
+  let counter = 0;
+  for (;;) {
+    if (opts.signal && opts.signal.aborted) {
+      throw new Error("pow aborted");
+    }
+    const nonce = opts.prefix + counter.toString(36);
+    const digest = await sha256Async(base + nonce);
     if (leadingZeroBits(digest) >= target) {
       return nonce;
     }
@@ -137,7 +257,7 @@ const solvePowSingle = async (base, target, opts) => {
 
 const solvePowWorkers = (base, target, opts) => {
   const concurrency = Math.max(1, Math.min(8, opts.concurrency));
-  if (concurrency <= 1 || !supportsWorkers()) {
+  if (!opts.useWorkers || concurrency <= 1 || !supportsWorkers()) {
     return null;
   }
   return new Promise((resolve, reject) => {
@@ -189,7 +309,7 @@ const solvePowWorkers = (base, target, opts) => {
       );
     }
 
-    const workerUrl = getWorkerScriptUrl();
+    const workerUrl = getWorkerScriptUrl(opts.hashWasmWorkerUrl);
     for (let i = 0; i < concurrency; i++) {
       let worker = null;
       try {
@@ -216,6 +336,8 @@ const solvePowWorkers = (base, target, opts) => {
         step: concurrency,
         prefix: opts.prefix,
         maxMs,
+        useWasm: opts.useWasm,
+        hashWasmWorkerUrl: opts.hashWasmWorkerUrl,
       });
       workers.push(worker);
     }
@@ -242,5 +364,10 @@ export async function solvePow(bindingString, difficulty, options = {}) {
   if (workerResult) {
     return workerResult;
   }
-  return solvePowSingle(base, target, opts);
+  const hasher = await createWasmHasher(opts);
+  if (hasher) {
+    const baseBytes = encoder.encode(base);
+    return solvePowSingleSync(baseBytes, target, opts, hasher);
+  }
+  return solvePowSingleAsync(base, target, opts);
 }
