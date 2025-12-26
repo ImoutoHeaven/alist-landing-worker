@@ -406,6 +406,41 @@ const parseDurationToSeconds = (rawValue, fallbackSeconds) => {
   return fallbackSeconds;
 };
 
+const SIZE_UNIT_MULTIPLIERS = {
+  b: 1,
+  kb: 1024,
+  mb: 1024 * 1024,
+  gb: 1024 * 1024 * 1024,
+};
+
+const parseSizeToBytes = (rawValue, fallbackBytes) => {
+  if (typeof rawValue === 'number' && Number.isFinite(rawValue) && rawValue > 0) {
+    return Math.floor(rawValue);
+  }
+  if (typeof rawValue === 'string') {
+    const trimmed = rawValue.trim();
+    if (!trimmed) {
+      return fallbackBytes;
+    }
+    const match = trimmed.match(/^(\d+(?:\.\d+)?)\s*(b|kb|mb|gb)$/i);
+    if (!match) {
+      return fallbackBytes;
+    }
+    const amount = Number.parseFloat(match[1]);
+    const unit = match[2].toLowerCase();
+    const multiplier = SIZE_UNIT_MULTIPLIERS[unit] || 0;
+    if (!Number.isFinite(amount) || amount <= 0 || multiplier <= 0) {
+      return fallbackBytes;
+    }
+    const bytes = amount * multiplier;
+    if (!Number.isFinite(bytes) || bytes <= 0) {
+      return fallbackBytes;
+    }
+    return Math.round(bytes);
+  }
+  return fallbackBytes;
+};
+
 const pickAltchaBaseDifficulty = (range) => {
   const min = normalizeDifficultyRangeValue(range?.baseMin, ALTCHA_DEFAULT_BASE_DIFFICULTY);
   const maxCandidate = normalizeDifficultyRangeValue(range?.baseMax, min);
@@ -894,6 +929,15 @@ const resolveConfig = (env = {}, bootstrap = null) => {
   }
 
   const ipv4Only = landingBootstrap.ipv4Only === true;
+  const hrwEnabledRaw = landingBootstrap.downloadWorkerHrwEnabled ?? landingBootstrap['download-worker-hrw-enabled'];
+  const downloadWorkerHrwEnabled = typeof hrwEnabledRaw === 'string'
+    ? hrwEnabledRaw.trim().toLowerCase() === 'true'
+    : Boolean(hrwEnabledRaw);
+  const hrwMaxRaw = landingBootstrap.downloadWorkerHrwMaxSize ?? landingBootstrap['download-worker-hrw-max-size'];
+  const downloadWorkerHrwMaxSizeBytes = parseSizeToBytes(hrwMaxRaw, 512 * 1024 * 1024);
+  if (downloadWorkerHrwEnabled && (!Number.isFinite(downloadWorkerHrwMaxSizeBytes) || downloadWorkerHrwMaxSizeBytes <= 0)) {
+    throw new Error('controller landing.downloadWorkerHrwMaxSize is required when downloadWorkerHrwEnabled is true');
+  }
 
   const dbConfig = landingBootstrap.db && typeof landingBootstrap.db === 'object'
     ? landingBootstrap.db
@@ -1197,6 +1241,8 @@ const resolveConfig = (env = {}, bootstrap = null) => {
     verifyHeader: verifyHeaders,
     verifySecret: verifySecrets,
     ipv4Only,
+    downloadWorkerHrwEnabled,
+    downloadWorkerHrwMaxSizeBytes,
     signSecret: signSecretFromController,
     underAttack,
     altchaEnabled,
@@ -1836,21 +1882,79 @@ const ensureIPv4 = (request, ipv4Only) => {
   return null;
 };
 
-const selectRandomWorker = (workerAddresses) => {
+const parseWorkerAddresses = (workerAddresses) => {
   if (!workerAddresses || typeof workerAddresses !== 'string') {
-    throw new Error('controller common.workerAddresses is not configured');
+    return [];
   }
-  const addresses = workerAddresses
+  return workerAddresses
     .split(',')
     .map((addr) => addr.trim())
-    .filter((addr) => addr.length > 0);
+    .filter((addr) => addr.length > 0)
+    .map((addr) => addr.replace(/\/$/, ''));
+};
 
+const selectRandomWorker = (workerAddresses) => {
+  const addresses = parseWorkerAddresses(workerAddresses);
   if (addresses.length === 0) {
     throw new Error('controller common.workerAddresses contains no valid addresses');
   }
+  return addresses[Math.floor(Math.random() * addresses.length)];
+};
 
-  const selected = addresses[Math.floor(Math.random() * addresses.length)];
-  return selected.replace(/\/$/, '');
+const selectHrwWorker = async (workerAddresses, pathHash) => {
+  const addresses = parseWorkerAddresses(workerAddresses);
+  if (addresses.length === 0) {
+    throw new Error('controller common.workerAddresses contains no valid addresses');
+  }
+  if (!pathHash) {
+    return selectRandomWorker(workerAddresses);
+  }
+
+  let selected = addresses[0];
+  let bestScore = null;
+
+  for (const address of addresses) {
+    const hash = await sha256Hash(`${pathHash}:${address}`);
+    if (!hash) {
+      continue;
+    }
+    let score;
+    try {
+      score = BigInt(`0x${hash}`);
+    } catch {
+      continue;
+    }
+    if (bestScore === null || score > bestScore) {
+      bestScore = score;
+      selected = address;
+    }
+  }
+
+  return selected;
+};
+
+const selectDownloadWorker = async (config, decodedPath, sizeBytes, fileInfo) => {
+  const normalizedSize = (() => {
+    const sizeFromInput = parseFileSize(sizeBytes);
+    if (sizeFromInput > 0) {
+      return sizeFromInput;
+    }
+    if (fileInfo) {
+      return parseFileSize(fileInfo.size);
+    }
+    return 0;
+  })();
+
+  if (
+    config.downloadWorkerHrwEnabled &&
+    normalizedSize > 0 &&
+    normalizedSize <= config.downloadWorkerHrwMaxSizeBytes
+  ) {
+    const pathHash = await sha256Hash(decodedPath);
+    return await selectHrwWorker(config.workerAddresses, pathHash);
+  }
+
+  return selectRandomWorker(config.workerAddresses);
 };
 
 const encodeTextToBase64 = (text) => {
@@ -2065,7 +2169,7 @@ const createDownloadURL = async (
   { encodedPath, decodedPath, sign, clientIP, sizeBytes, expireTime, fileInfo, isCrypt = false },
   ctx = null
 ) => {
-  const workerBaseURL = selectRandomWorker(config.workerAddresses);
+  const workerBaseURL = await selectDownloadWorker(config, decodedPath, sizeBytes, fileInfo);
   const normalizedFilePath = decodedPath.startsWith('/') ? decodedPath : `/${decodedPath}`;
   const normalizedSizeBytes = Number.isFinite(sizeBytes) && sizeBytes > 0 ? sizeBytes : 0;
   const normalizedDbMode = typeof config.dbMode === 'string' ? config.dbMode.trim() : '';

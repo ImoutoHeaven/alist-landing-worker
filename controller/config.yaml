@@ -49,6 +49,8 @@ envs:
       fastRedirect: false # If true, bypass intermediate page and redirect faster; default=false
       autoRedirect: false # If true, auto-jump to download after verification; default=false
       ipv4Only: false # Force IPv4-only traffic handling on landing; default=false
+      downloadWorkerHrwEnabled: false # Use HRW to select download worker for small files; default=false
+      downloadWorkerHrwMaxSize: "500MB" # HRW applies when filesize <= this size; supports <number>[B|KB|MB|GB]
       pathRules: # Ignored by controller-overhaul; kept only as legacy placeholder (controller 仅看 paths.*)
         blacklist: []
         whitelist: []
@@ -421,6 +423,8 @@ envs:
       fastRedirect: false
       autoRedirect: false
       ipv4Only: false
+      downloadWorkerHrwEnabled: false
+      downloadWorkerHrwMaxSize: "500MB"
       pathRules: # Ignored by controller-overhaul; kept only as legacy placeholder (controller 仅看 paths.*)
         blacklist: []
         whitelist: []

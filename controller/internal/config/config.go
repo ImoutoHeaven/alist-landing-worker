@@ -65,6 +65,7 @@ const (
 	defaultLandingWebMaxConn        = 16
 	defaultLandingMinBandwidthMbps  = 10
 	defaultLandingMinDurationSec    = 3600
+	defaultLandingHrwMaxSize        = "500MB"
 	defaultSlotHandlerListen        = ":8080"
 	defaultSlotHandlerAuthHeader    = "X-FQ-Auth"
 	defaultSlotHandlerMaxWaitMs     = 20000
@@ -324,6 +325,8 @@ type LandingConfig struct {
 	FastRedirect         bool                       `yaml:"fastRedirect" json:"fastRedirect"`
 	AutoRedirect         bool                       `yaml:"autoRedirect" json:"autoRedirect"`
 	IPv4Only             bool                       `yaml:"ipv4Only" json:"ipv4Only"`
+	DownloadWorkerHrw    bool                       `yaml:"downloadWorkerHrwEnabled" json:"downloadWorkerHrwEnabled"`
+	DownloadWorkerHrwMax string                     `yaml:"downloadWorkerHrwMaxSize" json:"downloadWorkerHrwMaxSize"`
 	DB                   LandingDBConfig            `yaml:"db" json:"db"`
 	Crypt                LandingCryptConfig         `yaml:"crypt" json:"crypt"`
 	WebDownloader        LandingWebDownloaderConfig `yaml:"webDownloader" json:"webDownloader"`
@@ -844,6 +847,13 @@ func (l *LandingConfig) ensureDefaults(envName string) error {
 	l.Crypt.ensureDefaults()
 	l.WebDownloader.ensureDefaults()
 	l.Additional.ensureDefaults()
+
+	if strings.TrimSpace(l.DownloadWorkerHrwMax) == "" {
+		l.DownloadWorkerHrwMax = defaultLandingHrwMaxSize
+	}
+	if _, ok := parseCacheOverrideMaxSizeBytes(l.DownloadWorkerHrwMax); !ok {
+		return fmt.Errorf("landing.downloadWorkerHrwMaxSize is invalid for env %s (expected <number>[B|KB|MB|GB])", envName)
+	}
 
 	if (l.WebDownloader.Enabled || l.ClientDecryptEnabled) && strings.TrimSpace(l.Crypt.DataKey) == "" {
 		return fmt.Errorf("landing.crypt.dataKey is required for env %s when webDownloader or clientDecrypt is enabled", envName)
