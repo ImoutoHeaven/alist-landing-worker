@@ -118,6 +118,19 @@ const timingSafeEqual = (a, b) => {
   return diff === 0;
 };
 
+const safeHeaders = (origin) => {
+  const headers = new Headers();
+  if (origin) {
+    headers.set("Access-Control-Allow-Origin", origin);
+    headers.append("Vary", "Origin");
+  } else {
+    headers.set("Access-Control-Allow-Origin", "*");
+  }
+  headers.set("Access-Control-Allow-Headers", "*");
+  headers.set("Access-Control-Allow-Methods", "GET,HEAD,OPTIONS");
+  return headers;
+};
+
 const deny = (msg) =>
   new Response(msg, { status: 403, headers: { "Cache-Control": "no-store" } });
 
@@ -486,6 +499,11 @@ const respondPowChallengeHtml = async (request, url, canonicalPath, nowSeconds) 
 export default {
   async fetch(request, env, ctx) {
     if (!HMAC_SECRET) return new Response("misconfigured", { status: 500 });
+
+    const origin = request.headers.get("Origin") || "";
+    if (request.method === "OPTIONS") {
+      return new Response(null, { headers: safeHeaders(origin) });
+    }
 
     const url = new URL(request.url);
     const nowSeconds = Math.floor(Date.now() / 1000);
