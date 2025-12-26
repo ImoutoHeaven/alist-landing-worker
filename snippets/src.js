@@ -18,7 +18,8 @@ const IPV4_PREFIX = 24;
 const IPV6_PREFIX = 60;
 
 const POW_SOL_COOKIE = "__Host-pow_sol";
-const POW_ESM_URL = "https://static.example.com/pow/esm.js";
+const POW_ESM_URL =
+  "https://cdn.jsdelivr.net/gh/ImoutoHeaven/alist-landing-worker@controller-overhaul/snippets/esm/esm.js";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -122,6 +123,7 @@ const safeHeaders = (origin) => {
   const headers = new Headers();
   if (origin) {
     headers.set("Access-Control-Allow-Origin", origin);
+    headers.set("Access-Control-Allow-Credentials", "true");
     headers.append("Vary", "Origin");
   } else {
     headers.set("Access-Control-Allow-Origin", "*");
@@ -131,8 +133,21 @@ const safeHeaders = (origin) => {
   return headers;
 };
 
-const deny = (msg) =>
-  new Response(msg, { status: 403, headers: { "Cache-Control": "no-store" } });
+const respondText = (origin, msg, status = 200) => {
+  const headers = safeHeaders(origin);
+  headers.set("Cache-Control", "no-store");
+  headers.set("Content-Type", "text/plain; charset=utf-8");
+  return new Response(msg, { status, headers });
+};
+
+const respondJson = (origin, payload, status = 200) => {
+  const headers = safeHeaders(origin);
+  headers.set("Cache-Control", "no-store");
+  headers.set("Content-Type", "application/json; charset=utf-8");
+  return new Response(JSON.stringify(payload), { status, headers });
+};
+
+const deny = (origin, msg) => respondText(origin, msg, 403);
 
 const isNavigationRequest = (request) => {
   const mode = request.headers.get("Sec-Fetch-Mode") || "";
@@ -452,7 +467,7 @@ const buildPowChallengeHtml = ({
       nonceB64 +
       "; Max-Age=" +
       solMaxAge +
-      "; Path=/; Secure; SameSite=Lax";
+      "; Path=/; Secure; SameSite=None";
     location.replace(reloadUrl);
   } catch (e) {
     document.body.textContent = "PoW verification failed. Please refresh.";
@@ -490,7 +505,7 @@ const respondPowChallengeHtml = async (request, url, canonicalPath, nowSeconds) 
     solMaxAge,
     esmUrlB64,
   });
-  const headers = new Headers();
+  const headers = safeHeaders(request.headers.get("Origin") || "");
   headers.set("Content-Type", "text/html; charset=utf-8");
   headers.set("Cache-Control", "no-store");
   return new Response(html, { status: 200, headers });
@@ -498,9 +513,9 @@ const respondPowChallengeHtml = async (request, url, canonicalPath, nowSeconds) 
 
 export default {
   async fetch(request, env, ctx) {
-    if (!HMAC_SECRET) return new Response("misconfigured", { status: 500 });
-
     const origin = request.headers.get("Origin") || "";
+    if (!HMAC_SECRET) return respondText(origin, "misconfigured", 500);
+
     if (request.method === "OPTIONS") {
       return new Response(null, { headers: safeHeaders(origin) });
     }
@@ -509,22 +524,22 @@ export default {
     const nowSeconds = Math.floor(Date.now() / 1000);
 
     const path = normalizePath(url.pathname);
-    if (!path) return new Response("invalid path", { status: 400 });
+    if (!path) return respondText(origin, "invalid path", 400);
 
     const sign = url.searchParams.get("sign") || "";
     const signMeta = parseSignature(sign);
-    if (!signMeta) return deny("sign invalid");
-    if (isExpired(signMeta.expire, nowSeconds)) return deny("sign expired");
+    if (!signMeta) return deny(origin, "sign invalid");
+    if (isExpired(signMeta.expire, nowSeconds)) return deny(origin, "sign expired");
 
     const expected = await hmacSha256Sign(path, signMeta.expire);
-    if (expected !== sign) return deny("sign mismatch");
+    if (expected !== sign) return deny(origin, "sign mismatch");
 
     if (!powcheck) {
       return fetch(request);
     }
 
     if (!POW_ESM_URL) {
-      return new Response("misconfigured", { status: 500 });
+      return respondText(origin, "misconfigured", 500);
     }
 
     const powOk = await verifyPowSol(request, url, path, nowSeconds);
@@ -533,13 +548,7 @@ export default {
     }
 
     if (!isNavigationRequest(request)) {
-      return new Response(JSON.stringify({ code: "pow_required" }), {
-        status: 403,
-        headers: {
-          "Content-Type": "application/json",
-          "Cache-Control": "no-store",
-        },
-      });
+      return respondJson(origin, { code: "pow_required" }, 403);
     }
 
     return respondPowChallengeHtml(request, url, path, nowSeconds);
