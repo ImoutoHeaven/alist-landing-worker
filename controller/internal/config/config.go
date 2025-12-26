@@ -3,7 +3,9 @@ package config
 import (
 	"errors"
 	"fmt"
+	"math"
 	"os"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -444,15 +446,17 @@ type DownloadAuthConfig struct {
 
 // DownloadConfig collects download-side strategy and upstream config.
 type DownloadConfig struct {
-	Address              string                             `yaml:"address" json:"address"`
-	DB                   DownloadDBConfig                   `yaml:"db" json:"db"`
-	FairQueue            DownloadFairQueueConfig            `yaml:"fairQueue" json:"fairQueue"`
-	ThrottleProfiles     map[string]DownloadThrottleProfile `yaml:"throttleProfiles" json:"throttleProfiles"`
-	OriginBindingDefault string                             `yaml:"originBindingDefault" json:"originBindingDefault"`
-	PathRules            DownloadPathRules                  `yaml:"pathRules" json:"pathRules"`
-	Paths                PathConfig                         `yaml:"paths" json:"paths"`
-	Auth                 DownloadAuthConfig                 `yaml:"auth" json:"auth"`
-	Extra                map[string]interface{}             `yaml:",inline" json:"-"`
+	Address               string                             `yaml:"address" json:"address"`
+	DB                    DownloadDBConfig                   `yaml:"db" json:"db"`
+	FairQueue             DownloadFairQueueConfig            `yaml:"fairQueue" json:"fairQueue"`
+	ThrottleProfiles      map[string]DownloadThrottleProfile `yaml:"throttleProfiles" json:"throttleProfiles"`
+	OriginBindingDefault  string                             `yaml:"originBindingDefault" json:"originBindingDefault"`
+	OverrideCacheControl  bool                               `yaml:"override-cache-control" json:"overrideCacheControl"`
+	CacheOverrideTime     string                             `yaml:"cache-override-time" json:"cacheOverrideTime"`
+	PathRules             DownloadPathRules                  `yaml:"pathRules" json:"pathRules"`
+	Paths                 PathConfig                         `yaml:"paths" json:"paths"`
+	Auth                  DownloadAuthConfig                 `yaml:"auth" json:"auth"`
+	Extra                 map[string]interface{}             `yaml:",inline" json:"-"`
 }
 
 // SlotHandlerAuthConfig guards slot-handler API.
@@ -977,6 +981,54 @@ func (a *LandingAdditionalConfig) ensureDefaults() {
 	}
 }
 
+func parseCacheOverrideSeconds(value string) (int, bool) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" || len(trimmed) < 2 {
+		return 0, false
+	}
+
+	unit := strings.ToLower(trimmed[len(trimmed)-1:])
+	numberPart := strings.TrimSpace(trimmed[:len(trimmed)-1])
+	if numberPart == "" {
+		return 0, false
+	}
+
+	amount, err := strconv.ParseFloat(numberPart, 64)
+	if err != nil || amount <= 0 {
+		return 0, false
+	}
+
+	multiplier := 0.0
+	switch unit {
+	case "s":
+		multiplier = 1
+	case "m":
+		multiplier = 60
+	case "h":
+		multiplier = 3600
+	case "d":
+		multiplier = 86400
+	case "w":
+		multiplier = 604800
+	case "y":
+		multiplier = 31536000
+	default:
+		return 0, false
+	}
+
+	seconds := amount * multiplier
+	if seconds <= 0 {
+		return 0, false
+	}
+
+	rounded := int(math.Round(seconds))
+	if rounded <= 0 {
+		return 0, false
+	}
+
+	return rounded, true
+}
+
 func (d *DownloadConfig) ensureDefaults(common CommonConfig, envName string) error {
 	if d.Address == "" {
 		return fmt.Errorf("download.address is required for env %s", envName)
@@ -999,6 +1051,15 @@ func (d *DownloadConfig) ensureDefaults(common CommonConfig, envName string) err
 
 	if err := d.FairQueue.ensureDefaults(envName); err != nil {
 		return err
+	}
+
+	if d.OverrideCacheControl {
+		if strings.TrimSpace(d.CacheOverrideTime) == "" {
+			return fmt.Errorf("download.cacheOverrideTime is required for env %s when override-cache-control is true", envName)
+		}
+		if _, ok := parseCacheOverrideSeconds(d.CacheOverrideTime); !ok {
+			return fmt.Errorf("download.cacheOverrideTime is invalid for env %s (expected <number>[s|m|h|d|w|y])", envName)
+		}
 	}
 
 	d.Auth.ensureDefaults(common)

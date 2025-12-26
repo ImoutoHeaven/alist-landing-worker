@@ -176,6 +176,8 @@ envs:
         maxDurationSeconds: 0 # Maximum allowed duration; 0 means unlimited
     download: # Download-side configuration for staging
       address: "https://alist-staging.example.com" # Upstream AList address for download links; must be https://...; required
+      override-cache-control: false # Force override upstream Cache-Control in download response; default=false
+      cache-override-time: "30m" # Required when override-cache-control=true; supports <number>[s|m|h|d|w|y]
       auth:
         signCheck: true # Enforce signature validation on generated links; default=true
         hashCheck: true # Verify hash on download requests; default=true
@@ -522,6 +524,8 @@ envs:
         maxDurationSeconds: 0
     download: # Production download config; field meanings match staging.download
       address: "https://alist.example.com"
+      override-cache-control: false # Force override upstream Cache-Control in download response; default=false
+      cache-override-time: "30m" # Required when override-cache-control=true; supports <number>[s|m|h|d|w|y]
       auth:
         signCheck: true
         hashCheck: true
