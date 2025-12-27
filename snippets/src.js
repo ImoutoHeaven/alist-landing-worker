@@ -479,81 +479,135 @@ const buildPowChallengeHtml = ({
   solMaxAge,
   esmUrlB64,
 }) => `<!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="robots" content="noindex,nofollow">
-<meta http-equiv="cache-control" content="no-store">
 <title>Security Check</title>
 <style>
   :root {
-    --bg-color: #050505;
-    --bg-accent: #0b1b14;
-    --text-color: #00ff99;
-    --dim-color: #008f55;
-    --error-color: #ff0055;
-    --font-stack: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    --bg-color: #0a0a0c;
+    --accent-color: #3b82f6;
+    --success-color: #10b981;
+    --error-color: #ef4444;
+    --glass-bg: rgba(255, 255, 255, 0.03);
+    --glass-border: rgba(255, 255, 255, 0.08);
+    --text-main: #f3f4f6;
+    --text-dim: #9ca3af;
   }
-  html, body {
+  body {
     margin: 0;
-    padding: 0;
-    height: 100%;
-    color: var(--text-color);
-    font-family: var(--font-stack);
-    background-color: var(--bg-color);
-    background-image: radial-gradient(1200px circle at 20% 20%, var(--bg-accent) 0%, #050505 45%, #030303 100%);
+    height: 100vh;
     display: flex;
     align-items: center;
     justify-content: center;
+    background: radial-gradient(circle at 50% 50%, #111827 0%, #000000 100%);
+    color: var(--text-main);
+    font-family: -apple-system, system-ui, sans-serif;
     overflow: hidden;
   }
-  .container {
+  .card {
+    background: var(--glass-bg);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid var(--glass-border);
+    padding: 3rem 2rem;
+    border-radius: 24px;
+    width: 360px;
     text-align: center;
-    padding: 2rem 1.5rem;
-    max-width: 420px;
-    width: 100%;
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+    animation: slideUp 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  @keyframes slideUp {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .spinner-box {
+    position: relative;
+    width: 60px;
+    height: 60px;
+    margin: 0 auto 2rem;
   }
   .spinner {
-    width: 64px;
-    height: 64px;
-    margin: 0 auto 1.75rem;
-    border: 3px solid rgba(0, 255, 153, 0.12);
+    width: 100%;
+    height: 100%;
+    border: 3px solid rgba(59, 130, 246, 0.1);
+    border-top: 3px solid var(--accent-color);
     border-radius: 50%;
-    border-top-color: var(--text-color);
-    animation: spin 1s ease-in-out infinite;
-    box-shadow: 0 0 16px rgba(0, 255, 153, 0.25);
+    animation: spin 1s linear infinite;
+    transition: all 0.4s ease;
   }
   @keyframes spin {
     to { transform: rotate(360deg); }
   }
   h1 {
-    font-size: 1.1rem;
-    margin: 0 0 0.9rem;
-    text-transform: uppercase;
-    letter-spacing: 2px;
-    text-shadow: 0 0 6px rgba(0, 255, 153, 0.5);
+    font-size: 1.25rem;
+    font-weight: 600;
+    margin: 0 0 0.75rem;
+    letter-spacing: -0.01em;
   }
   #status {
-    font-size: 0.9rem;
-    color: var(--dim-color);
-    min-height: 1.2rem;
+    height: 80px;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    align-items: center;
+    overflow: hidden;
+    mask-image: linear-gradient(to bottom, transparent, black 20%);
+    -webkit-mask-image: linear-gradient(to bottom, transparent, black 20%);
   }
-  .error-state #status {
-    color: var(--error-color);
+  .status-line {
+    font-size: 0.85rem;
+    line-height: 1.6;
+    transition: all 0.4s ease;
+    text-align: center;
+    white-space: nowrap;
   }
-  .error-state .spinner {
-    border-top-color: var(--error-color);
-    box-shadow: 0 0 16px rgba(255, 0, 85, 0.25);
+  /* Latest line: white, highlighted */
+  .status-line:last-child {
+    color: var(--text-main);
+    font-weight: 500;
+    opacity: 1;
+    transform: scale(1.05);
+    margin-top: 4px;
+  }
+  /* 2nd latest: light gray */
+  .status-line:nth-last-child(2) {
+    color: var(--text-dim);
+    opacity: 0.7;
+    transform: scale(1);
+  }
+  /* 3rd latest: dark gray/faded */
+  .status-line:nth-last-child(3) {
+    color: #4b5563;
+    opacity: 0.4;
+    transform: scale(0.95);
+  }
+  /* Older lines hidden */
+  .status-line:nth-last-child(n+4) {
+    display: none;
+  }
+  /* States */
+  .success .spinner {
     animation: none;
+    border-color: var(--success-color);
+    box-shadow: 0 0 20px rgba(16, 185, 129, 0.4);
+  }
+  .success h1 { color: var(--success-color); }
+  .error .spinner {
+    animation: none;
+    border-color: var(--error-color);
   }
 </style>
 </head>
 <body>
-  <div class="container" aria-live="polite">
-    <div class="spinner"></div>
-    <h1>System Guard</h1>
-    <div id="status">初始化环境...</div>
+  <div class="card" id="main-card">
+    <div class="spinner-box">
+      <div class="spinner" id="loader"></div>
+    </div>
+    <h1 id="title">System Security Check</h1>
+    <div id="status"></div>
   </div>
 
 <script type="module">
@@ -566,68 +620,66 @@ const buildPowChallengeHtml = ({
   const esmUrlB64 = "${esmUrlB64}";
 
   const statusEl = document.getElementById("status");
-  const containerEl = document.querySelector(".container");
+  const cardEl = document.getElementById("main-card");
+  const titleEl = document.getElementById("title");
 
-  const updateStatus = (msg) => {
-    statusEl.textContent = msg;
-  };
-
-  const showError = (msg) => {
-    containerEl.classList.add("error-state");
-    updateStatus(msg);
+  const updateStatus = (msg) => { 
+    const line = document.createElement("div");
+    line.className = "status-line";
+    line.textContent = msg;
+    statusEl.appendChild(line);
+    // Keep DOM light, remove very old elements (even if hidden by CSS)
+    if (statusEl.children.length > 6) {
+      statusEl.removeChild(statusEl.firstElementChild);
+    }
   };
 
   const decodeB64Url = (b64u) => {
     let b64 = b64u.replace(/-/g, "+").replace(/_/g, "/");
     while (b64.length % 4) b64 += "=";
-    const bin = atob(b64);
-    const bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    return new TextDecoder().decode(bytes);
+    return new TextDecoder().decode(Uint8Array.from(atob(b64), c => c.charCodeAt(0)));
   };
 
   const encodeB64Url = (bytes) => {
-    let bin = "";
-    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-    return btoa(bin).replace(/\\+/g, "-").replace(/\\//g, "_").replace(/=+$/g, "");
+    return btoa(String.fromCharCode(...bytes)).replace(/\\+/g, "-").replace(/\\//g, "_").replace(/=+$/g, "");
   };
 
-  const run = async () => {
-    updateStatus("初始化环境...");
-    const bindingString = decodeB64Url(bindingB64);
-    const reloadUrl = decodeB64Url(reloadUrlB64);
-    const esmUrl = decodeB64Url(esmUrlB64);
+  async function run() {
+    try {
+      updateStatus("Initializing environment...");
+      const bindingString = decodeB64Url(bindingB64);
+      const reloadUrl = decodeB64Url(reloadUrlB64);
+      const esmUrl = decodeB64Url(esmUrlB64);
 
-    updateStatus("加载验证模块...");
-    const { solvePow } = await import(esmUrl);
+      updateStatus("Loading security module...");
+      const { solvePow } = await import(esmUrl);
 
-    updateStatus("正在计算 PoW（难度: " + difficulty + "）...");
-    const nonce = await solvePow(bindingString, difficulty);
-    const nonceB64 = encodeB64Url(new TextEncoder().encode(String(nonce || "")));
+      updateStatus("Performing security calculation (" + difficulty + ")...");
+      const nonce = await solvePow(bindingString, difficulty);
+      const nonceB64 = encodeB64Url(new TextEncoder().encode(String(nonce || "")));
 
-    updateStatus("校验成功，准备跳转...");
-    document.cookie =
-      solCookieName +
-      "=" +
-      ticketB64 +
-      "." +
-      nonceB64 +
-      "; Max-Age=" +
-      solMaxAge +
-      "; Path=/; Secure; SameSite=None";
-    document.title = "Redirecting";
-    location.replace(reloadUrl);
-  };
+      // Stop spinner, switch to success state
+      cardEl.className = "card success";
+      titleEl.textContent = "Access Granted";
+      updateStatus("Redirecting...");
+      document.title = "SubmitThisForm";
 
-  run().catch((e) => {
-    console.error(e);
-    showError("校验失败，请刷新重试。");
-  });
+      document.cookie = solCookieName + "=" + ticketB64 + "." + nonceB64 + 
+        "; Max-Age=" + solMaxAge + "; Path=/; Secure; SameSite=None";
+      
+      setTimeout(() => location.replace(reloadUrl), 600);
+    } catch (e) {
+      console.error(e);
+      cardEl.className = "card error";
+      updateStatus("Verification failed. Please reload.");
+    }
+  }
+
+  run();
 </script>
 </body>
 </html>
 `;
-
 const respondPowChallengeHtml = async (request, url, canonicalPath, nowSeconds, config) => {
   const ttl = normalizeNumber(config.POW_CHAL_TTL_SEC, DEFAULTS.POW_CHAL_TTL_SEC) || 0;
   const exp = nowSeconds + Math.max(1, ttl);
