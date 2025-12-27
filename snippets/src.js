@@ -1,41 +1,75 @@
 // Cloudflare Snippet: pre-auth for landing
-// Set HMAC_SECRET to common.tokenHmacKey (and keep common.signSecret aligned).
+// Set HMAC_SECRET in CONFIG to common.tokenHmacKey (and keep common.signSecret aligned).
 
-// ===== Global Switch =====
-const powcheck = false; // false: keep legacy behavior; true: enable PoW gate
+const DEFAULTS = {
+  powcheck: false,
+  POW_VERSION: 1,
+  POW_DIFFICULTY_BASE: 18,
+  POW_DIFFICULTY_COEFF: 1.0,
+  POW_CHAL_TTL_SEC: 120,
+  POW_SOL_TTL_SEC: 600,
+  IPV4_PREFIX: 32,
+  IPV6_PREFIX: 64,
+  POW_SOL_COOKIE: "__Host-pow_sol",
+  POW_ESM_URL:
+    "https://cdn.jsdelivr.net/gh/ImoutoHeaven/alist-landing-worker@controller-overhaul/snippets/esm/esm.js",
+};
 
-// ===== Existing =====
-const HMAC_SECRET = "replace-with-common-tokenHmacKey";
+const CONFIG = [
+  // Example:
+  // { pattern: "alist-landing-*.example.com", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", powcheck: true, POW_DIFFICULTY_BASE: 20, POW_DIFFICULTY_COEFF: 1.2, POW_CHAL_TTL_SEC: 180, POW_SOL_TTL_SEC: 600, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
+];
 
-// ===== PoW =====
-const POW_VERSION = 1;
-const POW_DIFFICULTY_BASE = 18;
-const POW_DIFFICULTY_COEFF = 1.0;
-const POW_CHAL_TTL_SEC = 120;
-const POW_SOL_TTL_SEC = 600;
+const compilePattern = (pattern) => {
+  if (typeof pattern !== "string") return null;
+  const trimmed = pattern.trim().toLowerCase();
+  if (!trimmed) return null;
+  const escaped = trimmed.replace(/\./g, "\\.").replace(/\*/g, "[^.]*");
+  try {
+    return new RegExp(`^${escaped}$`);
+  } catch {
+    return null;
+  }
+};
 
-const IPV4_PREFIX = 32;
-const IPV6_PREFIX = 64;
+const COMPILED_CONFIG = CONFIG.map((entry) => ({
+  pattern: entry && entry.pattern,
+  regex: compilePattern(entry && entry.pattern),
+  config: (entry && entry.config) || {},
+}));
 
-const POW_SOL_COOKIE = "__Host-pow_sol";
-const POW_ESM_URL =
-  "https://cdn.jsdelivr.net/gh/ImoutoHeaven/alist-landing-worker@controller-overhaul/snippets/esm/esm.js";
+const pickConfig = (hostname) => {
+  const host = typeof hostname === "string" ? hostname.toLowerCase() : "";
+  if (!host) return null;
+  for (const rule of COMPILED_CONFIG) {
+    if (!rule || !rule.regex) continue;
+    if (rule.regex.test(host)) return rule.config || null;
+  }
+  return null;
+};
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
-let hmacKeyPromise = null;
+const hmacKeyCache = new Map();
 
-const getHmacKey = () => {
-  if (!hmacKeyPromise) {
-    hmacKeyPromise = crypto.subtle.importKey(
-      "raw",
-      encoder.encode(HMAC_SECRET),
-      { name: "HMAC", hash: "SHA-256" },
-      false,
-      ["sign"]
+const getHmacKey = (secret) => {
+  const key = typeof secret === "string" ? secret : "";
+  if (!key) {
+    return Promise.reject(new Error("HMAC secret missing"));
+  }
+  if (!hmacKeyCache.has(key)) {
+    hmacKeyCache.set(
+      key,
+      crypto.subtle.importKey(
+        "raw",
+        encoder.encode(key),
+        { name: "HMAC", hash: "SHA-256" },
+        false,
+        ["sign"]
+      )
     );
   }
-  return hmacKeyPromise;
+  return hmacKeyCache.get(key);
 };
 
 const base64UrlEncode = (bytes) =>
@@ -60,6 +94,10 @@ const base64UrlDecodeToBytes = (b64u) => {
 
 const utf8ToBytes = (value) => encoder.encode(String(value ?? ""));
 const bytesToUtf8 = (bytes) => decoder.decode(bytes);
+const normalizeNumber = (value, fallback) => {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : fallback;
+};
 
 const normalizePath = (pathname) => {
   if (typeof pathname !== "string") return null;
@@ -95,21 +133,21 @@ const parseSignature = (sig) => {
 
 const isExpired = (expire, nowSeconds) => expire > 0 && expire < nowSeconds;
 
-const hmacSha256 = async (data) => {
-  const key = await getHmacKey();
+const hmacSha256 = async (secret, data) => {
+  const key = await getHmacKey(secret);
   const payload = encoder.encode(data);
   const buf = await crypto.subtle.sign("HMAC", key, payload);
   return new Uint8Array(buf);
 };
 
-const hmacSha256Sign = async (data, expire) => {
+const hmacSha256Sign = async (secret, data, expire) => {
   const payload = `${data}:${expire}`;
-  const bytes = await hmacSha256(payload);
+  const bytes = await hmacSha256(secret, payload);
   return `${base64UrlEncode(bytes)}:${expire}`;
 };
 
-const hmacSha256Base64UrlNoPad = async (data) => {
-  const bytes = await hmacSha256(data);
+const hmacSha256Base64UrlNoPad = async (secret, data) => {
+  const bytes = await hmacSha256(secret, data);
   return base64UrlEncodeNoPad(bytes);
 };
 
@@ -299,26 +337,31 @@ const ipv6Cidr = (ip, prefix) => {
   return `${formatIpv6(out)}/${p}`;
 };
 
-const computeIpScope = (ip) => {
+const computeIpScope = (ip, config) => {
+  const v4Prefix = normalizeNumber(config.IPV4_PREFIX, DEFAULTS.IPV4_PREFIX);
+  const v6Prefix = normalizeNumber(config.IPV6_PREFIX, DEFAULTS.IPV6_PREFIX);
   if (isIpv4(ip)) {
-    return ipv4Cidr(ip, IPV4_PREFIX) || "unknown";
+    return ipv4Cidr(ip, v4Prefix) || "unknown";
   }
   if (isIpv6(ip)) {
-    return ipv6Cidr(ip, IPV6_PREFIX) || "unknown";
+    return ipv6Cidr(ip, v6Prefix) || "unknown";
   }
   return "unknown";
 };
 
-const getPowDifficulty = () => {
-  const base = Number(POW_DIFFICULTY_BASE);
-  const coeff = Number(POW_DIFFICULTY_COEFF);
+const getPowDifficulty = (config) => {
+  const base = normalizeNumber(config.POW_DIFFICULTY_BASE, DEFAULTS.POW_DIFFICULTY_BASE);
+  const coeff = normalizeNumber(config.POW_DIFFICULTY_COEFF, DEFAULTS.POW_DIFFICULTY_COEFF);
   if (!Number.isFinite(base) || base <= 0) return 1;
   if (!Number.isFinite(coeff) || coeff <= 0) return Math.max(1, Math.round(base));
   return Math.max(1, Math.round(base * coeff));
 };
 
-const getPowSolMaxAge = () =>
-  Math.max(1, Math.min(Number(POW_SOL_TTL_SEC) || 0, Number(POW_CHAL_TTL_SEC) || 0));
+const getPowSolMaxAge = (config) => {
+  const solTtl = normalizeNumber(config.POW_SOL_TTL_SEC, DEFAULTS.POW_SOL_TTL_SEC);
+  const chalTtl = normalizeNumber(config.POW_CHAL_TTL_SEC, DEFAULTS.POW_CHAL_TTL_SEC);
+  return Math.max(1, Math.min(solTtl || 0, chalTtl || 0));
+};
 
 const randomBase64Url = (byteLength) => {
   const len = Number.isInteger(byteLength) && byteLength > 0 ? byteLength : 16;
@@ -408,19 +451,20 @@ const parsePowSolCookie = (value) => {
   return { ticket, nonce, ticketB64 };
 };
 
-const verifyPowSol = async (request, url, canonicalPath, nowSeconds) => {
+const verifyPowSol = async (request, url, canonicalPath, nowSeconds, config) => {
   const cookies = parseCookieHeader(request.headers.get("Cookie"));
-  const solRaw = cookies.get(POW_SOL_COOKIE) || "";
+  const solRaw = cookies.get(config.POW_SOL_COOKIE) || "";
   const sol = parsePowSolCookie(solRaw);
   if (!sol) return false;
   const ticket = sol.ticket;
-  if (ticket.v !== POW_VERSION) return false;
+  const powVersion = normalizeNumber(config.POW_VERSION, DEFAULTS.POW_VERSION);
+  if (ticket.v !== powVersion) return false;
   if (!Number.isFinite(ticket.e) || ticket.e <= 0 || ticket.e < nowSeconds) return false;
   const ip = getClientIP(request);
-  const ipScope = computeIpScope(ip);
+  const ipScope = computeIpScope(ip, config);
   const pathHash = base64UrlEncodeNoPad(await sha256Bytes(canonicalPath));
   const bindingString = makePowBindingString(ticket, url.hostname, pathHash, ipScope);
-  const expectedMac = await hmacSha256Base64UrlNoPad(bindingString);
+  const expectedMac = await hmacSha256Base64UrlNoPad(config.HMAC_SECRET, bindingString);
   if (!timingSafeEqual(expectedMac, ticket.mac)) return false;
   const seed = buildPowSeed(bindingString);
   return checkPow(seed, sol.nonce, ticket.d);
@@ -487,33 +531,34 @@ const buildPowChallengeHtml = ({
 </script>
 `;
 
-const respondPowChallengeHtml = async (request, url, canonicalPath, nowSeconds) => {
-  const ttl = Number(POW_CHAL_TTL_SEC) || 0;
+const respondPowChallengeHtml = async (request, url, canonicalPath, nowSeconds, config) => {
+  const ttl = normalizeNumber(config.POW_CHAL_TTL_SEC, DEFAULTS.POW_CHAL_TTL_SEC) || 0;
   const exp = nowSeconds + Math.max(1, ttl);
-  const difficulty = getPowDifficulty();
+  const difficulty = getPowDifficulty(config);
   const ip = getClientIP(request);
-  const ipScope = computeIpScope(ip);
+  const ipScope = computeIpScope(ip, config);
   const pathHash = base64UrlEncodeNoPad(await sha256Bytes(canonicalPath));
+  const powVersion = normalizeNumber(config.POW_VERSION, DEFAULTS.POW_VERSION);
   const ticket = {
-    v: POW_VERSION,
+    v: powVersion,
     e: exp,
     d: difficulty,
     r: randomBase64Url(16),
     mac: "",
   };
   const bindingString = makePowBindingString(ticket, url.hostname, pathHash, ipScope);
-  ticket.mac = await hmacSha256Base64UrlNoPad(bindingString);
+  ticket.mac = await hmacSha256Base64UrlNoPad(config.HMAC_SECRET, bindingString);
   const ticketB64 = encodePowTicket(ticket);
   const bindingStringB64 = base64UrlEncodeNoPad(utf8ToBytes(bindingString));
   const reloadUrlB64 = base64UrlEncodeNoPad(utf8ToBytes(url.toString()));
-  const esmUrlB64 = base64UrlEncodeNoPad(utf8ToBytes(String(POW_ESM_URL)));
-  const solMaxAge = getPowSolMaxAge();
+  const esmUrlB64 = base64UrlEncodeNoPad(utf8ToBytes(String(config.POW_ESM_URL)));
+  const solMaxAge = getPowSolMaxAge(config);
   const html = buildPowChallengeHtml({
     bindingStringB64,
     difficulty,
     ticketB64,
     reloadUrlB64,
-    solCookieName: POW_SOL_COOKIE,
+    solCookieName: config.POW_SOL_COOKIE,
     solMaxAge,
     esmUrlB64,
   });
@@ -526,13 +571,17 @@ const respondPowChallengeHtml = async (request, url, canonicalPath, nowSeconds) 
 export default {
   async fetch(request, env, ctx) {
     const origin = request.headers.get("Origin") || "";
-    if (!HMAC_SECRET) return respondText(origin, "misconfigured", 500);
+    const url = new URL(request.url);
+    const hostname = url.hostname;
+    const selected = pickConfig(hostname);
+    const config = selected ? { ...DEFAULTS, ...selected } : null;
+    const secret = config && typeof config.HMAC_SECRET === "string" ? config.HMAC_SECRET : "";
+    if (!secret) return respondText(origin, "misconfigured", 500);
 
     if (request.method === "OPTIONS") {
       return new Response(null, { headers: safeHeaders(origin) });
     }
 
-    const url = new URL(request.url);
     const nowSeconds = Math.floor(Date.now() / 1000);
 
     const requestPath = normalizePath(url.pathname);
@@ -551,18 +600,18 @@ export default {
     if (!signMeta) return deny(origin, "sign invalid");
     if (isExpired(signMeta.expire, nowSeconds)) return deny(origin, "sign expired");
 
-    const expected = await hmacSha256Sign(authPath, signMeta.expire);
+    const expected = await hmacSha256Sign(secret, authPath, signMeta.expire);
     if (expected !== sign) return deny(origin, "sign mismatch");
 
-    if (!powcheck) {
+    if (config.powcheck !== true) {
       return fetch(request);
     }
 
-    if (!POW_ESM_URL) {
+    if (!config.POW_ESM_URL) {
       return respondText(origin, "misconfigured", 500);
     }
 
-    const powOk = await verifyPowSol(request, url, authPath, nowSeconds);
+    const powOk = await verifyPowSol(request, url, authPath, nowSeconds, config);
     if (powOk) {
       return fetch(request);
     }
@@ -571,6 +620,6 @@ export default {
       return respondJson(origin, { code: "pow_required" }, 403);
     }
 
-    return respondPowChallengeHtml(request, url, authPath, nowSeconds);
+    return respondPowChallengeHtml(request, url, authPath, nowSeconds, config);
   },
 };
