@@ -515,6 +515,8 @@ const buildPowChallengeHtml = ({
     padding: 3rem 2rem;
     border-radius: 24px;
     width: 360px;
+    max-width: 90vw;
+    box-sizing: border-box;
     text-align: center;
     box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
     animation: slideUp 0.6s cubic-bezier(0.16, 1, 0.3, 1);
