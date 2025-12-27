@@ -478,216 +478,392 @@ const buildPowChallengeHtml = ({
   solCookieName,
   solMaxAge,
   esmUrlB64,
-}) => `<!doctype html>
+}) => `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="robots" content="noindex,nofollow">
-<title>Security Check</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Command Prompt - Security Check</title>
 <style>
   :root {
-    --bg-color: #0a0a0c;
-    --accent-color: #3b82f6;
-    --success-color: #10b981;
-    --error-color: #ef4444;
-    --glass-bg: rgba(255, 255, 255, 0.03);
-    --glass-border: rgba(255, 255, 255, 0.08);
-    --text-main: #f3f4f6;
-    --text-dim: #9ca3af;
+    --win-bg: #c0c0c0;
+    --win-border-light: #dfdfdf;
+    --win-border-dark: #808080;
+    --win-border-black: #000000;
+    --win-title-l: #000080;
+    --win-title-r: #1084d0;
+    --term-bg: #000000;
+    --term-fg: #c0c0c0; /* Classic CMD gray/white */
+    --term-font: "Consolas", "Lucida Console", "Monaco", "Courier New", monospace;
   }
+
+  * { box-sizing: border-box; }
+
   body {
-    margin: 0;
+    margin: 0; padding: 0;
     height: 100vh;
+    width: 100vw;
+    background-color: #2e2e2e; /* Dark desktop background */
     display: flex;
     align-items: center;
     justify-content: center;
-    background: radial-gradient(circle at 50% 50%, #111827 0%, #000000 100%);
-    color: var(--text-main);
-    font-family: -apple-system, system-ui, sans-serif;
+    font-family: var(--term-font);
     overflow: hidden;
+    /* Subtle CRT flicker on the whole screen */
+    animation: flicker 0.15s infinite;
   }
-  .card {
-    background: var(--glass-bg);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
-    border: 1px solid var(--glass-border);
-    padding: 3rem 2rem;
-    border-radius: 24px;
-    width: 360px;
-    max-width: 90vw;
-    box-sizing: border-box;
-    text-align: center;
-    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
-    animation: slideUp 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+
+  @keyframes flicker {
+    0% { opacity: 0.99; }
+    100% { opacity: 1; }
   }
-  @keyframes slideUp {
-    from { opacity: 0; transform: translateY(20px); }
-    to { opacity: 1; transform: translateY(0); }
-  }
-  .spinner-box {
-    position: relative;
-    width: 60px;
-    height: 60px;
-    margin: 0 auto 2rem;
-  }
-  .spinner {
-    width: 100%;
-    height: 100%;
-    border: 3px solid rgba(59, 130, 246, 0.1);
-    border-top: 3px solid var(--accent-color);
-    border-radius: 50%;
-    animation: spin 1s linear infinite;
-    transition: all 0.4s ease;
-  }
-  @keyframes spin {
-    to { transform: rotate(360deg); }
-  }
-  h1 {
-    font-size: 1.25rem;
-    font-weight: 600;
-    margin: 0 0 0.75rem;
-    letter-spacing: -0.01em;
-  }
-  #status {
-    height: 80px;
+
+  /* --- Windows 9x Style Window --- */
+  .window {
+    width: 90%;
+    max-width: 800px;
+    height: 70vh;
+    min-height: 320px;
+    background-color: var(--win-bg);
+    border-top: 2px solid var(--win-border-light);
+    border-left: 2px solid var(--win-border-light);
+    border-right: 2px solid var(--win-border-black);
+    border-bottom: 2px solid var(--win-border-black);
+    box-shadow: 1px 1px 0 0 var(--win-border-dark) inset, 0 0 20px rgba(0,0,0,0.5);
     display: flex;
     flex-direction: column;
-    justify-content: flex-end;
+    padding: 3px;
+  }
+
+  .title-bar {
+    height: 24px;
+    background: linear-gradient(90deg, var(--win-title-l), var(--win-title-r));
+    display: flex;
     align-items: center;
-    overflow: hidden;
-    mask-image: linear-gradient(to bottom, transparent, black 20%);
-    -webkit-mask-image: linear-gradient(to bottom, transparent, black 20%);
+    justify-content: space-between;
+    padding: 0 4px;
+    margin-bottom: 3px;
+    user-select: none;
   }
-  .status-line {
-    font-size: 0.85rem;
-    line-height: 1.6;
-    transition: all 0.4s ease;
-    text-align: center;
-    white-space: nowrap;
+
+  .title-text {
+    color: white;
+    font-weight: bold;
+    font-size: 13px;
+    letter-spacing: 0.5px;
+    font-family: Tahoma, sans-serif;
+    display: flex;
+    align-items: center;
+    gap: 6px;
   }
-  /* Latest line: white, highlighted */
-  .status-line:last-child {
-    color: var(--text-main);
-    font-weight: 500;
-    opacity: 1;
-    transform: scale(1.05);
-    margin-top: 4px;
+  
+  .icon-prompt {
+    width: 14px; 
+    height: 14px;
+    background: white;
+    border: 1px solid gray;
+    position: relative;
   }
-  /* 2nd latest: light gray */
-  .status-line:nth-last-child(2) {
-    color: var(--text-dim);
-    opacity: 0.7;
-    transform: scale(1);
+  .icon-prompt::after {
+    content: "C_";
+    color: black;
+    font-size: 10px;
+    position: absolute;
+    top: -2px; left: 1px;
+    font-family: monospace;
+    font-weight: bold;
   }
-  /* 3rd latest: dark gray/faded */
-  .status-line:nth-last-child(3) {
-    color: #4b5563;
-    opacity: 0.4;
-    transform: scale(0.95);
+
+  .controls {
+    display: flex;
+    gap: 2px;
   }
-  /* Older lines hidden */
-  .status-line:nth-last-child(n+4) {
-    display: none;
+
+  .btn {
+    width: 16px;
+    height: 14px;
+    background-color: var(--win-bg);
+    border-top: 1px solid var(--win-border-light);
+    border-left: 1px solid var(--win-border-light);
+    border-right: 1px solid var(--win-border-black);
+    border-bottom: 1px solid var(--win-border-black);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 9px;
+    font-family: Tahoma, sans-serif;
+    font-weight: bold;
+    color: black;
+    cursor: default;
+    box-shadow: 1px 1px 0 var(--win-border-dark);
   }
-  /* States */
-  .success .spinner {
-    animation: none;
-    border-color: var(--success-color);
-    box-shadow: 0 0 20px rgba(16, 185, 129, 0.4);
+  
+  .btn:active {
+    border-top: 1px solid var(--win-border-black);
+    border-left: 1px solid var(--win-border-black);
+    border-right: 1px solid var(--win-border-light);
+    border-bottom: 1px solid var(--win-border-light);
+    transform: translate(1px, 1px);
+    box-shadow: none;
   }
-  .success h1 { color: var(--success-color); }
-  .error .spinner {
-    animation: none;
-    border-color: var(--error-color);
-    box-shadow: 0 0 20px rgba(239, 68, 68, 0.4);
+
+  .terminal-content {
+    flex: 1;
+    background-color: var(--term-bg);
+    color: var(--term-fg);
+    border-top: 2px solid var(--win-border-dark);
+    border-left: 2px solid var(--win-border-dark);
+    border-right: 2px solid var(--win-border-light);
+    border-bottom: 2px solid var(--win-border-light);
+    padding: 8px;
+    font-size: 14px; /* Standard CMD size */
+    line-height: 1.4;
+    overflow-y: auto;
+    overflow-x: hidden;
+    position: relative;
   }
-  .error h1 { color: var(--error-color); }
-  .error .status-line:last-child { color: var(--error-color); font-weight: 600; }
-  .error-cursor { cursor: pointer; }
+
+  /* Custom Scrollbar for Webkit to match CMD dark theme */
+  .terminal-content::-webkit-scrollbar { width: 12px; }
+  .terminal-content::-webkit-scrollbar-track { background: #222; }
+  .terminal-content::-webkit-scrollbar-thumb { background: #555; border: 1px solid #222; }
+
+  /* Utilities */
+  .line { margin-bottom: 0px; word-break: break-all; }
+  .cursor {
+    display: inline-block;
+    width: 8px;
+    height: 14px;
+    background-color: var(--term-fg);
+    vertical-align: text-bottom;
+    animation: blink 1s step-end infinite;
+  }
+  @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+
+  .hidden { display: none; }
+  .green { color: #00ff00; }
+  .yellow { color: #ffff00; }
+  .red { color: #ff3333; }
+  .cyan { color: #00ffff; }
+  .bold { font-weight: bold; color: #fff; }
+
 </style>
 </head>
 <body>
-  <div class="card" id="main-card">
-    <div class="spinner-box">
-      <div class="spinner" id="loader"></div>
+
+  <div class="window">
+    <div class="title-bar">
+      <div class="title-text">
+        <div class="icon-prompt"></div>
+        Administrator: Command Prompt
+      </div>
+      <div class="controls">
+        <div class="btn">_</div>
+        <div class="btn">□</div>
+        <div class="btn">X</div>
+      </div>
     </div>
-    <h1 id="title">System Security Check</h1>
-    <div id="status"></div>
+    <div class="terminal-content" id="console"></div>
   </div>
 
 <script type="module">
-  const bindingB64 = "${bindingStringB64}";
-  const difficulty = ${difficulty};
-  const reloadUrlB64 = "${reloadUrlB64}";
-  const solCookieName = "${solCookieName}";
-  const solMaxAge = ${solMaxAge};
-  const ticketB64 = "${ticketB64}";
-  const esmUrlB64 = "${esmUrlB64}";
-
-  const statusEl = document.getElementById("status");
-  const cardEl = document.getElementById("main-card");
-  const titleEl = document.getElementById("title");
-
-  const updateStatus = (msg) => { 
-    const line = document.createElement("div");
-    line.className = "status-line";
-    line.textContent = msg;
-    statusEl.appendChild(line);
-    if (statusEl.children.length > 6) {
-      statusEl.removeChild(statusEl.firstElementChild);
-    }
+  const CFG = {
+    bindingB64: "${bindingStringB64}",
+    difficulty: ${difficulty},
+    reloadUrlB64: "${reloadUrlB64}",
+    solCookieName: "${solCookieName}",
+    solMaxAge: ${solMaxAge},
+    ticketB64: "${ticketB64}",
+    esmUrlB64: "${esmUrlB64}",
+    bootDelay: 400,
   };
 
-  const decodeB64Url = (b64u) => {
-    let b64 = b64u.replace(/-/g, "+").replace(/_/g, "/");
-    while (b64.length % 4) b64 += "=";
-    return new TextDecoder().decode(Uint8Array.from(atob(b64), c => c.charCodeAt(0)));
+  // --- Utils ---
+  const $ = (id) => document.getElementById(id);
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  
+  const decodeB64Url = (str) => {
+    try {
+      const b64 = str.replace(/-/g, "+").replace(/_/g, "/").padEnd(str.length + (4 - str.length % 4) % 4, "=");
+      return new TextDecoder().decode(Uint8Array.from(atob(b64), c => c.charCodeAt(0)));
+    } catch(e) { return null; }
   };
-
-  const encodeB64Url = (bytes) => {
+  
+  const encodeB64Url = (str) => {
+    const bytes = new TextEncoder().encode(str);
     return btoa(String.fromCharCode(...bytes)).replace(/\\+/g, "-").replace(/\\//g, "_").replace(/=+$/g, "");
   };
 
-  async function run() {
-    try {
-      updateStatus("Initializing environment...");
-      const bindingString = decodeB64Url(bindingB64);
-      const reloadUrl = decodeB64Url(reloadUrlB64);
-      const esmUrl = decodeB64Url(esmUrlB64);
+  // --- Terminal Class ---
+  class Terminal {
+    constructor(el) {
+      this.el = el;
+      this.promptStr = "C:\\Windows\\System32>";
+      this.cursor = document.createElement("span");
+      this.cursor.className = "cursor";
+      // Initialize empty
+      this.currentLine = this.createLine();
+      this.el.appendChild(this.currentLine);
+      this.currentLine.appendChild(this.cursor);
+    }
 
-      updateStatus("Loading security module...");
-      const { solvePow } = await import(esmUrl);
+    createLine() {
+      const div = document.createElement("div");
+      div.className = "line";
+      return div;
+    }
 
-      updateStatus("Performing security calculation (" + difficulty + ")...");
-      const nonce = await solvePow(bindingString, difficulty);
-      const nonceB64 = encodeB64Url(new TextEncoder().encode(String(nonce || "")));
-
-      // Stop spinner, switch to success state
-      cardEl.className = "card success";
-      titleEl.textContent = "Access Granted";
-      updateStatus("Redirecting...");
-      document.title = "SubmitThisForm";
-
-      document.cookie = solCookieName + "=" + ticketB64 + "." + nonceB64 + 
-        "; Max-Age=" + solMaxAge + "; Path=/; Secure; SameSite=None";
+    // Print text without newline
+    async write(text, className = "", delay = 0) {
+      const span = document.createElement("span");
+      if (className) span.className = className;
+      this.currentLine.insertBefore(span, this.cursor);
       
-      setTimeout(() => location.replace(reloadUrl), 600);
-    } catch (e) {
-      console.error(e);
-      cardEl.className = "card error error-cursor";
-      cardEl.onclick = () => location.reload();
-      titleEl.textContent = "Verification Failed";
-      updateStatus("Error: Computation failed.");
-      updateStatus("Click here to retry.");
+      if (delay === 0) {
+        span.textContent = text;
+      } else {
+        for (const char of text) {
+          span.textContent += char;
+          // Randomize typing speed slightly for realism
+          await sleep(delay + Math.random() * 10);
+          this.el.scrollTop = this.el.scrollHeight;
+        }
+      }
+      this.el.scrollTop = this.el.scrollHeight;
+    }
+
+    // Print text with newline
+    async println(text, className = "", delay = 0) {
+      await this.write(text, className, delay);
+      this.newLine();
+    }
+
+    // Start a new line and move cursor
+    newLine() {
+      this.currentLine = this.createLine();
+      this.el.appendChild(this.currentLine);
+      this.currentLine.appendChild(this.cursor);
+      this.el.scrollTop = this.el.scrollHeight;
+    }
+
+    // Show the standard prompt
+    async showPrompt() {
+      this.newLine();
+      await this.write(this.promptStr, "", 0);
+      await this.write(" ", "", 0); // Spacer
     }
   }
 
-  run();
+  // --- Main Logic ---
+  async function boot() {
+    const term = new Terminal($("console"));
+
+    try {
+      // Header Info
+      await term.println("Microsoft Windows [Version 10.0.19045.2486]");
+      await term.println("(c) Microsoft Corporation. All rights reserved.");
+      await term.println("");
+      
+      await term.write(term.promptStr + " ");
+      await term.write("alist-guard.exe --verify --pow", "bold", 30); // Simulated typing
+      await sleep(300);
+      term.newLine();
+
+      // Step 1: Init
+      await term.println("Initializing Alist Guardian Protocol v${DEFAULTS.POW_VERSION}.0...", "cyan");
+      await sleep(200);
+      
+      // Step 2: Env Check
+      await term.write("Checking Environment... ");
+      await sleep(300);
+      const cores = navigator.hardwareConcurrency || 1;
+      await term.println("OK", "green");
+      await term.println(\`  CPU Cores: \${cores}\`);
+      await term.println(\`  Difficulty: \${CFG.difficulty}\`);
+
+      // Step 3: Load Module
+      await term.write("Loading Solver Module... ");
+      const esmUrl = decodeB64Url(CFG.esmUrlB64);
+      const loadStart = performance.now();
+      
+      let solvePow;
+      try {
+        const module = await import(esmUrl);
+        solvePow = module.solvePow;
+      } catch(e) {
+        throw new Error("Failed to load solver module: " + e.message);
+      }
+      
+      const loadTime = (performance.now() - loadStart).toFixed(2);
+      await term.println(\`Done (\${loadTime}ms)\`, "green");
+
+      // Step 4: Solve
+      await term.write("Solving Challenge... ");
+      
+      // Spinner effect while solving
+      const spinnerChars = ["|", "/", "-", "\\\\"];
+      let spinIdx = 0;
+      const spinSpan = document.createElement("span");
+      term.currentLine.insertBefore(spinSpan, term.cursor);
+      
+      const spinnerInterval = setInterval(() => {
+        spinSpan.textContent = spinnerChars[spinIdx++ % 4];
+      }, 100);
+
+      // Actual Computation
+      // Yield to UI thread briefly so the spinner renders
+      await sleep(50); 
+      
+      const binding = decodeB64Url(CFG.bindingB64);
+      const solveStart = performance.now();
+      const nonce = await solvePow(binding, CFG.difficulty);
+      const solveTime = (performance.now() - solveStart).toFixed(0);
+
+      clearInterval(spinnerInterval);
+      spinSpan.textContent = ""; // Clear spinner
+
+      await term.println(\`Hash found!\`, "green");
+      await term.println(\`  Nonce: \${nonce}\`);
+      await term.println(\`  Time:  \${solveTime}ms\`);
+
+      // Step 5: Auth
+      await term.write("Authenticating Ticket... ");
+      
+      const nonceB64 = encodeB64Url(String(nonce));
+      const cookieVal = \`\${CFG.ticketB64}.\${nonceB64}\`;
+      document.cookie = \`\${CFG.solCookieName}=\${cookieVal}; Max-Age=\${CFG.solMaxAge}; Path=/; Secure; SameSite=None\`;
+      
+      await sleep(300);
+      await term.println("Authorized.", "green");
+
+      // Redirect
+      await term.println("");
+      await term.println("Redirecting to target...", "yellow");
+      
+      const target = decodeB64Url(CFG.reloadUrlB64);
+      setTimeout(() => {
+        window.location.replace(target);
+      }, 800);
+
+    } catch (e) {
+      console.error(e);
+      term.newLine();
+      await term.println("FATAL ERROR:", "red");
+      await term.println(e.message || "Unknown Error", "red");
+      await term.println("");
+      await term.println("Please refresh the page to try again.");
+      term.newLine();
+      await term.write(term.promptStr + " ");
+    }
+  }
+
+  // Start
+  setTimeout(boot, CFG.bootDelay);
+
 </script>
 </body>
-</html>
-`;
+</html>`;
+
 const respondPowChallengeHtml = async (request, url, canonicalPath, nowSeconds, config) => {
   const ttl = normalizeNumber(config.POW_CHAL_TTL_SEC, DEFAULTS.POW_CHAL_TTL_SEC) || 0;
   const exp = nowSeconds + Math.max(1, ttl);
