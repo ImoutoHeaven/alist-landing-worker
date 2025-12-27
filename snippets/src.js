@@ -600,7 +600,11 @@ const buildPowChallengeHtml = ({
   .error .spinner {
     animation: none;
     border-color: var(--error-color);
+    box-shadow: 0 0 20px rgba(239, 68, 68, 0.4);
   }
+  .error h1 { color: var(--error-color); }
+  .error .status-line:last-child { color: var(--error-color); font-weight: 600; }
+  .error-cursor { cursor: pointer; }
 </style>
 </head>
 <body>
@@ -630,7 +634,6 @@ const buildPowChallengeHtml = ({
     line.className = "status-line";
     line.textContent = msg;
     statusEl.appendChild(line);
-    // Keep DOM light, remove very old elements (even if hidden by CSS)
     if (statusEl.children.length > 6) {
       statusEl.removeChild(statusEl.firstElementChild);
     }
@@ -672,8 +675,11 @@ const buildPowChallengeHtml = ({
       setTimeout(() => location.replace(reloadUrl), 600);
     } catch (e) {
       console.error(e);
-      cardEl.className = "card error";
-      updateStatus("Verification failed. Please reload.");
+      cardEl.className = "card error error-cursor";
+      cardEl.onclick = () => location.reload();
+      titleEl.textContent = "Verification Failed";
+      updateStatus("Error: Computation failed.");
+      updateStatus("Click here to retry.");
     }
   }
 
