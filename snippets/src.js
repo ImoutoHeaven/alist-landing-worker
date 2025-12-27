@@ -73,6 +73,17 @@ const normalizePath = (pathname) => {
   return decoded.startsWith("/") ? decoded : `/${decoded}`;
 };
 
+const decodePathParam = (value) => {
+  if (typeof value !== "string") return null;
+  let decoded;
+  try {
+    decoded = decodeURIComponent(value);
+  } catch {
+    return null;
+  }
+  return decoded;
+};
+
 const parseSignature = (sig) => {
   if (!sig || typeof sig !== "string") return null;
   const idx = sig.lastIndexOf(":");
@@ -524,15 +535,23 @@ export default {
     const url = new URL(request.url);
     const nowSeconds = Math.floor(Date.now() / 1000);
 
-    const path = normalizePath(url.pathname);
-    if (!path) return respondText(origin, "invalid path", 400);
+    const requestPath = normalizePath(url.pathname);
+    if (!requestPath) return respondText(origin, "invalid path", 400);
+    const isInfoPath = requestPath === "/info";
+    let authPath = requestPath;
+    if (isInfoPath) {
+      const rawPath = url.searchParams.get("path");
+      if (!rawPath) return respondText(origin, "path is required", 400);
+      authPath = decodePathParam(rawPath);
+      if (!authPath) return respondText(origin, "invalid path encoding", 400);
+    }
 
     const sign = url.searchParams.get("sign") || "";
     const signMeta = parseSignature(sign);
     if (!signMeta) return deny(origin, "sign invalid");
     if (isExpired(signMeta.expire, nowSeconds)) return deny(origin, "sign expired");
 
-    const expected = await hmacSha256Sign(path, signMeta.expire);
+    const expected = await hmacSha256Sign(authPath, signMeta.expire);
     if (expected !== sign) return deny(origin, "sign mismatch");
 
     if (!powcheck) {
@@ -543,7 +562,7 @@ export default {
       return respondText(origin, "misconfigured", 500);
     }
 
-    const powOk = await verifyPowSol(request, url, path, nowSeconds);
+    const powOk = await verifyPowSol(request, url, authPath, nowSeconds);
     if (powOk) {
       return fetch(request);
     }
@@ -552,6 +571,6 @@ export default {
       return respondJson(origin, { code: "pow_required" }, 403);
     }
 
-    return respondPowChallengeHtml(request, url, path, nowSeconds);
+    return respondPowChallengeHtml(request, url, authPath, nowSeconds);
   },
 };
