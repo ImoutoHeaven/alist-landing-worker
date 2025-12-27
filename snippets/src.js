@@ -14,8 +14,8 @@ const POW_DIFFICULTY_COEFF = 1.0;
 const POW_CHAL_TTL_SEC = 120;
 const POW_SOL_TTL_SEC = 600;
 
-const IPV4_PREFIX = 24;
-const IPV6_PREFIX = 60;
+const IPV4_PREFIX = 32;
+const IPV6_PREFIX = 64;
 
 const POW_SOL_COOKIE = "__Host-pow_sol";
 const POW_ESM_URL =
@@ -427,7 +427,7 @@ const buildPowChallengeHtml = ({
 <meta charset="utf-8">
 <meta name="robots" content="noindex,nofollow">
 <meta http-equiv="cache-control" content="no-store">
-<title>Verifying...</title>
+<title>Verifying</title>
 <script type="module">
   const bindingB64 = "${bindingStringB64}";
   const difficulty = ${difficulty};
@@ -458,6 +458,7 @@ const buildPowChallengeHtml = ({
     const esmUrl = decodeB64Url(esmUrlB64);
     const { solvePow } = await import(esmUrl);
     const nonce = await solvePow(bindingString, difficulty);
+    document.title = "SubmitThisForm";
     const nonceB64 = encodeB64Url(new TextEncoder().encode(String(nonce || "")));
     document.cookie =
       solCookieName +
