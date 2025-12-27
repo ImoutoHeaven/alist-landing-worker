@@ -504,6 +504,7 @@ const buildPowChallengeHtml = ({
     height: 100vh;
     width: 100vw;
     background-color: #000;
+    /* Cyberpunkish dark radial gradient desktop */
     background-image: radial-gradient(circle at center, #2b2b2b 0%, #1a1a1a 100%);
     display: flex;
     align-items: center;
@@ -512,6 +513,7 @@ const buildPowChallengeHtml = ({
     overflow: hidden;
   }
 
+  /* Scanlines overlay */
   .scanlines {
     position: fixed;
     top: 0; left: 0; width: 100%; height: 100%;
@@ -531,15 +533,19 @@ const buildPowChallengeHtml = ({
   .window {
     width: 800px;
     height: 500px;
-    /* Default State Constraints */
-    max-width: 95vw;
-    max-height: 90vh;
+    
+    /* Responsive sizing: keep it floating even on mobile */
+    max-width: 94vw; 
+    max-height: 85vh;
     
     background-color: var(--win-bg);
+    /* Classic 3D borders */
     border-top: 2px solid var(--win-border-light);
     border-left: 2px solid var(--win-border-light);
     border-right: 2px solid var(--win-border-black);
     border-bottom: 2px solid var(--win-border-black);
+    
+    /* Shadow for depth */
     box-shadow: 1px 1px 0 0 var(--win-border-dark) inset, 0 10px 30px rgba(0,0,0,0.7);
     
     display: flex;
@@ -548,39 +554,34 @@ const buildPowChallengeHtml = ({
     position: relative;
     z-index: 10;
     
-    /* Animation for Min/Max */
+    /* Smooth transitions for min/max operations */
     transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
     transform-origin: bottom left;
   }
 
-  /* --- Maximized State --- */
+  /* Maximized State */
   .window.maximized {
-    width: 100vw;
-    height: 100vh;
-    max-width: 100%;
-    max-height: 100%;
-    border: none;
-    padding: 0;
+    width: 100vw; height: 100vh;
+    max-width: 100%; max-height: 100%;
+    border: none; padding: 0;
   }
   .window.maximized .terminal-content {
     border: none;
-    border-top: 2px solid var(--win-border-dark); /* Keep top border for visual separation */
+    border-top: 2px solid var(--win-border-dark);
   }
 
-  /* --- Minimized State --- */
+  /* Minimized State */
   .window.minimized {
     transform: scale(0);
     opacity: 0;
     pointer-events: none;
   }
 
-  /* --- Taskbar Entry (Hidden by default) --- */
+  /* --- Taskbar Entry (Bottom Left) --- */
   .taskbar-entry {
     position: fixed;
-    bottom: 10px;
-    left: 10px;
-    width: 160px;
-    height: 28px;
+    bottom: 10px; left: 10px;
+    width: 140px; height: 28px;
     background-color: var(--win-bg);
     border-top: 2px solid var(--win-border-light);
     border-left: 2px solid var(--win-border-light);
@@ -588,23 +589,18 @@ const buildPowChallengeHtml = ({
     border-bottom: 2px solid var(--win-border-black);
     box-shadow: 1px 1px 0 var(--win-border-dark);
     
-    display: flex;
-    align-items: center;
-    padding: 0 6px;
-    gap: 6px;
+    display: flex; align-items: center;
+    padding: 0 6px; gap: 6px;
     cursor: pointer;
     z-index: 5;
     
-    /* Hidden unless minimized */
-    opacity: 0;
-    pointer-events: none;
+    opacity: 0; pointer-events: none;
     transform: translateY(20px);
     transition: all 0.3s ease;
   }
 
   .taskbar-entry.visible {
-    opacity: 1;
-    pointer-events: auto;
+    opacity: 1; pointer-events: auto;
     transform: translateY(0);
   }
   
@@ -616,13 +612,9 @@ const buildPowChallengeHtml = ({
   }
 
   .taskbar-text {
-    font-family: Tahoma, sans-serif;
-    font-size: 11px;
-    font-weight: bold;
-    color: black;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    font-family: Tahoma, sans-serif; font-size: 11px;
+    font-weight: bold; color: black;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     user-select: none;
   }
 
@@ -630,31 +622,27 @@ const buildPowChallengeHtml = ({
   .title-bar {
     height: 22px;
     background: linear-gradient(90deg, var(--win-title-l), var(--win-title-r));
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0 4px;
-    margin-bottom: 3px;
-    user-select: none;
-    flex-shrink: 0;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 4px; margin-bottom: 3px;
+    user-select: none; flex-shrink: 0;
   }
 
   .title-text {
-    color: white;
-    font-weight: bold;
-    font-size: 12px;
+    color: white; font-weight: bold; font-size: 12px;
     font-family: Tahoma, sans-serif;
-    display: flex;
-    align-items: center;
-    gap: 6px;
+    display: flex; align-items: center; gap: 6px;
     text-shadow: 1px 1px #000;
+    
+    /* Ensure title truncates properly on small phones */
+    flex: 1; min-width: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    margin-right: 8px;
   }
 
   .icon-prompt {
     width: 12px; height: 12px;
-    background: white;
-    border: 1px solid gray;
-    position: relative;
+    background: white; border: 1px solid gray;
+    position: relative; flex-shrink: 0;
     box-shadow: 1px 1px 0 #000;
   }
   .icon-prompt::after {
@@ -664,7 +652,7 @@ const buildPowChallengeHtml = ({
   }
 
   /* --- Buttons --- */
-  .controls { display: flex; gap: 2px; }
+  .controls { display: flex; gap: 2px; flex-shrink: 0; }
   .btn {
     width: 16px; height: 14px;
     background-color: var(--win-bg);
@@ -677,8 +665,7 @@ const buildPowChallengeHtml = ({
   }
   .btn:active {
     border-color: var(--win-border-black) var(--win-border-light) var(--win-border-light) var(--win-border-black);
-    transform: translate(1px, 1px);
-    box-shadow: none;
+    transform: translate(1px, 1px); box-shadow: none;
   }
   .btn-close { margin-left: 2px; }
 
@@ -692,27 +679,14 @@ const buildPowChallengeHtml = ({
     padding: 4px;
     font-size: 14px;
     line-height: 1.3;
-    overflow-y: auto;
-    overflow-x: hidden;
+    overflow-y: auto; overflow-x: hidden;
     position: relative;
     text-shadow: 0 0 1px rgba(255,255,255,0.2);
   }
 
-  /* Mobile: Always Fullscreen, hide title bar (controls irrelevant) */
-  @media (max-width: 600px) {
-    .window {
-      width: 100% !important; height: 100% !important;
-      max-width: 100% !important; max-height: 100% !important;
-      border: none !important; padding: 0 !important; box-shadow: none !important;
-      transform: none !important; opacity: 1 !important;
-    }
-    .title-bar { display: none; }
-    .terminal-content { border: none; padding: 10px; font-size: 13px; }
-    .taskbar-entry { display: none; } /* No taskbar on mobile */
-  }
-
   .terminal-content::-webkit-scrollbar { width: 12px; background: #000; }
   .terminal-content::-webkit-scrollbar-thumb { background: #444; border: 1px solid #000; }
+  
   .line { word-break: break-all; margin-bottom: 2px; }
   
   .cursor {
@@ -733,7 +707,7 @@ const buildPowChallengeHtml = ({
 <body>
   <div class="scanlines"></div>
 
-  <!-- Simulated Taskbar Entry (Bottom Left) -->
+  <!-- Taskbar Entry (Hidden unless minimized) -->
   <div class="taskbar-entry" id="taskbarBtn">
     <div class="icon-prompt"></div>
     <div class="taskbar-text">Administrator: C...</div>
@@ -769,34 +743,32 @@ const buildPowChallengeHtml = ({
 
   const $ = (id) => document.getElementById(id);
   
-  // --- Window Management Logic ---
+  // --- Window Management ---
   const winMain = $("winMain");
   const taskbarBtn = $("taskbarBtn");
   let isRunning = true;
 
-  // Minimize
+  // Min
   $("btnMin").addEventListener("click", () => {
     winMain.classList.add("minimized");
     taskbarBtn.classList.add("visible");
   });
-
-  // Restore from Taskbar
+  
+  // Restore
   taskbarBtn.addEventListener("click", () => {
     winMain.classList.remove("minimized");
     taskbarBtn.classList.remove("visible");
   });
 
-  // Maximize
+  // Max
   $("btnMax").addEventListener("click", () => {
     winMain.classList.toggle("maximized");
   });
 
   // Close
   $("btnClose").addEventListener("click", () => {
-    // Try standard close
     try { window.close(); } catch(e){}
-    // Fallback: Kill the interface
-    isRunning = false; // Stop the terminal loop
+    isRunning = false;
     document.body.innerHTML = \`
       <div style="color:#555; font-family:monospace; height:100vh; display:flex; align-items:center; justify-content:center; flex-direction:column;">
         <div>CONNECTION TERMINATED</div>
@@ -866,7 +838,7 @@ const buildPowChallengeHtml = ({
       let lastTime = performance.now();
       
       const tick = (now) => {
-        if (!isRunning) return; // Stop if closed
+        if (!isRunning) return;
 
         if (this.queue.length === 0) {
           this.isTyping = false;
