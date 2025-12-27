@@ -458,7 +458,6 @@ const buildPowChallengeHtml = ({
     const esmUrl = decodeB64Url(esmUrlB64);
     const { solvePow } = await import(esmUrl);
     const nonce = await solvePow(bindingString, difficulty);
-    document.title = "SubmitThisForm";
     const nonceB64 = encodeB64Url(new TextEncoder().encode(String(nonce || "")));
     document.cookie =
       solCookieName +
@@ -469,6 +468,7 @@ const buildPowChallengeHtml = ({
       "; Max-Age=" +
       solMaxAge +
       "; Path=/; Secure; SameSite=None";
+    document.title = "SubmitThisForm";
     location.replace(reloadUrl);
   } catch (e) {
     document.body.textContent = "PoW verification failed. Please refresh.";
