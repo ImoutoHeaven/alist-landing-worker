@@ -479,10 +479,83 @@ const buildPowChallengeHtml = ({
   solMaxAge,
   esmUrlB64,
 }) => `<!doctype html>
+<html lang="zh-CN">
+<head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="robots" content="noindex,nofollow">
 <meta http-equiv="cache-control" content="no-store">
-<title>Verifying</title>
+<title>Security Check</title>
+<style>
+  :root {
+    --bg-color: #050505;
+    --bg-accent: #0b1b14;
+    --text-color: #00ff99;
+    --dim-color: #008f55;
+    --error-color: #ff0055;
+    --font-stack: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  }
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    color: var(--text-color);
+    font-family: var(--font-stack);
+    background-color: var(--bg-color);
+    background-image: radial-gradient(1200px circle at 20% 20%, var(--bg-accent) 0%, #050505 45%, #030303 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+  .container {
+    text-align: center;
+    padding: 2rem 1.5rem;
+    max-width: 420px;
+    width: 100%;
+  }
+  .spinner {
+    width: 64px;
+    height: 64px;
+    margin: 0 auto 1.75rem;
+    border: 3px solid rgba(0, 255, 153, 0.12);
+    border-radius: 50%;
+    border-top-color: var(--text-color);
+    animation: spin 1s ease-in-out infinite;
+    box-shadow: 0 0 16px rgba(0, 255, 153, 0.25);
+  }
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+  h1 {
+    font-size: 1.1rem;
+    margin: 0 0 0.9rem;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    text-shadow: 0 0 6px rgba(0, 255, 153, 0.5);
+  }
+  #status {
+    font-size: 0.9rem;
+    color: var(--dim-color);
+    min-height: 1.2rem;
+  }
+  .error-state #status {
+    color: var(--error-color);
+  }
+  .error-state .spinner {
+    border-top-color: var(--error-color);
+    box-shadow: 0 0 16px rgba(255, 0, 85, 0.25);
+    animation: none;
+  }
+</style>
+</head>
+<body>
+  <div class="container" aria-live="polite">
+    <div class="spinner"></div>
+    <h1>System Guard</h1>
+    <div id="status">初始化环境...</div>
+  </div>
+
 <script type="module">
   const bindingB64 = "${bindingStringB64}";
   const difficulty = ${difficulty};
@@ -491,6 +564,18 @@ const buildPowChallengeHtml = ({
   const solMaxAge = ${solMaxAge};
   const ticketB64 = "${ticketB64}";
   const esmUrlB64 = "${esmUrlB64}";
+
+  const statusEl = document.getElementById("status");
+  const containerEl = document.querySelector(".container");
+
+  const updateStatus = (msg) => {
+    statusEl.textContent = msg;
+  };
+
+  const showError = (msg) => {
+    containerEl.classList.add("error-state");
+    updateStatus(msg);
+  };
 
   const decodeB64Url = (b64u) => {
     let b64 = b64u.replace(/-/g, "+").replace(/_/g, "/");
@@ -507,13 +592,20 @@ const buildPowChallengeHtml = ({
     return btoa(bin).replace(/\\+/g, "-").replace(/\\//g, "_").replace(/=+$/g, "");
   };
 
-  try {
+  const run = async () => {
+    updateStatus("初始化环境...");
     const bindingString = decodeB64Url(bindingB64);
     const reloadUrl = decodeB64Url(reloadUrlB64);
     const esmUrl = decodeB64Url(esmUrlB64);
+
+    updateStatus("加载验证模块...");
     const { solvePow } = await import(esmUrl);
+
+    updateStatus("正在计算 PoW（难度: " + difficulty + "）...");
     const nonce = await solvePow(bindingString, difficulty);
     const nonceB64 = encodeB64Url(new TextEncoder().encode(String(nonce || "")));
+
+    updateStatus("校验成功，准备跳转...");
     document.cookie =
       solCookieName +
       "=" +
@@ -523,12 +615,17 @@ const buildPowChallengeHtml = ({
       "; Max-Age=" +
       solMaxAge +
       "; Path=/; Secure; SameSite=None";
-    document.title = "SubmitThisForm";
+    document.title = "Redirecting";
     location.replace(reloadUrl);
-  } catch (e) {
-    document.body.textContent = "PoW verification failed. Please refresh.";
-  }
+  };
+
+  run().catch((e) => {
+    console.error(e);
+    showError("校验失败，请刷新重试。");
+  });
 </script>
+</body>
+</html>
 `;
 
 const respondPowChallengeHtml = async (request, url, canonicalPath, nowSeconds, config) => {
