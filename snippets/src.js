@@ -482,8 +482,8 @@ const buildPowChallengeHtml = ({
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Command Prompt - Security Check</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>System Integrity Check</title>
 <style>
   :root {
     --win-bg: #c0c0c0;
@@ -492,8 +492,8 @@ const buildPowChallengeHtml = ({
     --win-border-black: #000000;
     --win-title-l: #000080;
     --win-title-r: #1084d0;
-    --term-bg: #000000;
-    --term-fg: #c0c0c0; /* Classic CMD gray/white */
+    --term-bg: #0c0c0c;
+    --term-fg: #cccccc;
     --term-font: "Consolas", "Lucida Console", "Monaco", "Courier New", monospace;
   }
 
@@ -503,40 +503,132 @@ const buildPowChallengeHtml = ({
     margin: 0; padding: 0;
     height: 100vh;
     width: 100vw;
-    background-color: #2e2e2e; /* Dark desktop background */
+    background-color: #000;
+    background-image: radial-gradient(circle at center, #2b2b2b 0%, #1a1a1a 100%);
     display: flex;
     align-items: center;
     justify-content: center;
     font-family: var(--term-font);
     overflow: hidden;
-    /* Subtle CRT flicker on the whole screen */
-    animation: flicker 0.15s infinite;
   }
 
-  @keyframes flicker {
-    0% { opacity: 0.99; }
-    100% { opacity: 1; }
+  .scanlines {
+    position: fixed;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background: linear-gradient(
+      to bottom,
+      rgba(255,255,255,0),
+      rgba(255,255,255,0) 50%,
+      rgba(0,0,0,0.1) 50%,
+      rgba(0,0,0,0.1)
+    );
+    background-size: 100% 4px;
+    pointer-events: none;
+    z-index: 999;
   }
 
-  /* --- Windows 9x Style Window --- */
+  /* --- Window Container --- */
   .window {
-    width: 90%;
-    max-width: 800px;
-    height: 70vh;
-    min-height: 320px;
+    width: 800px;
+    height: 500px;
+    /* Default State Constraints */
+    max-width: 95vw;
+    max-height: 90vh;
+    
     background-color: var(--win-bg);
     border-top: 2px solid var(--win-border-light);
     border-left: 2px solid var(--win-border-light);
     border-right: 2px solid var(--win-border-black);
     border-bottom: 2px solid var(--win-border-black);
-    box-shadow: 1px 1px 0 0 var(--win-border-dark) inset, 0 0 20px rgba(0,0,0,0.5);
+    box-shadow: 1px 1px 0 0 var(--win-border-dark) inset, 0 10px 30px rgba(0,0,0,0.7);
+    
     display: flex;
     flex-direction: column;
     padding: 3px;
+    position: relative;
+    z-index: 10;
+    
+    /* Animation for Min/Max */
+    transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+    transform-origin: bottom left;
   }
 
+  /* --- Maximized State --- */
+  .window.maximized {
+    width: 100vw;
+    height: 100vh;
+    max-width: 100%;
+    max-height: 100%;
+    border: none;
+    padding: 0;
+  }
+  .window.maximized .terminal-content {
+    border: none;
+    border-top: 2px solid var(--win-border-dark); /* Keep top border for visual separation */
+  }
+
+  /* --- Minimized State --- */
+  .window.minimized {
+    transform: scale(0);
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  /* --- Taskbar Entry (Hidden by default) --- */
+  .taskbar-entry {
+    position: fixed;
+    bottom: 10px;
+    left: 10px;
+    width: 160px;
+    height: 28px;
+    background-color: var(--win-bg);
+    border-top: 2px solid var(--win-border-light);
+    border-left: 2px solid var(--win-border-light);
+    border-right: 2px solid var(--win-border-black);
+    border-bottom: 2px solid var(--win-border-black);
+    box-shadow: 1px 1px 0 var(--win-border-dark);
+    
+    display: flex;
+    align-items: center;
+    padding: 0 6px;
+    gap: 6px;
+    cursor: pointer;
+    z-index: 5;
+    
+    /* Hidden unless minimized */
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(20px);
+    transition: all 0.3s ease;
+  }
+
+  .taskbar-entry.visible {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0);
+  }
+  
+  .taskbar-entry:active {
+    border-top: 2px solid var(--win-border-black);
+    border-left: 2px solid var(--win-border-black);
+    border-right: 2px solid var(--win-border-light);
+    border-bottom: 2px solid var(--win-border-light);
+  }
+
+  .taskbar-text {
+    font-family: Tahoma, sans-serif;
+    font-size: 11px;
+    font-weight: bold;
+    color: black;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    user-select: none;
+  }
+
+  /* --- Title Bar --- */
   .title-bar {
-    height: 24px;
+    height: 22px;
     background: linear-gradient(90deg, var(--win-title-l), var(--win-title-r));
     display: flex;
     align-items: center;
@@ -544,123 +636,119 @@ const buildPowChallengeHtml = ({
     padding: 0 4px;
     margin-bottom: 3px;
     user-select: none;
+    flex-shrink: 0;
   }
 
   .title-text {
     color: white;
     font-weight: bold;
-    font-size: 13px;
-    letter-spacing: 0.5px;
+    font-size: 12px;
     font-family: Tahoma, sans-serif;
     display: flex;
     align-items: center;
     gap: 6px;
+    text-shadow: 1px 1px #000;
   }
-  
+
   .icon-prompt {
-    width: 14px; 
-    height: 14px;
+    width: 12px; height: 12px;
     background: white;
     border: 1px solid gray;
     position: relative;
+    box-shadow: 1px 1px 0 #000;
   }
   .icon-prompt::after {
-    content: "C_";
-    color: black;
-    font-size: 10px;
-    position: absolute;
-    top: -2px; left: 1px;
-    font-family: monospace;
-    font-weight: bold;
+    content: "C:"; color: black; font-size: 9px;
+    position: absolute; top: -2px; left: 0px;
+    font-family: Arial, sans-serif; font-weight: bold; transform: scale(0.8);
   }
 
-  .controls {
-    display: flex;
-    gap: 2px;
-  }
-
+  /* --- Buttons --- */
+  .controls { display: flex; gap: 2px; }
   .btn {
-    width: 16px;
-    height: 14px;
+    width: 16px; height: 14px;
     background-color: var(--win-bg);
-    border-top: 1px solid var(--win-border-light);
-    border-left: 1px solid var(--win-border-light);
-    border-right: 1px solid var(--win-border-black);
-    border-bottom: 1px solid var(--win-border-black);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 9px;
-    font-family: Tahoma, sans-serif;
-    font-weight: bold;
-    color: black;
-    cursor: default;
+    border: 1px solid;
+    border-color: var(--win-border-light) var(--win-border-black) var(--win-border-black) var(--win-border-light);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 9px; font-family: Tahoma, sans-serif; color: black;
     box-shadow: 1px 1px 0 var(--win-border-dark);
+    cursor: pointer;
   }
-  
   .btn:active {
-    border-top: 1px solid var(--win-border-black);
-    border-left: 1px solid var(--win-border-black);
-    border-right: 1px solid var(--win-border-light);
-    border-bottom: 1px solid var(--win-border-light);
+    border-color: var(--win-border-black) var(--win-border-light) var(--win-border-light) var(--win-border-black);
     transform: translate(1px, 1px);
     box-shadow: none;
   }
+  .btn-close { margin-left: 2px; }
 
+  /* --- Terminal Area --- */
   .terminal-content {
     flex: 1;
     background-color: var(--term-bg);
     color: var(--term-fg);
-    border-top: 2px solid var(--win-border-dark);
-    border-left: 2px solid var(--win-border-dark);
-    border-right: 2px solid var(--win-border-light);
-    border-bottom: 2px solid var(--win-border-light);
-    padding: 8px;
-    font-size: 14px; /* Standard CMD size */
-    line-height: 1.4;
+    border: 2px solid;
+    border-color: var(--win-border-dark) var(--win-border-light) var(--win-border-light) var(--win-border-dark);
+    padding: 4px;
+    font-size: 14px;
+    line-height: 1.3;
     overflow-y: auto;
     overflow-x: hidden;
     position: relative;
+    text-shadow: 0 0 1px rgba(255,255,255,0.2);
   }
 
-  /* Custom Scrollbar for Webkit to match CMD dark theme */
-  .terminal-content::-webkit-scrollbar { width: 12px; }
-  .terminal-content::-webkit-scrollbar-track { background: #222; }
-  .terminal-content::-webkit-scrollbar-thumb { background: #555; border: 1px solid #222; }
+  /* Mobile: Always Fullscreen, hide title bar (controls irrelevant) */
+  @media (max-width: 600px) {
+    .window {
+      width: 100% !important; height: 100% !important;
+      max-width: 100% !important; max-height: 100% !important;
+      border: none !important; padding: 0 !important; box-shadow: none !important;
+      transform: none !important; opacity: 1 !important;
+    }
+    .title-bar { display: none; }
+    .terminal-content { border: none; padding: 10px; font-size: 13px; }
+    .taskbar-entry { display: none; } /* No taskbar on mobile */
+  }
 
-  /* Utilities */
-  .line { margin-bottom: 0px; word-break: break-all; }
+  .terminal-content::-webkit-scrollbar { width: 12px; background: #000; }
+  .terminal-content::-webkit-scrollbar-thumb { background: #444; border: 1px solid #000; }
+  .line { word-break: break-all; margin-bottom: 2px; }
+  
   .cursor {
-    display: inline-block;
-    width: 8px;
-    height: 14px;
-    background-color: var(--term-fg);
-    vertical-align: text-bottom;
+    display: inline-block; width: 0.6em; height: 1.1em;
+    background-color: var(--term-fg); vertical-align: text-bottom;
     animation: blink 1s step-end infinite;
   }
   @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
 
-  .hidden { display: none; }
-  .green { color: #00ff00; }
-  .yellow { color: #ffff00; }
-  .red { color: #ff3333; }
-  .cyan { color: #00ffff; }
-  .bold { font-weight: bold; color: #fff; }
-
+  .dim { color: #888; }
+  .green { color: #0f0; }
+  .cyan { color: #0ff; }
+  .yellow { color: #ff0; }
+  .red { color: #f55; }
+  .white { color: #fff; font-weight: bold; }
 </style>
 </head>
 <body>
+  <div class="scanlines"></div>
 
-  <div class="window">
+  <!-- Simulated Taskbar Entry (Bottom Left) -->
+  <div class="taskbar-entry" id="taskbarBtn">
+    <div class="icon-prompt"></div>
+    <div class="taskbar-text">Administrator: C...</div>
+  </div>
+
+  <div class="window" id="winMain">
     <div class="title-bar">
       <div class="title-text">
         <div class="icon-prompt"></div>
-        Administrator: Command Prompt
+        Administrator: C:\\Windows\\System32\\cmd.exe
       </div>
       <div class="controls">
-        <div class="btn">_</div>
-        <div class="btn">□</div>
-        <div class="btn">X</div>
+        <div class="btn" id="btnMin" title="Minimize">_</div>
+        <div class="btn" id="btnMax" title="Maximize">□</div>
+        <div class="btn btn-close" id="btnClose" title="Close">X</div>
       </div>
     </div>
     <div class="terminal-content" id="console"></div>
@@ -675,16 +763,55 @@ const buildPowChallengeHtml = ({
     solMaxAge: ${solMaxAge},
     ticketB64: "${ticketB64}",
     esmUrlB64: "${esmUrlB64}",
-    bootDelay: 400,
+    bootDelay: 200,
+    charsPerSecond: 600,
   };
 
-  // --- Utils ---
   const $ = (id) => document.getElementById(id);
-  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   
+  // --- Window Management Logic ---
+  const winMain = $("winMain");
+  const taskbarBtn = $("taskbarBtn");
+  let isRunning = true;
+
+  // Minimize
+  $("btnMin").addEventListener("click", () => {
+    winMain.classList.add("minimized");
+    taskbarBtn.classList.add("visible");
+  });
+
+  // Restore from Taskbar
+  taskbarBtn.addEventListener("click", () => {
+    winMain.classList.remove("minimized");
+    taskbarBtn.classList.remove("visible");
+  });
+
+  // Maximize
+  $("btnMax").addEventListener("click", () => {
+    winMain.classList.toggle("maximized");
+  });
+
+  // Close
+  $("btnClose").addEventListener("click", () => {
+    // Try standard close
+    try { window.close(); } catch(e){}
+    // Fallback: Kill the interface
+    isRunning = false; // Stop the terminal loop
+    document.body.innerHTML = \`
+      <div style="color:#555; font-family:monospace; height:100vh; display:flex; align-items:center; justify-content:center; flex-direction:column;">
+        <div>CONNECTION TERMINATED</div>
+        <div style="font-size:12px; margin-top:10px;">NO SIGNAL</div>
+      </div>
+    \`;
+    document.body.style.background = "#000";
+  });
+
+  // --- Logic ---
   const decodeB64Url = (str) => {
     try {
-      const b64 = str.replace(/-/g, "+").replace(/_/g, "/").padEnd(str.length + (4 - str.length % 4) % 4, "=");
+      let b64 = str.replace(/-/g, "+").replace(/_/g, "/");
+      const pad = b64.length % 4;
+      if (pad) b64 += "=".repeat(4 - pad);
       return new TextDecoder().decode(Uint8Array.from(atob(b64), c => c.charCodeAt(0)));
     } catch(e) { return null; }
   };
@@ -694,172 +821,178 @@ const buildPowChallengeHtml = ({
     return btoa(String.fromCharCode(...bytes)).replace(/\\+/g, "-").replace(/\\//g, "_").replace(/=+$/g, "");
   };
 
-  // --- Terminal Class ---
   class Terminal {
     constructor(el) {
       this.el = el;
-      this.promptStr = "C:\\Windows\\System32>";
+      this.promptStr = "C:\\\\Windows\\\\System32>"; 
+      this.queue = []; 
+      this.isTyping = false;
       this.cursor = document.createElement("span");
       this.cursor.className = "cursor";
-      // Initialize empty
-      this.currentLine = this.createLine();
+      this.newLine();
+    }
+
+    newLine() {
+      this.currentLine = document.createElement("div");
+      this.currentLine.className = "line";
       this.el.appendChild(this.currentLine);
       this.currentLine.appendChild(this.cursor);
+      this.el.scrollTop = this.el.scrollHeight;
     }
 
-    createLine() {
-      const div = document.createElement("div");
-      div.className = "line";
-      return div;
+    async type(text, style = "") {
+      return new Promise(resolve => {
+        this.queue.push({ text, style, resolve });
+        if (!this.isTyping) this.startLoop();
+      });
     }
 
-    // Print text without newline
-    async write(text, className = "", delay = 0) {
+    async println(text, style = "") {
+      await this.type(text, style);
+      this.newLine();
+    }
+
+    writeDirect(text, style="") {
+      if (!isRunning) return;
       const span = document.createElement("span");
-      if (className) span.className = className;
+      if(style) span.className = style;
+      span.textContent = text;
       this.currentLine.insertBefore(span, this.cursor);
+      this.el.scrollTop = this.el.scrollHeight;
+    }
+
+    startLoop() {
+      this.isTyping = true;
+      let lastTime = performance.now();
       
-      if (delay === 0) {
-        span.textContent = text;
-      } else {
-        for (const char of text) {
-          span.textContent += char;
-          // Randomize typing speed slightly for realism
-          await sleep(delay + Math.random() * 10);
+      const tick = (now) => {
+        if (!isRunning) return; // Stop if closed
+
+        if (this.queue.length === 0) {
+          this.isTyping = false;
+          return; 
+        }
+
+        const task = this.queue[0];
+        const dt = now - lastTime;
+        lastTime = now;
+
+        const charCount = Math.max(1, Math.round((CFG.charsPerSecond / 1000) * dt));
+        const chunk = task.text.substring(0, charCount);
+        task.text = task.text.substring(charCount);
+
+        if (chunk) {
+          let lastSpan = this.currentLine.lastElementChild?.previousElementSibling;
+          if (lastSpan && lastSpan.className === task.style) {
+            lastSpan.textContent += chunk;
+          } else {
+            const span = document.createElement("span");
+            if (task.style) span.className = task.style;
+            span.textContent = chunk;
+            this.currentLine.insertBefore(span, this.cursor);
+          }
           this.el.scrollTop = this.el.scrollHeight;
         }
-      }
-      this.el.scrollTop = this.el.scrollHeight;
-    }
 
-    // Print text with newline
-    async println(text, className = "", delay = 0) {
-      await this.write(text, className, delay);
-      this.newLine();
-    }
-
-    // Start a new line and move cursor
-    newLine() {
-      this.currentLine = this.createLine();
-      this.el.appendChild(this.currentLine);
-      this.currentLine.appendChild(this.cursor);
-      this.el.scrollTop = this.el.scrollHeight;
-    }
-
-    // Show the standard prompt
-    async showPrompt() {
-      this.newLine();
-      await this.write(this.promptStr, "", 0);
-      await this.write(" ", "", 0); // Spacer
+        if (task.text.length === 0) {
+          this.queue.shift();
+          if (task.resolve) task.resolve();
+        }
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
     }
   }
 
-  // --- Main Logic ---
   async function boot() {
+    if (!isRunning) return;
     const term = new Terminal($("console"));
 
-    try {
-      // Header Info
-      await term.println("Microsoft Windows [Version 10.0.19045.2486]");
-      await term.println("(c) Microsoft Corporation. All rights reserved.");
-      await term.println("");
-      
-      await term.write(term.promptStr + " ");
-      await term.write("alist-guard.exe --verify --pow", "bold", 30); // Simulated typing
-      await sleep(300);
-      term.newLine();
+    await new Promise(r => setTimeout(r, CFG.bootDelay));
 
-      // Step 1: Init
-      await term.println("Initializing Alist Guardian Protocol v${DEFAULTS.POW_VERSION}.0...", "cyan");
-      await sleep(200);
+    try {
+      term.writeDirect("Microsoft Windows [Version 10.0.19045.2486]");
+      term.newLine();
+      term.writeDirect("(c) Microsoft Corporation. All rights reserved.");
+      term.newLine();
+      term.newLine();
       
-      // Step 2: Env Check
-      await term.write("Checking Environment... ");
-      await sleep(300);
+      term.writeDirect(term.promptStr + " ");
+      await term.type("alist-guard.exe --verify --pow", "");
+      
+      await new Promise(r => setTimeout(r, 300));
+      term.newLine();
+      
+      await term.println("ALIST GUARDIAN v" + "${DEFAULTS.POW_VERSION}.0", "white");
+      
+      await term.type("Detecting Hardware Environment... ", "dim");
       const cores = navigator.hardwareConcurrency || 1;
       await term.println("OK", "green");
-      await term.println(\`  CPU Cores: \${cores}\`);
-      await term.println(\`  Difficulty: \${CFG.difficulty}\`);
-
-      // Step 3: Load Module
-      await term.write("Loading Solver Module... ");
-      const esmUrl = decodeB64Url(CFG.esmUrlB64);
+      await term.println(\`  > CPU: \${cores} Cores\`, "dim");
+      await term.println(\`  > Difficulty: \${CFG.difficulty}\`, "dim");
+      
+      await term.type("Loading Solver... ", "dim");
       const loadStart = performance.now();
+      const esmUrl = decodeB64Url(CFG.esmUrlB64);
       
       let solvePow;
       try {
         const module = await import(esmUrl);
         solvePow = module.solvePow;
       } catch(e) {
-        throw new Error("Failed to load solver module: " + e.message);
+        throw new Error("Module Load Failed");
       }
-      
-      const loadTime = (performance.now() - loadStart).toFixed(2);
-      await term.println(\`Done (\${loadTime}ms)\`, "green");
+      await term.println(\`DONE (\${(performance.now() - loadStart).toFixed(0)}ms)\`, "green");
 
-      // Step 4: Solve
-      await term.write("Solving Challenge... ");
+      await term.type("Calculating Proof-of-Work... ", "cyan");
       
-      // Spinner effect while solving
-      const spinnerChars = ["|", "/", "-", "\\\\"];
-      let spinIdx = 0;
       const spinSpan = document.createElement("span");
+      spinSpan.className = "white";
       term.currentLine.insertBefore(spinSpan, term.cursor);
-      
-      const spinnerInterval = setInterval(() => {
-        spinSpan.textContent = spinnerChars[spinIdx++ % 4];
-      }, 100);
+      let spinFrame = 0;
+      const spinner = setInterval(() => { spinSpan.textContent = "|/-\\\\"[spinFrame++ % 4]; }, 80);
 
-      // Actual Computation
-      // Yield to UI thread briefly so the spinner renders
-      await sleep(50); 
-      
+      await new Promise(r => setTimeout(r, 50));
+
       const binding = decodeB64Url(CFG.bindingB64);
-      const solveStart = performance.now();
+      const startT = performance.now();
       const nonce = await solvePow(binding, CFG.difficulty);
-      const solveTime = (performance.now() - solveStart).toFixed(0);
+      const timeT = performance.now() - startT;
 
-      clearInterval(spinnerInterval);
-      spinSpan.textContent = ""; // Clear spinner
+      clearInterval(spinner);
+      spinSpan.remove();
 
-      await term.println(\`Hash found!\`, "green");
-      await term.println(\`  Nonce: \${nonce}\`);
-      await term.println(\`  Time:  \${solveTime}ms\`);
+      await term.println("MATCH", "green");
+      await term.println(\`  > Nonce: \${nonce}\`, "dim");
+      await term.println(\`  > Time:  \${timeT.toFixed(0)}ms\`, "dim");
 
-      // Step 5: Auth
-      await term.write("Authenticating Ticket... ");
-      
+      await term.type("Verifying Ticket... ", "dim");
       const nonceB64 = encodeB64Url(String(nonce));
       const cookieVal = \`\${CFG.ticketB64}.\${nonceB64}\`;
       document.cookie = \`\${CFG.solCookieName}=\${cookieVal}; Max-Age=\${CFG.solMaxAge}; Path=/; Secure; SameSite=None\`;
       
-      await sleep(300);
-      await term.println("Authorized.", "green");
-
-      // Redirect
-      await term.println("");
-      await term.println("Redirecting to target...", "yellow");
+      await new Promise(r => setTimeout(r, 400));
+      await term.println("ACCESS GRANTED", "green");
+      
+      term.newLine();
+      await term.println("Redirecting...", "yellow");
       
       const target = decodeB64Url(CFG.reloadUrlB64);
       setTimeout(() => {
-        window.location.replace(target);
-      }, 800);
+        if (isRunning) window.location.replace(target);
+      }, 500);
 
     } catch (e) {
-      console.error(e);
+      if (!isRunning) return;
       term.newLine();
-      await term.println("FATAL ERROR:", "red");
-      await term.println(e.message || "Unknown Error", "red");
-      await term.println("");
-      await term.println("Please refresh the page to try again.");
+      await term.println("FATAL ERROR", "red");
+      await term.println(e.message, "red");
       term.newLine();
-      await term.write(term.promptStr + " ");
+      term.writeDirect(term.promptStr + " ");
     }
   }
 
-  // Start
-  setTimeout(boot, CFG.bootDelay);
-
+  boot();
 </script>
 </body>
 </html>`;
