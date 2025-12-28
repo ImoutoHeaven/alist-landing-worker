@@ -3,6 +3,7 @@
 
 const DEFAULTS = {
   powcheck: false,
+  stripDownloadPrefix: false,
   POW_VERSION: 1,
   POW_DIFFICULTY_BASE: 18,
   POW_DIFFICULTY_COEFF: 1.0,
@@ -17,9 +18,9 @@ const DEFAULTS = {
 
 const CONFIG = [
   // Example:
-  // { pattern: "alist-landing-*.example.com/*", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", powcheck: true, POW_DIFFICULTY_BASE: 20, POW_DIFFICULTY_COEFF: 1.2, POW_CHAL_TTL_SEC: 180, POW_SOL_TTL_SEC: 600, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
-  // { pattern: "alist-landing-*.example.com/**", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", powcheck: true, POW_DIFFICULTY_BASE: 20, POW_DIFFICULTY_COEFF: 1.2, POW_CHAL_TTL_SEC: 180, POW_SOL_TTL_SEC: 600, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
-  // { pattern: "alist-landing-*.example.com", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", powcheck: true, POW_DIFFICULTY_BASE: 20, POW_DIFFICULTY_COEFF: 1.2, POW_CHAL_TTL_SEC: 180, POW_SOL_TTL_SEC: 600, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
+  // { pattern: "alist-landing-*.example.com/*", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", powcheck: true, stripDownloadPrefix: true, POW_DIFFICULTY_BASE: 20, POW_DIFFICULTY_COEFF: 1.2, POW_CHAL_TTL_SEC: 180, POW_SOL_TTL_SEC: 600, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
+  // { pattern: "alist-landing-*.example.com/**", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", powcheck: true, stripDownloadPrefix: true, POW_DIFFICULTY_BASE: 20, POW_DIFFICULTY_COEFF: 1.2, POW_CHAL_TTL_SEC: 180, POW_SOL_TTL_SEC: 600, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
+  // { pattern: "alist-landing-*.example.com", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", powcheck: true, stripDownloadPrefix: true, POW_DIFFICULTY_BASE: 20, POW_DIFFICULTY_COEFF: 1.2, POW_CHAL_TTL_SEC: 180, POW_SOL_TTL_SEC: 600, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
 ];
 
 const splitPattern = (pattern) => {
@@ -177,6 +178,16 @@ const normalizeDecodedPath = (pathname) => {
   if (typeof pathname !== "string") return null;
   if (pathname.length === 0) return "/";
   return pathname.startsWith("/") ? pathname : `/${pathname}`;
+};
+
+const stripDownloadPrefix = (pathname) => {
+  if (typeof pathname !== "string") return pathname;
+  if (pathname === "/d" || pathname === "/p") return "/";
+  if (pathname.startsWith("/d/") || pathname.startsWith("/p/")) {
+    const stripped = pathname.slice(2);
+    return stripped || "/";
+  }
+  return pathname;
 };
 
 const decodePathParam = (value) => {
@@ -1099,12 +1110,17 @@ export default {
       if (!canonical) return respondText(origin, "invalid path", 400);
       authPath = canonical;
       matchPath = canonical;
+    } else {
+      authPath = stripDownloadPrefix(authPath);
     }
 
     const selected = pickConfig(hostname, matchPath);
     const config = selected ? { ...DEFAULTS, ...selected } : null;
     const secret = config && typeof config.HMAC_SECRET === "string" ? config.HMAC_SECRET : "";
     if (!secret) return respondText(origin, "misconfigured", 500);
+    if (!isInfoPath && config.stripDownloadPrefix === true) {
+      authPath = stripDownloadPrefix(authPath);
+    }
 
     const sign = url.searchParams.get("sign") || "";
     const signMeta = parseSignature(sign);
