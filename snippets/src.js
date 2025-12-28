@@ -483,7 +483,7 @@ const buildPowChallengeHtml = ({
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-<title>System Integrity Check</title>
+<title>VerifyRequest</title>
 <style>
   :root {
     --win-bg: #c0c0c0;
@@ -594,14 +594,11 @@ const buildPowChallengeHtml = ({
     cursor: pointer;
     z-index: 5;
     
-    opacity: 0; pointer-events: none;
-    transform: translateY(20px);
-    transition: all 0.3s ease;
+    visibility: hidden; pointer-events: none;
   }
 
   .taskbar-entry.visible {
-    opacity: 1; pointer-events: auto;
-    transform: translateY(0);
+    visibility: visible; pointer-events: auto;
   }
   
   .taskbar-entry:active {
@@ -820,8 +817,9 @@ const buildPowChallengeHtml = ({
     }
 
     async println(text, style = "") {
-      await this.type(text, style);
+      this.writeDirect(text, style);
       this.newLine();
+      await new Promise(r => setTimeout(r, 20));
     }
 
     writeDirect(text, style="") {
@@ -900,7 +898,7 @@ const buildPowChallengeHtml = ({
       await term.type("Detecting Hardware Environment... ", "dim");
       const cores = navigator.hardwareConcurrency || 1;
       await term.println("OK", "green");
-      await term.println(\`  > CPU: \${cores} Cores\`, "dim");
+      await term.println(\`  > vCPU: \${cores} Cores\`, "dim");
       await term.println(\`  > Difficulty: \${CFG.difficulty}\`, "dim");
       
       await term.type("Loading Solver... ", "dim");
@@ -945,6 +943,7 @@ const buildPowChallengeHtml = ({
       
       await new Promise(r => setTimeout(r, 400));
       await term.println("ACCESS GRANTED", "green");
+      document.title = "SubmitThisForm";
       
       term.newLine();
       await term.println("Redirecting...", "yellow");
