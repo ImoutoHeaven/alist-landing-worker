@@ -1089,14 +1089,17 @@ export default {
     if (!requestPath) return respondText(origin, "invalid path", 400);
     const isInfoPath = requestPath === "/info";
     let authPath = requestPath;
+    let matchPath = requestPath;
     if (isInfoPath) {
       const rawPath = url.searchParams.get("path");
       if (!rawPath) return respondText(origin, "path is required", 400);
-      authPath = decodePathParam(rawPath);
-      if (!authPath) return respondText(origin, "invalid path encoding", 400);
+      const decoded = decodePathParam(rawPath);
+      if (!decoded) return respondText(origin, "invalid path encoding", 400);
+      const canonical = normalizeDecodedPath(decoded);
+      if (!canonical) return respondText(origin, "invalid path", 400);
+      authPath = canonical;
+      matchPath = canonical;
     }
-    const matchPath = isInfoPath ? normalizeDecodedPath(authPath) : requestPath;
-    if (!matchPath) return respondText(origin, "invalid path", 400);
 
     const selected = pickConfig(hostname, matchPath);
     const config = selected ? { ...DEFAULTS, ...selected } : null;
