@@ -17,14 +17,29 @@ const DEFAULTS = {
 
 const CONFIG = [
   // Example:
+  // { pattern: "alist-landing-*.example.com/*", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", powcheck: true, POW_DIFFICULTY_BASE: 20, POW_DIFFICULTY_COEFF: 1.2, POW_CHAL_TTL_SEC: 180, POW_SOL_TTL_SEC: 600, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
+  // { pattern: "alist-landing-*.example.com/**", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", powcheck: true, POW_DIFFICULTY_BASE: 20, POW_DIFFICULTY_COEFF: 1.2, POW_CHAL_TTL_SEC: 180, POW_SOL_TTL_SEC: 600, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
   // { pattern: "alist-landing-*.example.com", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", powcheck: true, POW_DIFFICULTY_BASE: 20, POW_DIFFICULTY_COEFF: 1.2, POW_CHAL_TTL_SEC: 180, POW_SOL_TTL_SEC: 600, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
 ];
 
-const compilePattern = (pattern) => {
+const splitPattern = (pattern) => {
   if (typeof pattern !== "string") return null;
-  const trimmed = pattern.trim().toLowerCase();
+  const trimmed = pattern.trim();
   if (!trimmed) return null;
-  const escaped = trimmed.replace(/\./g, "\\.").replace(/\*/g, "[^.]*");
+  const slashIndex = trimmed.indexOf("/");
+  if (slashIndex === -1) return { host: trimmed, path: null };
+  const host = trimmed.slice(0, slashIndex);
+  if (!host) return null;
+  return { host, path: trimmed.slice(slashIndex) };
+};
+
+const escapeRegex = (value) => value.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
+
+const compileHostPattern = (pattern) => {
+  if (typeof pattern !== "string") return null;
+  const host = pattern.trim().toLowerCase();
+  if (!host) return null;
+  const escaped = escapeRegex(host).replace(/\*/g, "[^.]*");
   try {
     return new RegExp(`^${escaped}$`);
   } catch {
@@ -32,18 +47,65 @@ const compilePattern = (pattern) => {
   }
 };
 
-const COMPILED_CONFIG = CONFIG.map((entry) => ({
-  pattern: entry && entry.pattern,
-  regex: compilePattern(entry && entry.pattern),
-  config: (entry && entry.config) || {},
-}));
+const compilePathPattern = (pattern) => {
+  if (typeof pattern !== "string") return null;
+  const path = pattern.trim();
+  if (!path.startsWith("/")) return null;
+  let out = "";
+  for (let i = 0; i < path.length; i++) {
+    const ch = path[i];
+    if (ch === "*") {
+      if (path[i + 1] === "*") {
+        const isLast = i + 2 >= path.length;
+        const prevIsSlash = i > 0 && path[i - 1] === "/";
+        if (isLast && prevIsSlash && out.endsWith("/") && out.length > 1) {
+          out = `${out.slice(0, -1)}(?:/.*)?`;
+        } else {
+          out += ".*";
+        }
+        i++;
+      } else {
+        out += "[^/]*";
+      }
+      continue;
+    }
+    out += /[.+?^${}()|[\]\\]/.test(ch) ? `\\${ch}` : ch;
+  }
+  try {
+    return new RegExp(`^${out}$`);
+  } catch {
+    return null;
+  }
+};
 
-const pickConfig = (hostname) => {
+const compileConfigEntry = (entry) => {
+  const pattern = entry && entry.pattern;
+  const parts = splitPattern(pattern);
+  if (!parts) {
+    return { pattern, hostRegex: null, pathRegex: null, config: (entry && entry.config) || {} };
+  }
+  const hostRegex = compileHostPattern(parts.host);
+  if (!hostRegex) {
+    return { pattern, hostRegex: null, pathRegex: null, config: (entry && entry.config) || {} };
+  }
+  const pathRegex = parts.path ? compilePathPattern(parts.path) : null;
+  if (parts.path && !pathRegex) {
+    return { pattern, hostRegex: null, pathRegex: null, config: (entry && entry.config) || {} };
+  }
+  return { pattern, hostRegex, pathRegex, config: (entry && entry.config) || {} };
+};
+
+const COMPILED_CONFIG = CONFIG.map(compileConfigEntry);
+
+const pickConfig = (hostname, path) => {
   const host = typeof hostname === "string" ? hostname.toLowerCase() : "";
+  const requestPath = typeof path === "string" ? path : "";
   if (!host) return null;
   for (const rule of COMPILED_CONFIG) {
-    if (!rule || !rule.regex) continue;
-    if (rule.regex.test(host)) return rule.config || null;
+    if (!rule || !rule.hostRegex) continue;
+    if (!rule.hostRegex.test(host)) continue;
+    if (rule.pathRegex && !rule.pathRegex.test(requestPath)) continue;
+    return rule.config || null;
   }
   return null;
 };
@@ -109,6 +171,12 @@ const normalizePath = (pathname) => {
   }
   if (decoded.length === 0) return "/";
   return decoded.startsWith("/") ? decoded : `/${decoded}`;
+};
+
+const normalizeDecodedPath = (pathname) => {
+  if (typeof pathname !== "string") return null;
+  if (pathname.length === 0) return "/";
+  return pathname.startsWith("/") ? pathname : `/${pathname}`;
 };
 
 const decodePathParam = (value) => {
@@ -1010,10 +1078,6 @@ export default {
     const origin = request.headers.get("Origin") || "";
     const url = new URL(request.url);
     const hostname = url.hostname;
-    const selected = pickConfig(hostname);
-    const config = selected ? { ...DEFAULTS, ...selected } : null;
-    const secret = config && typeof config.HMAC_SECRET === "string" ? config.HMAC_SECRET : "";
-    if (!secret) return respondText(origin, "misconfigured", 500);
 
     if (request.method === "OPTIONS") {
       return new Response(null, { headers: safeHeaders(origin) });
@@ -1031,6 +1095,13 @@ export default {
       authPath = decodePathParam(rawPath);
       if (!authPath) return respondText(origin, "invalid path encoding", 400);
     }
+    const matchPath = isInfoPath ? normalizeDecodedPath(authPath) : requestPath;
+    if (!matchPath) return respondText(origin, "invalid path", 400);
+
+    const selected = pickConfig(hostname, matchPath);
+    const config = selected ? { ...DEFAULTS, ...selected } : null;
+    const secret = config && typeof config.HMAC_SECRET === "string" ? config.HMAC_SECRET : "";
+    if (!secret) return respondText(origin, "misconfigured", 500);
 
     const sign = url.searchParams.get("sign") || "";
     const signMeta = parseSignature(sign);
