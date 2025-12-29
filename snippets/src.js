@@ -1,6 +1,6 @@
 // Cloudflare Snippet: pre-auth for landing
 // Set HMAC_SECRET in CONFIG to common.tokenHmacKey (and keep common.signSecret aligned).
-// Leave HMAC_SECRET empty to skip sign validation; pow still runs without it.
+// Leave HMAC_SECRET empty to skip sign validation; set POW_TOKEN for pow when HMAC_SECRET is empty.
 
 const DEFAULTS = {
   powcheck: false,
@@ -28,9 +28,9 @@ const DEFAULTS = {
 
 const CONFIG = [
   // Example:
-  // { pattern: "alist-landing-*.example.com/*", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", powcheck: true, stripDownloadPrefix: true, POW_DIFFICULTY_BASE: 20, POW_DIFFICULTY_COEFF: 1.2, POW_CHAL_TTL_SEC: 180, POW_SOL_TTL_SEC: 600, POW_BIND_PATH: true, POW_BIND_IPRANGE: true, POW_BIND_TLS_FINGERPRINT: false, POW_BIND_COUNTRY: false, POW_BIND_ASN: false, POW_BIND_UA: false, POW_BIND_ACCEPT_LANGUAGE: false, POW_BIND_BROWSER_OPTS: false, POW_BIND_SEC_FETCH_USER: false, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
-  // { pattern: "alist-landing-*.example.com/**", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", powcheck: true, stripDownloadPrefix: true, POW_DIFFICULTY_BASE: 20, POW_DIFFICULTY_COEFF: 1.2, POW_CHAL_TTL_SEC: 180, POW_SOL_TTL_SEC: 600, POW_BIND_PATH: true, POW_BIND_IPRANGE: true, POW_BIND_TLS_FINGERPRINT: false, POW_BIND_COUNTRY: false, POW_BIND_ASN: false, POW_BIND_UA: false, POW_BIND_ACCEPT_LANGUAGE: false, POW_BIND_BROWSER_OPTS: false, POW_BIND_SEC_FETCH_USER: false, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
-  // { pattern: "alist-landing-*.example.com", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", powcheck: true, stripDownloadPrefix: true, POW_DIFFICULTY_BASE: 20, POW_DIFFICULTY_COEFF: 1.2, POW_CHAL_TTL_SEC: 180, POW_SOL_TTL_SEC: 600, POW_BIND_PATH: true, POW_BIND_IPRANGE: true, POW_BIND_TLS_FINGERPRINT: false, POW_BIND_COUNTRY: false, POW_BIND_ASN: false, POW_BIND_UA: false, POW_BIND_ACCEPT_LANGUAGE: false, POW_BIND_BROWSER_OPTS: false, POW_BIND_SEC_FETCH_USER: false, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
+  // { pattern: "alist-landing-*.example.com/*", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", POW_TOKEN: "replace-with-powToken", powcheck: true, stripDownloadPrefix: true, POW_DIFFICULTY_BASE: 20, POW_DIFFICULTY_COEFF: 1.2, POW_CHAL_TTL_SEC: 180, POW_SOL_TTL_SEC: 600, POW_BIND_PATH: true, POW_BIND_IPRANGE: true, POW_BIND_TLS_FINGERPRINT: false, POW_BIND_COUNTRY: false, POW_BIND_ASN: false, POW_BIND_UA: false, POW_BIND_ACCEPT_LANGUAGE: false, POW_BIND_BROWSER_OPTS: false, POW_BIND_SEC_FETCH_USER: false, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
+  // { pattern: "alist-landing-*.example.com/**", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", POW_TOKEN: "replace-with-powToken", powcheck: true, stripDownloadPrefix: true, POW_DIFFICULTY_BASE: 20, POW_DIFFICULTY_COEFF: 1.2, POW_CHAL_TTL_SEC: 180, POW_SOL_TTL_SEC: 600, POW_BIND_PATH: true, POW_BIND_IPRANGE: true, POW_BIND_TLS_FINGERPRINT: false, POW_BIND_COUNTRY: false, POW_BIND_ASN: false, POW_BIND_UA: false, POW_BIND_ACCEPT_LANGUAGE: false, POW_BIND_BROWSER_OPTS: false, POW_BIND_SEC_FETCH_USER: false, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
+  // { pattern: "alist-landing-*.example.com", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", POW_TOKEN: "replace-with-powToken", powcheck: true, stripDownloadPrefix: true, POW_DIFFICULTY_BASE: 20, POW_DIFFICULTY_COEFF: 1.2, POW_CHAL_TTL_SEC: 180, POW_SOL_TTL_SEC: 600, POW_BIND_PATH: true, POW_BIND_IPRANGE: true, POW_BIND_TLS_FINGERPRINT: false, POW_BIND_COUNTRY: false, POW_BIND_ASN: false, POW_BIND_UA: false, POW_BIND_ACCEPT_LANGUAGE: false, POW_BIND_BROWSER_OPTS: false, POW_BIND_SEC_FETCH_USER: false, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
 ];
 
 const splitPattern = (pattern) => {
@@ -660,7 +660,7 @@ const getPowBindingValues = async (request, canonicalPath, config) => {
   return { pathHash, ipScope, tlsFingerprint, country, asn, userAgent, acceptLanguage, browserOpts };
 };
 
-const verifyPowSol = async (request, url, canonicalPath, nowSeconds, config) => {
+const verifyPowSol = async (request, url, canonicalPath, nowSeconds, config, powSecret) => {
   const cookies = parseCookieHeader(request.headers.get("Cookie"));
   const solRaw = cookies.get(config.POW_SOL_COOKIE) || "";
   const sol = parsePowSolCookie(solRaw);
@@ -669,14 +669,11 @@ const verifyPowSol = async (request, url, canonicalPath, nowSeconds, config) => 
   const powVersion = normalizeNumber(config.POW_VERSION, DEFAULTS.POW_VERSION);
   if (ticket.v !== powVersion) return false;
   if (!Number.isFinite(ticket.e) || ticket.e <= 0 || ticket.e < nowSeconds) return false;
+  if (!powSecret) return false;
   const { pathHash, ipScope, tlsFingerprint, country, asn, userAgent, acceptLanguage, browserOpts } =
     await getPowBindingValues(request, canonicalPath, config);
-  const secret = typeof config.HMAC_SECRET === "string" ? config.HMAC_SECRET : "";
-  const hasSecret = secret.length > 0;
-  const difficulty = getPowDifficulty(config);
-  const effectiveTicket = hasSecret ? ticket : { ...ticket, d: difficulty };
   const bindingString = makePowBindingString(
-    effectiveTicket,
+    ticket,
     url.hostname,
     pathHash,
     ipScope,
@@ -687,12 +684,10 @@ const verifyPowSol = async (request, url, canonicalPath, nowSeconds, config) => 
     acceptLanguage,
     browserOpts
   );
-  if (hasSecret) {
-    const expectedMac = await hmacSha256Base64UrlNoPad(secret, bindingString);
-    if (!timingSafeEqual(expectedMac, ticket.mac)) return false;
-  }
+  const expectedMac = await hmacSha256Base64UrlNoPad(powSecret, bindingString);
+  if (!timingSafeEqual(expectedMac, ticket.mac)) return false;
   const seed = buildPowSeed(bindingString);
-  return checkPow(seed, sol.nonce, effectiveTicket.d);
+  return checkPow(seed, sol.nonce, ticket.d);
 };
 
 const buildPowChallengeHtml = ({
@@ -1193,7 +1188,7 @@ const buildPowChallengeHtml = ({
 </body>
 </html>`;
 
-const respondPowChallengeHtml = async (request, url, canonicalPath, nowSeconds, config) => {
+const respondPowChallengeHtml = async (request, url, canonicalPath, nowSeconds, config, powSecret) => {
   const ttl = normalizeNumber(config.POW_CHAL_TTL_SEC, DEFAULTS.POW_CHAL_TTL_SEC) || 0;
   const exp = nowSeconds + Math.max(1, ttl);
   const difficulty = getPowDifficulty(config);
@@ -1219,10 +1214,7 @@ const respondPowChallengeHtml = async (request, url, canonicalPath, nowSeconds, 
     acceptLanguage,
     browserOpts
   );
-  const secret = typeof config.HMAC_SECRET === "string" ? config.HMAC_SECRET : "";
-  if (secret) {
-    ticket.mac = await hmacSha256Base64UrlNoPad(secret, bindingString);
-  }
+  ticket.mac = await hmacSha256Base64UrlNoPad(powSecret, bindingString);
   const ticketB64 = encodePowTicket(ticket);
   const bindingStringB64 = base64UrlEncodeNoPad(utf8ToBytes(bindingString));
   const reloadUrlB64 = base64UrlEncodeNoPad(utf8ToBytes(url.toString()));
@@ -1276,19 +1268,22 @@ export default {
     const selected = pickConfig(hostname, matchPath);
     const config = selected ? { ...DEFAULTS, ...selected } : null;
     if (!config) return respondText(origin, "misconfigured", 500);
-    const secret = typeof config.HMAC_SECRET === "string" ? config.HMAC_SECRET : "";
-    const hasSecret = secret.length > 0;
+    const signSecret = typeof config.HMAC_SECRET === "string" ? config.HMAC_SECRET : "";
+    const powToken = typeof config.POW_TOKEN === "string" ? config.POW_TOKEN : "";
+    const powSecret = powToken || signSecret;
+    const hasSignSecret = signSecret.length > 0;
+    const hasPowSecret = powSecret.length > 0;
     if (!isInfoPath && config.stripDownloadPrefix === true) {
       authPath = stripDownloadPrefix(authPath);
     }
 
-    if (hasSecret) {
+    if (hasSignSecret) {
       const sign = url.searchParams.get("sign") || "";
       const signMeta = parseSignature(sign);
       if (!signMeta) return deny(origin, "sign invalid");
       if (isExpired(signMeta.expire, nowSeconds)) return deny(origin, "sign expired");
 
-      const expected = await hmacSha256Sign(secret, authPath, signMeta.expire);
+      const expected = await hmacSha256Sign(signSecret, authPath, signMeta.expire);
       if (expected !== sign) return deny(origin, "sign mismatch");
     }
 
@@ -1296,11 +1291,15 @@ export default {
       return fetch(request);
     }
 
+    if (!hasPowSecret) {
+      return respondText(origin, "misconfigured", 500);
+    }
+
     if (!config.POW_ESM_URL) {
       return respondText(origin, "misconfigured", 500);
     }
 
-    const powOk = await verifyPowSol(request, url, authPath, nowSeconds, config);
+    const powOk = await verifyPowSol(request, url, authPath, nowSeconds, config, powSecret);
     if (powOk) {
       return fetch(request);
     }
@@ -1309,6 +1308,6 @@ export default {
       return respondJson(origin, { code: "pow_required" }, 403);
     }
 
-    return respondPowChallengeHtml(request, url, authPath, nowSeconds, config);
+    return respondPowChallengeHtml(request, url, authPath, nowSeconds, config, powSecret);
   },
 };
