@@ -1,5 +1,6 @@
 // Cloudflare Snippet: pre-auth for landing
 // Set HMAC_SECRET in CONFIG to common.tokenHmacKey (and keep common.signSecret aligned).
+// Leave HMAC_SECRET empty to skip sign validation; pow still runs without it.
 
 const DEFAULTS = {
   powcheck: false,
@@ -9,6 +10,15 @@ const DEFAULTS = {
   POW_DIFFICULTY_COEFF: 1.0,
   POW_CHAL_TTL_SEC: 120,
   POW_SOL_TTL_SEC: 600,
+  POW_BIND_PATH: true,
+  POW_BIND_IPRANGE: true,
+  POW_BIND_TLS_FINGERPRINT: false,
+  POW_BIND_COUNTRY: false,
+  POW_BIND_ASN: false,
+  POW_BIND_UA: false,
+  POW_BIND_ACCEPT_LANGUAGE: false,
+  POW_BIND_BROWSER_OPTS: false,
+  POW_BIND_SEC_FETCH_USER: false,
   IPV4_PREFIX: 32,
   IPV6_PREFIX: 64,
   POW_SOL_COOKIE: "__Host-pow_sol",
@@ -18,9 +28,9 @@ const DEFAULTS = {
 
 const CONFIG = [
   // Example:
-  // { pattern: "alist-landing-*.example.com/*", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", powcheck: true, stripDownloadPrefix: true, POW_DIFFICULTY_BASE: 20, POW_DIFFICULTY_COEFF: 1.2, POW_CHAL_TTL_SEC: 180, POW_SOL_TTL_SEC: 600, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
-  // { pattern: "alist-landing-*.example.com/**", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", powcheck: true, stripDownloadPrefix: true, POW_DIFFICULTY_BASE: 20, POW_DIFFICULTY_COEFF: 1.2, POW_CHAL_TTL_SEC: 180, POW_SOL_TTL_SEC: 600, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
-  // { pattern: "alist-landing-*.example.com", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", powcheck: true, stripDownloadPrefix: true, POW_DIFFICULTY_BASE: 20, POW_DIFFICULTY_COEFF: 1.2, POW_CHAL_TTL_SEC: 180, POW_SOL_TTL_SEC: 600, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
+  // { pattern: "alist-landing-*.example.com/*", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", powcheck: true, stripDownloadPrefix: true, POW_DIFFICULTY_BASE: 20, POW_DIFFICULTY_COEFF: 1.2, POW_CHAL_TTL_SEC: 180, POW_SOL_TTL_SEC: 600, POW_BIND_PATH: true, POW_BIND_IPRANGE: true, POW_BIND_TLS_FINGERPRINT: false, POW_BIND_COUNTRY: false, POW_BIND_ASN: false, POW_BIND_UA: false, POW_BIND_ACCEPT_LANGUAGE: false, POW_BIND_BROWSER_OPTS: false, POW_BIND_SEC_FETCH_USER: false, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
+  // { pattern: "alist-landing-*.example.com/**", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", powcheck: true, stripDownloadPrefix: true, POW_DIFFICULTY_BASE: 20, POW_DIFFICULTY_COEFF: 1.2, POW_CHAL_TTL_SEC: 180, POW_SOL_TTL_SEC: 600, POW_BIND_PATH: true, POW_BIND_IPRANGE: true, POW_BIND_TLS_FINGERPRINT: false, POW_BIND_COUNTRY: false, POW_BIND_ASN: false, POW_BIND_UA: false, POW_BIND_ACCEPT_LANGUAGE: false, POW_BIND_BROWSER_OPTS: false, POW_BIND_SEC_FETCH_USER: false, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
+  // { pattern: "alist-landing-*.example.com", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", powcheck: true, stripDownloadPrefix: true, POW_DIFFICULTY_BASE: 20, POW_DIFFICULTY_COEFF: 1.2, POW_CHAL_TTL_SEC: 180, POW_SOL_TTL_SEC: 600, POW_BIND_PATH: true, POW_BIND_IPRANGE: true, POW_BIND_TLS_FINGERPRINT: false, POW_BIND_COUNTRY: false, POW_BIND_ASN: false, POW_BIND_UA: false, POW_BIND_ACCEPT_LANGUAGE: false, POW_BIND_BROWSER_OPTS: false, POW_BIND_SEC_FETCH_USER: false, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
 ];
 
 const splitPattern = (pattern) => {
@@ -428,6 +438,77 @@ const computeIpScope = (ip, config) => {
   return "unknown";
 };
 
+const getRequestCf = (request) => {
+  const cf = request && request.cf;
+  return cf && typeof cf === "object" ? cf : null;
+};
+
+const normalizeCfValue = (value) => {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return String(value);
+};
+
+const normalizeHeaderValue = (value) => {
+  if (typeof value !== "string") return "";
+  return value.trim();
+};
+
+const normalizeHeaderCompactLower = (value) => {
+  const raw = normalizeHeaderValue(value);
+  return raw ? raw.toLowerCase().replace(/\s+/g, "") : "";
+};
+
+const buildTlsFingerprint = (cf) => {
+  if (!cf) return "unknown";
+  const value = normalizeCfValue(cf.tlsClientExtensionsSha1);
+  return value || "unknown";
+};
+
+const normalizeCountry = (value) => {
+  const raw = normalizeCfValue(value);
+  return raw ? raw.toUpperCase() : "unknown";
+};
+
+const normalizeAsn = (value) => {
+  const num = Number(value);
+  return Number.isFinite(num) ? String(Math.trunc(num)) : "unknown";
+};
+
+const normalizeAcceptLanguage = (value) => {
+  const raw = normalizeHeaderValue(value);
+  return raw ? raw.toLowerCase() : "";
+};
+
+const buildBrowserOptsFingerprint = (request, bindSecFetchUser) => {
+  const getHeader = (name) => request.headers.get(name);
+  const secFetchSite = normalizeHeaderValue(getHeader("sec-fetch-site")) ? "1" : "0";
+  const secFetchUser = bindSecFetchUser
+    ? normalizeHeaderValue(getHeader("sec-fetch-user"))
+      ? "1"
+      : "0"
+    : "any";
+  const secFetchMode = normalizeHeaderCompactLower(getHeader("sec-fetch-mode")) || "unknown";
+  const secFetchDest = normalizeHeaderCompactLower(getHeader("sec-fetch-dest")) || "unknown";
+  const upgradeInsecure = normalizeHeaderCompactLower(getHeader("upgrade-insecure-requests")) || "unknown";
+  const accept = normalizeHeaderCompactLower(getHeader("accept")) || "unknown";
+  const secChUa = normalizeHeaderCompactLower(getHeader("sec-ch-ua")) || "unknown";
+  const secChUaMobile = normalizeHeaderCompactLower(getHeader("sec-ch-ua-mobile")) || "unknown";
+  const secChUaPlatform = normalizeHeaderCompactLower(getHeader("sec-ch-ua-platform")) || "unknown";
+  return [
+    `sfs=${secFetchSite}`,
+    `sfm=${secFetchMode}`,
+    `sfd=${secFetchDest}`,
+    `sfu=${secFetchUser}`,
+    `uir=${upgradeInsecure}`,
+    `acc=${accept}`,
+    `scu=${secChUa}`,
+    `scm=${secChUaMobile}`,
+    `scp=${secChUaPlatform}`,
+  ].join("|");
+};
+
 const getPowDifficulty = (config) => {
   const base = normalizeNumber(config.POW_DIFFICULTY_BASE, DEFAULTS.POW_DIFFICULTY_BASE);
   const coeff = normalizeNumber(config.POW_DIFFICULTY_COEFF, DEFAULTS.POW_DIFFICULTY_COEFF);
@@ -449,7 +530,18 @@ const randomBase64Url = (byteLength) => {
   return base64UrlEncodeNoPad(bytes);
 };
 
-const makePowBindingString = (ticket, hostname, pathHash, ipScope) => {
+const makePowBindingString = (
+  ticket,
+  hostname,
+  pathHash,
+  ipScope,
+  tlsFingerprint,
+  country,
+  asn,
+  userAgent,
+  acceptLanguage,
+  browserOpts
+) => {
   const host = typeof hostname === "string" ? hostname.toLowerCase() : "";
   return (
     "v=" +
@@ -465,7 +557,19 @@ const makePowBindingString = (ticket, hostname, pathHash, ipScope) => {
     "&ph=" +
     pathHash +
     "&s=" +
-    ipScope
+    ipScope +
+    "&tf=" +
+    tlsFingerprint +
+    "&cc=" +
+    country +
+    "&asn=" +
+    asn +
+    "&ua=" +
+    userAgent +
+    "&al=" +
+    acceptLanguage +
+    "&bo=" +
+    browserOpts
   );
 };
 
@@ -511,7 +615,7 @@ const parsePowTicket = (ticketB64) => {
   const r = parts[3] || "";
   const mac = parts[4] || "";
   if (!Number.isFinite(v) || !Number.isFinite(e) || !Number.isFinite(d)) return null;
-  if (!r || !mac) return null;
+  if (!r) return null;
   return { v, e, d, r, mac };
 };
 
@@ -530,6 +634,32 @@ const parsePowSolCookie = (value) => {
   return { ticket, nonce, ticketB64 };
 };
 
+const getPowBindingValues = async (request, canonicalPath, config) => {
+  const bindPath = config.POW_BIND_PATH !== false;
+  const bindIp = config.POW_BIND_IPRANGE !== false;
+  const bindTls = config.POW_BIND_TLS_FINGERPRINT === true;
+  const bindCountry = config.POW_BIND_COUNTRY === true;
+  const bindAsn = config.POW_BIND_ASN === true;
+  const bindUa = config.POW_BIND_UA === true;
+  const bindAcceptLanguage = config.POW_BIND_ACCEPT_LANGUAGE === true;
+  const bindBrowserOpts = config.POW_BIND_BROWSER_OPTS === true;
+  const bindSecFetchUser = config.POW_BIND_SEC_FETCH_USER === true;
+  const pathHash = bindPath ? base64UrlEncodeNoPad(await sha256Bytes(canonicalPath)) : "any";
+  const ipScope = bindIp ? computeIpScope(getClientIP(request), config) : "any";
+  const cf = getRequestCf(request);
+  const tlsFingerprint = bindTls ? buildTlsFingerprint(cf) : "any";
+  const country = bindCountry ? normalizeCountry(cf && cf.country) : "any";
+  const asn = bindAsn ? normalizeAsn(cf && cf.asn) : "any";
+  const userAgent = bindUa
+    ? normalizeHeaderValue(request.headers.get("User-Agent")) || "unknown"
+    : "any";
+  const acceptLanguage = bindAcceptLanguage
+    ? normalizeAcceptLanguage(request.headers.get("Accept-Language")) || "unknown"
+    : "any";
+  const browserOpts = bindBrowserOpts ? buildBrowserOptsFingerprint(request, bindSecFetchUser) : "any";
+  return { pathHash, ipScope, tlsFingerprint, country, asn, userAgent, acceptLanguage, browserOpts };
+};
+
 const verifyPowSol = async (request, url, canonicalPath, nowSeconds, config) => {
   const cookies = parseCookieHeader(request.headers.get("Cookie"));
   const solRaw = cookies.get(config.POW_SOL_COOKIE) || "";
@@ -539,14 +669,30 @@ const verifyPowSol = async (request, url, canonicalPath, nowSeconds, config) => 
   const powVersion = normalizeNumber(config.POW_VERSION, DEFAULTS.POW_VERSION);
   if (ticket.v !== powVersion) return false;
   if (!Number.isFinite(ticket.e) || ticket.e <= 0 || ticket.e < nowSeconds) return false;
-  const ip = getClientIP(request);
-  const ipScope = computeIpScope(ip, config);
-  const pathHash = base64UrlEncodeNoPad(await sha256Bytes(canonicalPath));
-  const bindingString = makePowBindingString(ticket, url.hostname, pathHash, ipScope);
-  const expectedMac = await hmacSha256Base64UrlNoPad(config.HMAC_SECRET, bindingString);
-  if (!timingSafeEqual(expectedMac, ticket.mac)) return false;
+  const { pathHash, ipScope, tlsFingerprint, country, asn, userAgent, acceptLanguage, browserOpts } =
+    await getPowBindingValues(request, canonicalPath, config);
+  const secret = typeof config.HMAC_SECRET === "string" ? config.HMAC_SECRET : "";
+  const hasSecret = secret.length > 0;
+  const difficulty = getPowDifficulty(config);
+  const effectiveTicket = hasSecret ? ticket : { ...ticket, d: difficulty };
+  const bindingString = makePowBindingString(
+    effectiveTicket,
+    url.hostname,
+    pathHash,
+    ipScope,
+    tlsFingerprint,
+    country,
+    asn,
+    userAgent,
+    acceptLanguage,
+    browserOpts
+  );
+  if (hasSecret) {
+    const expectedMac = await hmacSha256Base64UrlNoPad(secret, bindingString);
+    if (!timingSafeEqual(expectedMac, ticket.mac)) return false;
+  }
   const seed = buildPowSeed(bindingString);
-  return checkPow(seed, sol.nonce, ticket.d);
+  return checkPow(seed, sol.nonce, effectiveTicket.d);
 };
 
 const buildPowChallengeHtml = ({
@@ -1051,9 +1197,8 @@ const respondPowChallengeHtml = async (request, url, canonicalPath, nowSeconds, 
   const ttl = normalizeNumber(config.POW_CHAL_TTL_SEC, DEFAULTS.POW_CHAL_TTL_SEC) || 0;
   const exp = nowSeconds + Math.max(1, ttl);
   const difficulty = getPowDifficulty(config);
-  const ip = getClientIP(request);
-  const ipScope = computeIpScope(ip, config);
-  const pathHash = base64UrlEncodeNoPad(await sha256Bytes(canonicalPath));
+  const { pathHash, ipScope, tlsFingerprint, country, asn, userAgent, acceptLanguage, browserOpts } =
+    await getPowBindingValues(request, canonicalPath, config);
   const powVersion = normalizeNumber(config.POW_VERSION, DEFAULTS.POW_VERSION);
   const ticket = {
     v: powVersion,
@@ -1062,8 +1207,22 @@ const respondPowChallengeHtml = async (request, url, canonicalPath, nowSeconds, 
     r: randomBase64Url(16),
     mac: "",
   };
-  const bindingString = makePowBindingString(ticket, url.hostname, pathHash, ipScope);
-  ticket.mac = await hmacSha256Base64UrlNoPad(config.HMAC_SECRET, bindingString);
+  const bindingString = makePowBindingString(
+    ticket,
+    url.hostname,
+    pathHash,
+    ipScope,
+    tlsFingerprint,
+    country,
+    asn,
+    userAgent,
+    acceptLanguage,
+    browserOpts
+  );
+  const secret = typeof config.HMAC_SECRET === "string" ? config.HMAC_SECRET : "";
+  if (secret) {
+    ticket.mac = await hmacSha256Base64UrlNoPad(secret, bindingString);
+  }
   const ticketB64 = encodePowTicket(ticket);
   const bindingStringB64 = base64UrlEncodeNoPad(utf8ToBytes(bindingString));
   const reloadUrlB64 = base64UrlEncodeNoPad(utf8ToBytes(url.toString()));
@@ -1116,19 +1275,22 @@ export default {
 
     const selected = pickConfig(hostname, matchPath);
     const config = selected ? { ...DEFAULTS, ...selected } : null;
-    const secret = config && typeof config.HMAC_SECRET === "string" ? config.HMAC_SECRET : "";
-    if (!secret) return respondText(origin, "misconfigured", 500);
+    if (!config) return respondText(origin, "misconfigured", 500);
+    const secret = typeof config.HMAC_SECRET === "string" ? config.HMAC_SECRET : "";
+    const hasSecret = secret.length > 0;
     if (!isInfoPath && config.stripDownloadPrefix === true) {
       authPath = stripDownloadPrefix(authPath);
     }
 
-    const sign = url.searchParams.get("sign") || "";
-    const signMeta = parseSignature(sign);
-    if (!signMeta) return deny(origin, "sign invalid");
-    if (isExpired(signMeta.expire, nowSeconds)) return deny(origin, "sign expired");
+    if (hasSecret) {
+      const sign = url.searchParams.get("sign") || "";
+      const signMeta = parseSignature(sign);
+      if (!signMeta) return deny(origin, "sign invalid");
+      if (isExpired(signMeta.expire, nowSeconds)) return deny(origin, "sign expired");
 
-    const expected = await hmacSha256Sign(secret, authPath, signMeta.expire);
-    if (expected !== sign) return deny(origin, "sign mismatch");
+      const expected = await hmacSha256Sign(secret, authPath, signMeta.expire);
+      if (expected !== sign) return deny(origin, "sign mismatch");
+    }
 
     if (config.powcheck !== true) {
       return fetch(request);
