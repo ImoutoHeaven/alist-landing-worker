@@ -4502,6 +4502,14 @@ export default {
       const url = new URL(request.url);
       const pathname = url.pathname || '/';
 
+      const isInternalPath = pathname.startsWith('/api/v0/');
+      if (isInternalPath) {
+        const internalResponse = await handleInternalApiIfAny(request, env, ctx);
+        if (internalResponse) {
+          return internalResponse;
+        }
+      }
+
       const innerAuthSecret = typeof env?.INNER_AUTH_SECRET === 'string' ? env.INNER_AUTH_SECRET.trim() : '';
       if (innerAuthSecret) {
         const headerNameRaw = typeof env?.INNER_AUTH_HEADER === 'string' ? env.INNER_AUTH_HEADER.trim() : '';
@@ -4557,14 +4565,6 @@ export default {
       if (!config.landingWorkerAddresses.includes(requestOrigin)) {
         const origin = request.headers.get('origin') || '*';
         return respondJson(origin, { code: 403, message: 'prohibited source' }, 403);
-      }
-
-      // 控制面 token 校验成功时直接返回，不进入 paths/pathAction。
-      if (pathname.startsWith('/api/v0/')) {
-        const internalResponse = await handleInternalApiIfAny(request, env, ctx);
-        if (internalResponse) {
-          return internalResponse;
-        }
       }
 
       if (isInfoPath) {
