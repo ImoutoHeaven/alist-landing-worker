@@ -1,373 +1,166 @@
 const encoder = new TextEncoder();
 
-const HASH_WASM_ESM_URL =
-  "https://cdn.jsdelivr.net/npm/hash-wasm@4.9.0/dist/index.esm.min.js";
-const HASH_WASM_UMD_URL =
-  "https://cdn.jsdelivr.net/npm/hash-wasm@4.9.0/dist/index.umd.min.js";
+const POSW_SEED_PREFIX = encoder.encode("posw|seed|");
+const POSW_STEP_PREFIX = encoder.encode("posw|step|");
+const MERKLE_LEAF_PREFIX = encoder.encode("leaf|");
+const MERKLE_NODE_PREFIX = encoder.encode("node|");
 
-const sha256Async = async (value) => {
-  const data = encoder.encode(value);
-  const digest = await crypto.subtle.digest("SHA-256", data);
+const utf8ToBytes = (value) => encoder.encode(String(value ?? ""));
+
+const concatBytes = (...chunks) => {
+  let total = 0;
+  for (const chunk of chunks) total += chunk.length;
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return out;
+};
+
+const encodeUint32BE = (value) => {
+  const out = new Uint8Array(4);
+  const num = Number(value) >>> 0;
+  out[0] = (num >>> 24) & 0xff;
+  out[1] = (num >>> 16) & 0xff;
+  out[2] = (num >>> 8) & 0xff;
+  out[3] = num & 0xff;
+  return out;
+};
+
+const sha256Bytes = async (data) => {
+  const bytes = typeof data === "string" ? utf8ToBytes(data) : data;
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
   return new Uint8Array(digest);
 };
 
-const leadingZeroBits = (bytes) => {
-  let count = 0;
-  for (const byte of bytes) {
-    if (byte === 0) {
-      count += 8;
-      continue;
-    }
-    for (let bit = 7; bit >= 0; bit--) {
-      if (byte & (1 << bit)) {
-        return count + (7 - bit);
-      }
-    }
-  }
-  return count;
-};
+const base64UrlEncode = (bytes) =>
+  btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_");
 
-const normalizeDifficulty = (difficulty) => {
-  const value = Number(difficulty);
+const base64UrlEncodeNoPad = (bytes) => base64UrlEncode(bytes).replace(/=+$/g, "");
+
+const normalizeSteps = (steps) => {
+  const value = Number(steps);
   if (!Number.isFinite(value) || value <= 0) return 1;
   return Math.max(1, Math.floor(value));
 };
 
-const getDefaultConcurrency = () => {
-  const raw =
-    typeof navigator !== "undefined" && navigator.hardwareConcurrency
-      ? Number(navigator.hardwareConcurrency)
-      : 1;
-  if (!Number.isFinite(raw) || raw <= 1) return 1;
-  return Math.max(1, Math.min(4, Math.floor(raw)));
-};
+const shouldYield = (counter, every) =>
+  Number.isFinite(every) && every > 0 && counter % every === 0;
 
-const normalizeOptions = (options) => {
-  const opts = options && typeof options === "object" ? options : {};
-  const maxMs = Number(opts.maxMs);
-  const yieldEveryRaw = Number(opts.yieldEvery);
-  const prefix = typeof opts.prefix === "string" ? opts.prefix : "";
-  const concurrencyRaw = Number(opts.concurrency);
-  const concurrency = Number.isFinite(concurrencyRaw)
-    ? Math.max(1, Math.floor(concurrencyRaw))
-    : getDefaultConcurrency();
-  const hashWasmUrl =
-    typeof opts.hashWasmUrl === "string" && opts.hashWasmUrl
-      ? opts.hashWasmUrl
-      : HASH_WASM_ESM_URL;
-  const hashWasmWorkerUrl =
-    typeof opts.hashWasmWorkerUrl === "string" && opts.hashWasmWorkerUrl
-      ? opts.hashWasmWorkerUrl
-      : HASH_WASM_UMD_URL;
-  const useWasm = opts.useWasm !== false;
-  const useWorkers = opts.useWorkers !== false;
-  return {
-    maxMs: Number.isFinite(maxMs) && maxMs > 0 ? maxMs : 0,
-    yieldEvery: Number.isFinite(yieldEveryRaw) && yieldEveryRaw > 0 ? Math.floor(yieldEveryRaw) : 500,
-    prefix,
-    signal: opts.signal,
-    concurrency,
-    hashWasmUrl,
-    hashWasmWorkerUrl,
-    useWasm,
-    useWorkers,
-  };
-};
+const hashSeed = async (bindingString) =>
+  sha256Bytes(concatBytes(POSW_SEED_PREFIX, utf8ToBytes(bindingString)));
 
-const supportsWorkers = () =>
-  typeof Worker === "function" && typeof Blob === "function" && typeof URL !== "undefined";
+const hashStep = async (prevBytes, index) =>
+  sha256Bytes(concatBytes(POSW_STEP_PREFIX, encodeUint32BE(index), prevBytes));
 
-const hashWasmCache = new Map();
-const loadHashWasm = (url) => {
-  const key = url || HASH_WASM_ESM_URL;
-  if (hashWasmCache.has(key)) return hashWasmCache.get(key);
-  const promise = (async () => {
-    if (!key) return null;
-    try {
-      const mod = await import(key);
-      const createSHA256 =
-        (mod && mod.createSHA256) ||
-        (mod && mod.default && mod.default.createSHA256);
-      if (typeof createSHA256 !== "function") {
-        return null;
-      }
-      return createSHA256;
-    } catch {
-      return null;
-    }
-  })();
-  hashWasmCache.set(key, promise);
-  return promise;
-};
+const hashLeaf = async (leafIndex, leafBytes) =>
+  sha256Bytes(concatBytes(MERKLE_LEAF_PREFIX, encodeUint32BE(leafIndex), leafBytes));
 
-const createWasmHasher = async (opts) => {
-  if (!opts.useWasm) return null;
-  const createSHA256 = await loadHashWasm(opts.hashWasmUrl);
-  if (typeof createSHA256 !== "function") return null;
-  const hasher = await createSHA256();
-  if (!hasher || typeof hasher.init !== "function") return null;
-  return hasher;
-};
+const hashNode = async (leftBytes, rightBytes) =>
+  sha256Bytes(concatBytes(MERKLE_NODE_PREFIX, leftBytes, rightBytes));
 
-let workerScriptUrl = null;
-const getWorkerScriptUrl = (hashWasmWorkerUrl) => {
-  if (workerScriptUrl) return workerScriptUrl;
-  const script = `
-const encoder = new TextEncoder();
-const HASH_WASM_URL = ${JSON.stringify(HASH_WASM_UMD_URL)};
-let wasmHasherPromise = null;
-const loadHashWasm = async (url) => {
-  const target = typeof url === "string" && url ? url : HASH_WASM_URL;
-  if (!target) return null;
-  if (!wasmHasherPromise) {
-    wasmHasherPromise = (async () => {
-      try {
-        importScripts(target);
-        if (!self.hashwasm || typeof self.hashwasm.createSHA256 !== "function") {
-          return null;
-        }
-        return await self.hashwasm.createSHA256();
-      } catch {
-        return null;
-      }
-    })();
-  }
-  return wasmHasherPromise;
-};
-const leadingZeroBits = (bytes) => {
-  let count = 0;
-  for (const byte of bytes) {
-    if (byte === 0) {
-      count += 8;
-      continue;
-    }
-    for (let bit = 7; bit >= 0; bit--) {
-      if (byte & (1 << bit)) {
-        return count + (7 - bit);
-      }
-    }
-  }
-  return count;
-};
-const sha256Async = async (value) => {
-  const data = encoder.encode(value);
-  const digest = await crypto.subtle.digest("SHA-256", data);
-  return new Uint8Array(digest);
-};
-self.onmessage = async (event) => {
-  const data = event.data || {};
-  const base = String(data.base || "");
-  const baseBytes = encoder.encode(base);
-  const difficulty = Math.max(1, Math.floor(Number(data.difficulty) || 1));
-  const start = Math.max(0, Math.floor(Number(data.start) || 0));
-  const step = Math.max(1, Math.floor(Number(data.step) || 1));
-  const prefix = typeof data.prefix === "string" ? data.prefix : "";
-  const maxMs = Number(data.maxMs) || 0;
-  const useWasm = data.useWasm !== false;
-  const wasmUrl = typeof data.hashWasmWorkerUrl === "string" ? data.hashWasmWorkerUrl : "";
-  const hasher = useWasm ? await loadHashWasm(wasmUrl) : null;
-  const startTime = Date.now();
-  let counter = start;
-  if (hasher && typeof hasher.init === "function") {
-    for (;;) {
-      if (maxMs && Date.now() - startTime > maxMs) {
-        self.postMessage({ timeout: true });
-        return;
-      }
-      const nonce = prefix + counter.toString(36);
-      const nonceBytes = encoder.encode(nonce);
-      hasher.init();
-      hasher.update(baseBytes);
-      hasher.update(nonceBytes);
-      const digest = hasher.digest("binary");
-      if (leadingZeroBits(digest) >= difficulty) {
-        self.postMessage({ nonce });
-        return;
-      }
-      counter += step;
-    }
-  }
-  for (;;) {
-    if (maxMs && Date.now() - startTime > maxMs) {
-      self.postMessage({ timeout: true });
-      return;
-    }
-    const nonce = prefix + counter.toString(36);
-    const digest = await sha256Async(base + nonce);
-    if (leadingZeroBits(digest) >= difficulty) {
-      self.postMessage({ nonce });
-      return;
-    }
-    counter += step;
-  }
-};
-`;
-  const blob = new Blob([script], { type: "text/javascript" });
-  workerScriptUrl = URL.createObjectURL(blob);
-  return workerScriptUrl;
-};
-
-const solvePowSingleSync = async (baseBytes, target, opts, hasher) => {
-  const startTime = Date.now();
+const buildMerkleLevels = async (leafHashes, yieldEvery, signal) => {
+  const levels = [leafHashes];
+  let current = leafHashes;
   let counter = 0;
-  for (;;) {
-    if (opts.signal && opts.signal.aborted) {
-      throw new Error("pow aborted");
-    }
-    const nonce = opts.prefix + counter.toString(36);
-    const nonceBytes = encoder.encode(nonce);
-    hasher.init();
-    hasher.update(baseBytes);
-    hasher.update(nonceBytes);
-    const digest = hasher.digest("binary");
-    if (leadingZeroBits(digest) >= target) {
-      return nonce;
-    }
-    counter += 1;
-    if (counter % opts.yieldEvery === 0) {
-      if (opts.maxMs && Date.now() - startTime > opts.maxMs) {
-        throw new Error("pow timeout");
+  while (current.length > 1) {
+    const next = [];
+    for (let i = 0; i < current.length; i += 2) {
+      if (signal && signal.aborted) {
+        throw new Error("posw aborted");
       }
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      const left = current[i];
+      const right = i + 1 < current.length ? current[i + 1] : current[i];
+      next.push(await hashNode(left, right));
+      counter += 1;
+      if (shouldYield(counter, yieldEvery)) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
     }
+    levels.push(next);
+    current = next;
   }
+  return levels;
 };
 
-const solvePowSingleAsync = async (base, target, opts) => {
-  const startTime = Date.now();
-  let counter = 0;
-  for (;;) {
-    if (opts.signal && opts.signal.aborted) {
-      throw new Error("pow aborted");
-    }
-    const nonce = opts.prefix + counter.toString(36);
-    const digest = await sha256Async(base + nonce);
-    if (leadingZeroBits(digest) >= target) {
-      return nonce;
-    }
-    counter += 1;
-    if (counter % opts.yieldEvery === 0) {
-      if (opts.maxMs && Date.now() - startTime > opts.maxMs) {
-        throw new Error("pow timeout");
-      }
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    }
+const buildProof = (levels, leafIndex) => {
+  const sibs = [];
+  const dirs = [];
+  let idx = leafIndex;
+  for (let level = 0; level < levels.length - 1; level++) {
+    const nodes = levels[level];
+    let sibIdx = idx ^ 1;
+    if (sibIdx >= nodes.length) sibIdx = idx;
+    const dir = idx % 2 === 0 ? 0 : 1;
+    dirs.push(dir ? "1" : "0");
+    sibs.push(base64UrlEncodeNoPad(nodes[sibIdx]));
+    idx = Math.floor(idx / 2);
   }
+  return { sibs, dirs: dirs.join("") };
 };
 
-const solvePowWorkers = (base, target, opts) => {
-  const concurrency = Math.max(1, Math.min(8, opts.concurrency));
-  if (!opts.useWorkers || concurrency <= 1 || !supportsWorkers()) {
-    return null;
-  }
-  return new Promise((resolve, reject) => {
-    const workers = [];
-    let settled = false;
-    let completed = 0;
-    const maxMs = opts.maxMs || 0;
-    const startTime = Date.now();
-
-    const cleanup = (nonce, error) => {
-      if (settled) return;
-      settled = true;
-      workers.forEach((worker) => {
-        try {
-          worker.terminate();
-        } catch {
-          // ignore
-        }
-      });
-      if (error) {
-        reject(error);
-      } else {
-        resolve(nonce || null);
-      }
-    };
-
-    const handleDone = (nonce) => {
-      if (nonce) {
-        cleanup(nonce);
-        return;
-      }
-      completed += 1;
-      if (completed >= concurrency) {
-        cleanup(null);
-      }
-    };
-
-    if (opts.signal) {
-      if (opts.signal.aborted) {
-        cleanup(null, new Error("pow aborted"));
-        return;
-      }
-      opts.signal.addEventListener(
-        "abort",
-        () => {
-          cleanup(null, new Error("pow aborted"));
-        },
-        { once: true }
-      );
-    }
-
-    const workerUrl = getWorkerScriptUrl(opts.hashWasmWorkerUrl);
-    for (let i = 0; i < concurrency; i++) {
-      let worker = null;
-      try {
-        worker = new Worker(workerUrl);
-      } catch (error) {
-        cleanup(null, error);
-        return;
-      }
-      worker.onmessage = (event) => {
-        const data = event.data || {};
-        if (data && data.nonce) {
-          handleDone(String(data.nonce));
-        } else {
-          handleDone(null);
-        }
-      };
-      worker.onerror = () => {
-        handleDone(null);
-      };
-      worker.postMessage({
-        base,
-        difficulty: target,
-        start: i,
-        step: concurrency,
-        prefix: opts.prefix,
-        maxMs,
-        useWasm: opts.useWasm,
-        hashWasmWorkerUrl: opts.hashWasmWorkerUrl,
-      });
-      workers.push(worker);
-    }
-
-    if (maxMs) {
-      const timeout = Math.max(1, maxMs - (Date.now() - startTime));
-      setTimeout(() => {
-        if (!settled) {
-          cleanup(null, new Error("pow timeout"));
-        }
-      }, timeout);
-    }
-  });
-};
-
-export async function solvePow(bindingString, difficulty, options = {}) {
+export async function computePoswCommit(bindingString, steps, options = {}) {
   if (typeof bindingString !== "string" || bindingString.length === 0) {
     throw new Error("bindingString required");
   }
-  const target = normalizeDifficulty(difficulty);
-  const opts = normalizeOptions(options);
-  const base = `pow|${bindingString}|`;
-  const workerResult = await solvePowWorkers(base, target, opts);
-  if (workerResult) {
-    return workerResult;
+  const L = normalizeSteps(steps);
+  const yieldEvery = Number.isFinite(options.yieldEvery)
+    ? Math.max(1, Math.floor(options.yieldEvery))
+    : 256;
+  const signal = options.signal;
+
+  const chain = new Array(L + 1);
+  chain[0] = await hashSeed(bindingString);
+  for (let i = 1; i <= L; i++) {
+    if (signal && signal.aborted) throw new Error("posw aborted");
+    chain[i] = await hashStep(chain[i - 1], i);
+    if (shouldYield(i, yieldEvery)) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
   }
-  const hasher = await createWasmHasher(opts);
-  if (hasher) {
-    const baseBytes = encoder.encode(base);
-    return solvePowSingleSync(baseBytes, target, opts, hasher);
+
+  const leafHashes = new Array(chain.length);
+  for (let i = 0; i < chain.length; i++) {
+    if (signal && signal.aborted) throw new Error("posw aborted");
+    leafHashes[i] = await hashLeaf(i, chain[i]);
+    if (shouldYield(i, yieldEvery)) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
   }
-  return solvePowSingleAsync(base, target, opts);
+
+  const levels = await buildMerkleLevels(leafHashes, yieldEvery, signal);
+  const root = levels[levels.length - 1][0];
+  const rootB64 = base64UrlEncodeNoPad(root);
+
+  const open = async (indices) => {
+    if (!Array.isArray(indices) || indices.length === 0) {
+      throw new Error("indices required");
+    }
+    const out = [];
+    const seen = new Set();
+    for (const raw of indices) {
+      const idx = Number(raw);
+      if (!Number.isFinite(idx) || idx < 1 || idx > L) {
+        throw new Error("indices invalid");
+      }
+      if (seen.has(idx)) {
+        throw new Error("indices invalid");
+      }
+      seen.add(idx);
+      const hPrev = chain[idx - 1];
+      const hCurr = chain[idx];
+      out.push({
+        i: idx,
+        hPrev: base64UrlEncodeNoPad(hPrev),
+        hCurr: base64UrlEncodeNoPad(hCurr),
+        proofPrev: buildProof(levels, idx - 1),
+        proofCurr: buildProof(levels, idx),
+      });
+    }
+    return out;
+  };
+
+  return { rootB64, open };
 }

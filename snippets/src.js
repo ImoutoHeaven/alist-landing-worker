@@ -5,9 +5,15 @@
 const DEFAULTS = {
   powcheck: false,
   stripDownloadPrefix: false,
-  POW_VERSION: 1,
-  POW_DIFFICULTY_BASE: 18,
+  POW_VERSION: 2,
+  POW_API_PREFIX: "/__pow",
+  POW_DIFFICULTY_BASE: 1024,
   POW_DIFFICULTY_COEFF: 1.0,
+  POW_MIN_STEPS: 512,
+  POW_MAX_STEPS: 8192,
+  POW_SAMPLE_K: 3,
+  POW_FORCE_EDGE_1: true,
+  POW_FORCE_EDGE_LAST: true,
   POW_CHAL_TTL_SEC: 120,
   POW_SOL_TTL_SEC: 600,
   POW_BIND_PATH: true,
@@ -17,6 +23,8 @@ const DEFAULTS = {
   POW_BIND_TLS: false,
   IPV4_PREFIX: 32,
   IPV6_PREFIX: 64,
+  POW_COMMIT_COOKIE: "__Host-pow_commit",
+  POW_CHAL_COOKIE: "__Host-pow_chal",
   POW_SOL_COOKIE: "__Host-pow_sol",
   POW_ESM_URL:
     "https://cdn.jsdelivr.net/gh/ImoutoHeaven/alist-landing-worker@controller-overhaul/snippets/esm/esm.js",
@@ -24,9 +32,9 @@ const DEFAULTS = {
 
 const CONFIG = [
   // Example:
-  // { pattern: "alist-landing-*.example.com/*", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", POW_TOKEN: "replace-with-powToken", powcheck: true, stripDownloadPrefix: true, POW_DIFFICULTY_BASE: 20, POW_DIFFICULTY_COEFF: 1.2, POW_CHAL_TTL_SEC: 180, POW_SOL_TTL_SEC: 600, POW_BIND_PATH: true, POW_BIND_IPRANGE: true, POW_BIND_COUNTRY: false, POW_BIND_ASN: false, POW_BIND_TLS: false, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
-  // { pattern: "alist-landing-*.example.com/**", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", POW_TOKEN: "replace-with-powToken", powcheck: true, stripDownloadPrefix: true, POW_DIFFICULTY_BASE: 20, POW_DIFFICULTY_COEFF: 1.2, POW_CHAL_TTL_SEC: 180, POW_SOL_TTL_SEC: 600, POW_BIND_PATH: true, POW_BIND_IPRANGE: true, POW_BIND_COUNTRY: false, POW_BIND_ASN: false, POW_BIND_TLS: false, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
-  // { pattern: "alist-landing-*.example.com", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", POW_TOKEN: "replace-with-powToken", powcheck: true, stripDownloadPrefix: true, POW_DIFFICULTY_BASE: 20, POW_DIFFICULTY_COEFF: 1.2, POW_CHAL_TTL_SEC: 180, POW_SOL_TTL_SEC: 600, POW_BIND_PATH: true, POW_BIND_IPRANGE: true, POW_BIND_COUNTRY: false, POW_BIND_ASN: false, POW_BIND_TLS: false, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
+  // { pattern: "alist-landing-*.example.com/*", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", POW_TOKEN: "replace-with-powToken", powcheck: true, stripDownloadPrefix: true, POW_DIFFICULTY_BASE: 20, POW_DIFFICULTY_COEFF: 1.2, POW_MIN_STEPS: 512, POW_MAX_STEPS: 8192, POW_SAMPLE_K: 3, POW_FORCE_EDGE_1: true, POW_FORCE_EDGE_LAST: true, POW_CHAL_TTL_SEC: 180, POW_SOL_TTL_SEC: 600, POW_BIND_PATH: true, POW_BIND_IPRANGE: true, POW_BIND_COUNTRY: false, POW_BIND_ASN: false, POW_BIND_TLS: false, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
+  // { pattern: "alist-landing-*.example.com/**", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", POW_TOKEN: "replace-with-powToken", powcheck: true, stripDownloadPrefix: true, POW_DIFFICULTY_BASE: 20, POW_DIFFICULTY_COEFF: 1.2, POW_MIN_STEPS: 512, POW_MAX_STEPS: 8192, POW_SAMPLE_K: 3, POW_FORCE_EDGE_1: true, POW_FORCE_EDGE_LAST: true, POW_CHAL_TTL_SEC: 180, POW_SOL_TTL_SEC: 600, POW_BIND_PATH: true, POW_BIND_IPRANGE: true, POW_BIND_COUNTRY: false, POW_BIND_ASN: false, POW_BIND_TLS: false, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
+  // { pattern: "alist-landing-*.example.com", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", POW_TOKEN: "replace-with-powToken", powcheck: true, stripDownloadPrefix: true, POW_DIFFICULTY_BASE: 20, POW_DIFFICULTY_COEFF: 1.2, POW_MIN_STEPS: 512, POW_MAX_STEPS: 8192, POW_SAMPLE_K: 3, POW_FORCE_EDGE_1: true, POW_FORCE_EDGE_LAST: true, POW_CHAL_TTL_SEC: 180, POW_SOL_TTL_SEC: 600, POW_BIND_PATH: true, POW_BIND_IPRANGE: true, POW_BIND_COUNTRY: false, POW_BIND_ASN: false, POW_BIND_TLS: false, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
 ];
 
 const splitPattern = (pattern) => {
@@ -103,18 +111,28 @@ const compileConfigEntry = (entry) => {
 };
 
 const COMPILED_CONFIG = CONFIG.map(compileConfigEntry);
+const POW_API_PREFIX = DEFAULTS.POW_API_PREFIX;
 
-const pickConfig = (hostname, path) => {
+const pickConfigWithId = (hostname, path) => {
   const host = typeof hostname === "string" ? hostname.toLowerCase() : "";
   const requestPath = typeof path === "string" ? path : "";
   if (!host) return null;
-  for (const rule of COMPILED_CONFIG) {
+  for (let i = 0; i < COMPILED_CONFIG.length; i++) {
+    const rule = COMPILED_CONFIG[i];
     if (!rule || !rule.hostRegex) continue;
     if (!rule.hostRegex.test(host)) continue;
     if (rule.pathRegex && !rule.pathRegex.test(requestPath)) continue;
-    return rule.config || null;
+    return { cfgId: i, config: rule.config || null };
   }
   return null;
+};
+
+const getConfigById = (cfgId) => {
+  if (!Number.isInteger(cfgId) || cfgId < 0 || cfgId >= COMPILED_CONFIG.length) {
+    return null;
+  }
+  const entry = COMPILED_CONFIG[cfgId];
+  return entry && entry.config ? entry.config : null;
 };
 
 const encoder = new TextEncoder();
@@ -242,6 +260,37 @@ const sha256Bytes = async (data) => {
   return new Uint8Array(buf);
 };
 
+const concatBytes = (...chunks) => {
+  let total = 0;
+  for (const chunk of chunks) total += chunk.length;
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return out;
+};
+
+const encodeUint32BE = (value) => {
+  const out = new Uint8Array(4);
+  const num = Number(value) >>> 0;
+  out[0] = (num >>> 24) & 0xff;
+  out[1] = (num >>> 16) & 0xff;
+  out[2] = (num >>> 8) & 0xff;
+  out[3] = num & 0xff;
+  return out;
+};
+
+const bytesEqual = (a, b) => {
+  if (!a || !b || a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    diff |= a[i] ^ b[i];
+  }
+  return diff === 0;
+};
+
 const timingSafeEqual = (a, b) => {
   const aNorm = typeof a === "string" ? a : "";
   const bNorm = typeof b === "string" ? b : "";
@@ -263,7 +312,7 @@ const safeHeaders = (origin) => {
     headers.set("Access-Control-Allow-Origin", "*");
   }
   headers.set("Access-Control-Allow-Headers", "*");
-  headers.set("Access-Control-Allow-Methods", "GET,HEAD,OPTIONS");
+  headers.set("Access-Control-Allow-Methods", "GET,HEAD,OPTIONS,POST");
   return headers;
 };
 
@@ -471,18 +520,21 @@ const buildTlsFingerprintHash = async (request) => {
   return base64UrlEncodeNoPad(digest);
 };
 
-const getPowDifficulty = (config) => {
+const getPowSteps = (config) => {
   const base = normalizeNumber(config.POW_DIFFICULTY_BASE, DEFAULTS.POW_DIFFICULTY_BASE);
   const coeff = normalizeNumber(config.POW_DIFFICULTY_COEFF, DEFAULTS.POW_DIFFICULTY_COEFF);
-  if (!Number.isFinite(base) || base <= 0) return 1;
-  if (!Number.isFinite(coeff) || coeff <= 0) return Math.max(1, Math.round(base));
-  return Math.max(1, Math.round(base * coeff));
-};
-
-const getPowSolMaxAge = (config) => {
-  const solTtl = normalizeNumber(config.POW_SOL_TTL_SEC, DEFAULTS.POW_SOL_TTL_SEC);
-  const chalTtl = normalizeNumber(config.POW_CHAL_TTL_SEC, DEFAULTS.POW_CHAL_TTL_SEC);
-  return Math.max(1, Math.min(solTtl || 0, chalTtl || 0));
+  const minSteps = normalizeNumber(config.POW_MIN_STEPS, DEFAULTS.POW_MIN_STEPS);
+  const maxSteps = normalizeNumber(config.POW_MAX_STEPS, DEFAULTS.POW_MAX_STEPS);
+  const raw =
+    Number.isFinite(base) && base > 0
+      ? Number.isFinite(coeff) && coeff > 0
+        ? base * coeff
+        : base
+      : 1;
+  const steps = Math.max(1, Math.round(raw));
+  const minVal = Number.isFinite(minSteps) ? Math.max(1, Math.floor(minSteps)) : 1;
+  const maxVal = Number.isFinite(maxSteps) ? Math.max(minVal, Math.floor(maxSteps)) : minVal;
+  return Math.min(maxVal, Math.max(minVal, steps));
 };
 
 const randomBase64Url = (byteLength) => {
@@ -491,6 +543,11 @@ const randomBase64Url = (byteLength) => {
   crypto.getRandomValues(bytes);
   return base64UrlEncodeNoPad(bytes);
 };
+
+const POSW_SEED_PREFIX = encoder.encode("posw|seed|");
+const POSW_STEP_PREFIX = encoder.encode("posw|step|");
+const MERKLE_LEAF_PREFIX = encoder.encode("leaf|");
+const MERKLE_NODE_PREFIX = encoder.encode("node|");
 
 const makePowBindingString = (
   ticket,
@@ -507,10 +564,12 @@ const makePowBindingString = (
     ticket.v +
     "&e=" +
     ticket.e +
-    "&d=" +
-    ticket.d +
+    "&L=" +
+    ticket.L +
     "&r=" +
     ticket.r +
+    "&cfg=" +
+    ticket.cfgId +
     "&h=" +
     host +
     "&ph=" +
@@ -526,33 +585,56 @@ const makePowBindingString = (
   );
 };
 
-const buildPowSeed = (bindingString) => `pow|${bindingString}`;
+const hashPoswSeed = async (bindingString) =>
+  sha256Bytes(concatBytes(POSW_SEED_PREFIX, utf8ToBytes(bindingString)));
 
-const leadingZeroBits = (bytes) => {
-  let count = 0;
-  for (const b of bytes) {
-    if (b === 0) {
-      count += 8;
-      continue;
-    }
-    for (let i = 7; i >= 0; i--) {
-      if (b & (1 << i)) {
-        return count + (7 - i);
-      }
-    }
+const hashPoswStep = async (prevBytes, index) =>
+  sha256Bytes(concatBytes(POSW_STEP_PREFIX, encodeUint32BE(index), prevBytes));
+
+const hashMerkleLeaf = async (leafIndex, leafBytes) =>
+  sha256Bytes(concatBytes(MERKLE_LEAF_PREFIX, encodeUint32BE(leafIndex), leafBytes));
+
+const hashMerkleNode = async (leftBytes, rightBytes) =>
+  sha256Bytes(concatBytes(MERKLE_NODE_PREFIX, leftBytes, rightBytes));
+
+const computeMerkleDepth = (leafCount) => {
+  let depth = 0;
+  let size = Math.max(0, Math.floor(Number(leafCount) || 0));
+  while (size > 1) {
+    size = Math.ceil(size / 2);
+    depth += 1;
   }
-  return count;
+  return depth;
 };
 
-const checkPow = async (seed, nonce, difficulty) => {
-  if (!nonce || typeof nonce !== "string") return false;
-  const payload = `${seed}|${nonce}`;
-  const digest = await sha256Bytes(payload);
-  return leadingZeroBits(digest) >= difficulty;
+const verifyMerkleProof = async (rootBytes, leafBytes, leafIndex, leafCount, proof) => {
+  if (!rootBytes || rootBytes.length !== 32) return false;
+  if (!leafBytes || leafBytes.length !== 32) return false;
+  const idx = Math.floor(Number(leafIndex));
+  if (!Number.isFinite(idx) || idx < 0 || idx >= leafCount) return false;
+  const sibs = proof && Array.isArray(proof.sibs) ? proof.sibs : null;
+  const dirs = proof && typeof proof.dirs === "string" ? proof.dirs : "";
+  const depth = computeMerkleDepth(leafCount);
+  if (!sibs || sibs.length !== depth) return false;
+  if (dirs && dirs.length !== depth) return false;
+  let current = await hashMerkleLeaf(idx, leafBytes);
+  let curIdx = idx;
+  for (let i = 0; i < depth; i++) {
+    const sibBytes = base64UrlDecodeToBytes(String(sibs[i] || ""));
+    if (!sibBytes || sibBytes.length !== 32) return false;
+    const dir = curIdx % 2 === 0 ? 0 : 1;
+    if (dirs && Number(dirs[i]) !== dir) return false;
+    current =
+      dir === 0
+        ? await hashMerkleNode(current, sibBytes)
+        : await hashMerkleNode(sibBytes, current);
+    curIdx = Math.floor(curIdx / 2);
+  }
+  return bytesEqual(current, rootBytes);
 };
 
 const encodePowTicket = (ticket) => {
-  const raw = `${ticket.v}.${ticket.e}.${ticket.d}.${ticket.r}.${ticket.mac}`;
+  const raw = `${ticket.v}.${ticket.e}.${ticket.L}.${ticket.r}.${ticket.cfgId}.${ticket.mac}`;
   return base64UrlEncodeNoPad(utf8ToBytes(raw));
 };
 
@@ -561,39 +643,88 @@ const parsePowTicket = (ticketB64) => {
   if (!bytes) return null;
   const raw = bytesToUtf8(bytes);
   const parts = raw.split(".");
-  if (parts.length !== 5) return null;
+  if (parts.length !== 6) return null;
   const v = Number.parseInt(parts[0], 10);
   const e = Number.parseInt(parts[1], 10);
-  const d = Number.parseInt(parts[2], 10);
+  const L = Number.parseInt(parts[2], 10);
   const r = parts[3] || "";
-  const mac = parts[4] || "";
-  if (!Number.isFinite(v) || !Number.isFinite(e) || !Number.isFinite(d)) return null;
-  if (!r) return null;
-  return { v, e, d, r, mac };
+  const cfgId = Number.parseInt(parts[4], 10);
+  const mac = parts[5] || "";
+  if (!Number.isFinite(v) || !Number.isFinite(e) || !Number.isFinite(L)) return null;
+  if (!Number.isFinite(cfgId) || cfgId < 0) return null;
+  if (!r || !mac) return null;
+  return { v, e, L, r, cfgId, mac };
 };
 
 const parsePowSolCookie = (value) => {
   if (!value || typeof value !== "string") return null;
-  const idx = value.indexOf(".");
-  if (idx <= 0 || idx === value.length - 1) return null;
-  const ticketB64 = value.slice(0, idx);
-  const nonceB64 = value.slice(idx + 1);
-  const ticket = parsePowTicket(ticketB64);
-  if (!ticket) return null;
-  const nonceBytes = base64UrlDecodeToBytes(nonceB64);
-  if (!nonceBytes) return null;
-  const nonce = bytesToUtf8(nonceBytes);
-  if (!nonce) return null;
-  return { ticket, nonce, ticketB64 };
+  const parts = value.split(".");
+  if (parts.length !== 4) return null;
+  if (parts[0] !== "v2") return null;
+  const ticketB64 = parts[1] || "";
+  const exp = Number.parseInt(parts[2], 10);
+  const mac = parts[3] || "";
+  if (!ticketB64 || !Number.isFinite(exp) || !mac) return null;
+  return { ticketB64, exp, mac };
 };
 
-const getPowBindingValues = async (request, canonicalPath, config) => {
+const parsePowCommitCookie = (value) => {
+  if (!value || typeof value !== "string") return null;
+  const parts = value.split(".");
+  if (parts.length !== 6) return null;
+  if (parts[0] !== "v2") return null;
+  const ticketB64 = parts[1] || "";
+  const rootB64 = parts[2] || "";
+  const pathHash = parts[3] || "";
+  const exp = Number.parseInt(parts[4], 10);
+  const mac = parts[5] || "";
+  if (!ticketB64 || !rootB64 || !pathHash || !Number.isFinite(exp) || !mac) return null;
+  return { ticketB64, rootB64, pathHash, exp, mac };
+};
+
+const parsePowChalCookie = (value) => {
+  if (!value || typeof value !== "string") return null;
+  const parts = value.split(".");
+  if (parts.length !== 6) return null;
+  if (parts[0] !== "v2") return null;
+  const sid = parts[1] || "";
+  const ticketB64 = parts[2] || "";
+  const indicesStr = parts[3] || "";
+  const exp = Number.parseInt(parts[4], 10);
+  const mac = parts[5] || "";
+  if (!sid || !ticketB64 || !indicesStr || !Number.isFinite(exp) || !mac) return null;
+  return { sid, ticketB64, indicesStr, exp, mac };
+};
+
+const parseIndicesStr = (value) => {
+  if (!value || typeof value !== "string") return null;
+  const parts = value.split(",");
+  if (!parts.length) return null;
+  const out = [];
+  const seen = new Set();
+  for (const part of parts) {
+    if (!part) return null;
+    const num = Number.parseInt(part, 10);
+    if (!Number.isFinite(num) || num <= 0) return null;
+    if (seen.has(num)) return null;
+    seen.add(num);
+    out.push(num);
+  }
+  return out;
+};
+
+const computePathHash = async (canonicalPath) =>
+  base64UrlEncodeNoPad(await sha256Bytes(canonicalPath));
+
+const getPowBindingValuesWithPathHash = async (request, pathHash, config) => {
   const bindPath = config.POW_BIND_PATH !== false;
   const bindIp = config.POW_BIND_IPRANGE !== false;
   const bindCountry = config.POW_BIND_COUNTRY === true;
   const bindAsn = config.POW_BIND_ASN === true;
   const bindTls = config.POW_BIND_TLS === true;
-  const pathHash = bindPath ? base64UrlEncodeNoPad(await sha256Bytes(canonicalPath)) : "any";
+  const normalizedPathHash =
+    bindPath && typeof pathHash === "string" && pathHash ? pathHash : bindPath ? "" : "any";
+  if (bindPath && !normalizedPathHash) return null;
   const ipScope = bindIp ? computeIpScope(getClientIP(request), config) : "any";
   const cf = getRequestCf(request);
   const country = bindCountry ? normalizeCountry(cf && cf.country) : "any";
@@ -605,18 +736,28 @@ const getPowBindingValues = async (request, canonicalPath, config) => {
       return null;
     }
   }
-  return { pathHash, ipScope, country, asn, tlsFingerprint };
+  return { pathHash: normalizedPathHash, ipScope, country, asn, tlsFingerprint };
 };
 
-const verifyPowSol = async (request, url, canonicalPath, nowSeconds, config, powSecret) => {
+const getPowBindingValues = async (request, canonicalPath, config) => {
+  const bindPath = config.POW_BIND_PATH !== false;
+  const pathHash = bindPath ? await computePathHash(canonicalPath) : "any";
+  return getPowBindingValuesWithPathHash(request, pathHash, config);
+};
+
+const verifyPowSol = async (request, url, canonicalPath, nowSeconds, config, powSecret, cfgId) => {
   const cookies = parseCookieHeader(request.headers.get("Cookie"));
-  const solRaw = cookies.get(config.POW_SOL_COOKIE) || "";
+  const solRaw = cookies.get(DEFAULTS.POW_SOL_COOKIE) || "";
   const sol = parsePowSolCookie(solRaw);
   if (!sol) return false;
-  const ticket = sol.ticket;
+  if (!Number.isFinite(sol.exp) || sol.exp <= 0 || sol.exp < nowSeconds) return false;
+  const ticket = parsePowTicket(sol.ticketB64);
+  if (!ticket) return false;
   const powVersion = normalizeNumber(config.POW_VERSION, DEFAULTS.POW_VERSION);
   if (ticket.v !== powVersion) return false;
   if (!Number.isFinite(ticket.e) || ticket.e <= 0 || ticket.e < nowSeconds) return false;
+  if (!Number.isFinite(ticket.L) || ticket.L <= 0) return false;
+  if (ticket.cfgId !== cfgId) return false;
   if (!powSecret) return false;
   const bindingValues = await getPowBindingValues(request, canonicalPath, config);
   if (!bindingValues) return false;
@@ -632,316 +773,47 @@ const verifyPowSol = async (request, url, canonicalPath, nowSeconds, config, pow
   );
   const expectedMac = await hmacSha256Base64UrlNoPad(powSecret, bindingString);
   if (!timingSafeEqual(expectedMac, ticket.mac)) return false;
-  const seed = buildPowSeed(bindingString);
-  return checkPow(seed, sol.nonce, ticket.d);
+  const expectedSolMac = await hmacSha256Base64UrlNoPad(
+    powSecret,
+    `ok|${sol.ticketB64}|${sol.exp}`
+  );
+  if (!timingSafeEqual(expectedSolMac, sol.mac)) return false;
+  return true;
 };
 
 const buildPowChallengeHtml = ({
   bindingStringB64,
-  difficulty,
+  steps,
   ticketB64,
+  pathHash,
   reloadUrlB64,
-  solCookieName,
-  solMaxAge,
+  apiPrefixB64,
   esmUrlB64,
-}) => `<!DOCTYPE html>
+}) => `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>VerifyRequest</title>
-<style>
-  :root {
-    --win-bg: #c0c0c0;
-    --win-border-light: #dfdfdf;
-    --win-border-dark: #808080;
-    --win-border-black: #000000;
-    --win-title-l: #000080;
-    --win-title-r: #1084d0;
-    --term-bg: #0c0c0c;
-    --term-fg: #cccccc;
-    --term-font: "Consolas", "Lucida Console", "Monaco", "Courier New", monospace;
-  }
-
-  * { box-sizing: border-box; }
-
-  body {
-    margin: 0; padding: 0;
-    height: 100vh;
-    width: 100vw;
-    background-color: #000;
-    /* Cyberpunkish dark radial gradient desktop */
-    background-image: radial-gradient(circle at center, #2b2b2b 0%, #1a1a1a 100%);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-family: var(--term-font);
-    overflow: hidden;
-  }
-
-  /* Scanlines overlay */
-  .scanlines {
-    position: fixed;
-    top: 0; left: 0; width: 100%; height: 100%;
-    background: linear-gradient(
-      to bottom,
-      rgba(255,255,255,0),
-      rgba(255,255,255,0) 50%,
-      rgba(0,0,0,0.1) 50%,
-      rgba(0,0,0,0.1)
-    );
-    background-size: 100% 4px;
-    pointer-events: none;
-    z-index: 999;
-  }
-
-  /* --- Window Container --- */
-  .window {
-    width: 800px;
-    height: 500px;
-    
-    /* Responsive sizing: keep it floating even on mobile */
-    max-width: 94vw; 
-    max-height: 85vh;
-    
-    background-color: var(--win-bg);
-    /* Classic 3D borders */
-    border-top: 2px solid var(--win-border-light);
-    border-left: 2px solid var(--win-border-light);
-    border-right: 2px solid var(--win-border-black);
-    border-bottom: 2px solid var(--win-border-black);
-    
-    /* Shadow for depth */
-    box-shadow: 1px 1px 0 0 var(--win-border-dark) inset, 0 10px 30px rgba(0,0,0,0.7);
-    
-    display: flex;
-    flex-direction: column;
-    padding: 3px;
-    position: relative;
-    z-index: 10;
-    
-    /* Smooth transitions for min/max operations */
-    transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
-    transform-origin: bottom left;
-  }
-
-  /* Maximized State */
-  .window.maximized {
-    width: 100vw; height: 100vh;
-    max-width: 100%; max-height: 100%;
-    border: none; padding: 0;
-  }
-  .window.maximized .terminal-content {
-    border: none;
-    border-top: 2px solid var(--win-border-dark);
-  }
-
-  /* Minimized State */
-  .window.minimized {
-    transform: scale(0);
-    opacity: 0;
-    pointer-events: none;
-  }
-
-  /* --- Taskbar Entry (Bottom Left) --- */
-  .taskbar-entry {
-    position: fixed;
-    bottom: 10px; left: 10px;
-    width: 140px; height: 28px;
-    background-color: var(--win-bg);
-    border-top: 2px solid var(--win-border-light);
-    border-left: 2px solid var(--win-border-light);
-    border-right: 2px solid var(--win-border-black);
-    border-bottom: 2px solid var(--win-border-black);
-    box-shadow: 1px 1px 0 var(--win-border-dark);
-    
-    display: flex; align-items: center;
-    padding: 0 6px; gap: 6px;
-    cursor: pointer;
-    z-index: 5;
-    
-    visibility: hidden; pointer-events: none;
-  }
-
-  .taskbar-entry.visible {
-    visibility: visible; pointer-events: auto;
-  }
-  
-  .taskbar-entry:active {
-    border-top: 2px solid var(--win-border-black);
-    border-left: 2px solid var(--win-border-black);
-    border-right: 2px solid var(--win-border-light);
-    border-bottom: 2px solid var(--win-border-light);
-  }
-
-  .taskbar-text {
-    font-family: Tahoma, sans-serif; font-size: 11px;
-    font-weight: bold; color: black;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    user-select: none;
-  }
-
-  /* --- Title Bar --- */
-  .title-bar {
-    height: 22px;
-    background: linear-gradient(90deg, var(--win-title-l), var(--win-title-r));
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 0 4px; margin-bottom: 3px;
-    user-select: none; flex-shrink: 0;
-  }
-
-  .title-text {
-    color: white; font-weight: bold; font-size: 12px;
-    font-family: Tahoma, sans-serif;
-    display: flex; align-items: center; gap: 6px;
-    text-shadow: 1px 1px #000;
-    
-    /* Ensure title truncates properly on small phones */
-    flex: 1; min-width: 0;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    margin-right: 8px;
-  }
-
-  .icon-prompt {
-    width: 12px; height: 12px;
-    background: white; border: 1px solid gray;
-    position: relative; flex-shrink: 0;
-    box-shadow: 1px 1px 0 #000;
-  }
-  .icon-prompt::after {
-    content: "C:"; color: black; font-size: 9px;
-    position: absolute; top: -2px; left: 0px;
-    font-family: Arial, sans-serif; font-weight: bold; transform: scale(0.8);
-  }
-
-  /* --- Buttons --- */
-  .controls { display: flex; gap: 2px; flex-shrink: 0; }
-  .btn {
-    width: 16px; height: 14px;
-    background-color: var(--win-bg);
-    border: 1px solid;
-    border-color: var(--win-border-light) var(--win-border-black) var(--win-border-black) var(--win-border-light);
-    display: flex; align-items: center; justify-content: center;
-    font-size: 9px; font-family: Tahoma, sans-serif; color: black;
-    box-shadow: 1px 1px 0 var(--win-border-dark);
-    cursor: pointer;
-  }
-  .btn:active {
-    border-color: var(--win-border-black) var(--win-border-light) var(--win-border-light) var(--win-border-black);
-    transform: translate(1px, 1px); box-shadow: none;
-  }
-  .btn-close { margin-left: 2px; }
-
-  /* --- Terminal Area --- */
-  .terminal-content {
-    flex: 1;
-    background-color: var(--term-bg);
-    color: var(--term-fg);
-    border: 2px solid;
-    border-color: var(--win-border-dark) var(--win-border-light) var(--win-border-light) var(--win-border-dark);
-    padding: 4px;
-    font-size: 14px;
-    line-height: 1.3;
-    overflow-y: auto; overflow-x: hidden;
-    position: relative;
-    text-shadow: 0 0 1px rgba(255,255,255,0.2);
-  }
-
-  .terminal-content::-webkit-scrollbar { width: 12px; background: #000; }
-  .terminal-content::-webkit-scrollbar-thumb { background: #444; border: 1px solid #000; }
-  
-  .line { word-break: break-all; margin-bottom: 2px; }
-  
-  .cursor {
-    display: inline-block; width: 0.6em; height: 1.1em;
-    background-color: var(--term-fg); vertical-align: text-bottom;
-    animation: blink 1s step-end infinite;
-  }
-  @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
-
-  .dim { color: #888; }
-  .green { color: #0f0; }
-  .cyan { color: #0ff; }
-  .yellow { color: #ff0; }
-  .red { color: #f55; }
-  .white { color: #fff; font-weight: bold; }
-</style>
 </head>
 <body>
-  <div class="scanlines"></div>
-
-  <!-- Taskbar Entry (Hidden unless minimized) -->
-  <div class="taskbar-entry" id="taskbarBtn">
-    <div class="icon-prompt"></div>
-    <div class="taskbar-text">Administrator: C...</div>
-  </div>
-
-  <div class="window" id="winMain">
-    <div class="title-bar">
-      <div class="title-text">
-        <div class="icon-prompt"></div>
-        Administrator: C:\\Windows\\System32\\cmd.exe
-      </div>
-      <div class="controls">
-        <div class="btn" id="btnMin" title="Minimize">_</div>
-        <div class="btn" id="btnMax" title="Maximize">□</div>
-        <div class="btn btn-close" id="btnClose" title="Close">X</div>
-      </div>
-    </div>
-    <div class="terminal-content" id="console"></div>
-  </div>
-
+<pre id="log">Starting...</pre>
 <script type="module">
   const CFG = {
     bindingB64: "${bindingStringB64}",
-    difficulty: ${difficulty},
-    reloadUrlB64: "${reloadUrlB64}",
-    solCookieName: "${solCookieName}",
-    solMaxAge: ${solMaxAge},
+    steps: ${steps},
     ticketB64: "${ticketB64}",
+    pathHash: "${pathHash}",
+    reloadUrlB64: "${reloadUrlB64}",
+    apiPrefixB64: "${apiPrefixB64}",
     esmUrlB64: "${esmUrlB64}",
-    bootDelay: 200,
-    charsPerSecond: 600,
   };
 
-  const $ = (id) => document.getElementById(id);
-  
-  // --- Window Management ---
-  const winMain = $("winMain");
-  const taskbarBtn = $("taskbarBtn");
-  let isRunning = true;
+  const logEl = document.getElementById("log");
+  const log = (msg) => {
+    logEl.textContent += "\n" + msg;
+  };
 
-  // Min
-  $("btnMin").addEventListener("click", () => {
-    winMain.classList.add("minimized");
-    taskbarBtn.classList.add("visible");
-  });
-  
-  // Restore
-  taskbarBtn.addEventListener("click", () => {
-    winMain.classList.remove("minimized");
-    taskbarBtn.classList.remove("visible");
-  });
-
-  // Max
-  $("btnMax").addEventListener("click", () => {
-    winMain.classList.toggle("maximized");
-  });
-
-  // Close
-  $("btnClose").addEventListener("click", () => {
-    try { window.close(); } catch(e){}
-    isRunning = false;
-    document.body.innerHTML = \`
-      <div style="color:#555; font-family:monospace; height:100vh; display:flex; align-items:center; justify-content:center; flex-direction:column;">
-        <div>CONNECTION TERMINATED</div>
-        <div style="font-size:12px; margin-top:10px;">NO SIGNAL</div>
-      </div>
-    \`;
-    document.body.style.background = "#000";
-  });
-
-  // --- Logic ---
   const decodeB64Url = (str) => {
     try {
       let b64 = str.replace(/-/g, "+").replace(/_/g, "/");
@@ -950,194 +822,80 @@ const buildPowChallengeHtml = ({
       return new TextDecoder().decode(Uint8Array.from(atob(b64), c => c.charCodeAt(0)));
     } catch(e) { return null; }
   };
-  
-  const encodeB64Url = (str) => {
-    const bytes = new TextEncoder().encode(str);
-    return btoa(String.fromCharCode(...bytes)).replace(/\\+/g, "-").replace(/\\//g, "_").replace(/=+$/g, "");
+
+  const normalizeApiPrefix = (prefix) => {
+    if (!prefix || typeof prefix !== "string") return "/__pow";
+    return prefix.endsWith("/") ? prefix.slice(0, -1) : prefix;
   };
 
-  class Terminal {
-    constructor(el) {
-      this.el = el;
-      this.promptStr = "C:\\\\Windows\\\\System32>"; 
-      this.queue = []; 
-      this.isTyping = false;
-      this.cursor = document.createElement("span");
-      this.cursor.className = "cursor";
-      this.newLine();
+  const postJson = async (url, body) => {
+    const res = await fetch(url, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+    });
+    if (!res.ok) {
+      throw new Error("Request Failed");
     }
-
-    newLine() {
-      this.currentLine = document.createElement("div");
-      this.currentLine.className = "line";
-      this.el.appendChild(this.currentLine);
-      this.currentLine.appendChild(this.cursor);
-      this.el.scrollTop = this.el.scrollHeight;
-    }
-
-    async type(text, style = "") {
-      return new Promise(resolve => {
-        this.queue.push({ text, style, resolve });
-        if (!this.isTyping) this.startLoop();
-      });
-    }
-
-    async println(text, style = "") {
-      this.writeDirect(text, style);
-      this.newLine();
-      await new Promise(r => setTimeout(r, 20));
-    }
-
-    writeDirect(text, style="") {
-      if (!isRunning) return;
-      const span = document.createElement("span");
-      if(style) span.className = style;
-      span.textContent = text;
-      this.currentLine.insertBefore(span, this.cursor);
-      this.el.scrollTop = this.el.scrollHeight;
-    }
-
-    startLoop() {
-      this.isTyping = true;
-      let lastTime = performance.now();
-      
-      const tick = (now) => {
-        if (!isRunning) return;
-
-        if (this.queue.length === 0) {
-          this.isTyping = false;
-          return; 
-        }
-
-        const task = this.queue[0];
-        const dt = now - lastTime;
-        lastTime = now;
-
-        const charCount = Math.max(1, Math.round((CFG.charsPerSecond / 1000) * dt));
-        const chunk = task.text.substring(0, charCount);
-        task.text = task.text.substring(charCount);
-
-        if (chunk) {
-          let lastSpan = this.currentLine.lastElementChild?.previousElementSibling;
-          if (lastSpan && lastSpan.className === task.style) {
-            lastSpan.textContent += chunk;
-          } else {
-            const span = document.createElement("span");
-            if (task.style) span.className = task.style;
-            span.textContent = chunk;
-            this.currentLine.insertBefore(span, this.cursor);
-          }
-          this.el.scrollTop = this.el.scrollHeight;
-        }
-
-        if (task.text.length === 0) {
-          this.queue.shift();
-          if (task.resolve) task.resolve();
-        }
-        requestAnimationFrame(tick);
-      };
-      requestAnimationFrame(tick);
-    }
-  }
-
-  async function boot() {
-    if (!isRunning) return;
-    const term = new Terminal($("console"));
-
-    await new Promise(r => setTimeout(r, CFG.bootDelay));
-
     try {
-      term.writeDirect("Microsoft Windows [Version 10.0.19045.2486]");
-      term.newLine();
-      term.writeDirect("(c) Microsoft Corporation. All rights reserved.");
-      term.newLine();
-      term.newLine();
-      
-      term.writeDirect(term.promptStr + " ");
-      await term.type("alist-guard.exe --verify --pow", "");
-      
-      await new Promise(r => setTimeout(r, 300));
-      term.newLine();
-      
-      await term.println("ALIST GUARDIAN v" + "${DEFAULTS.POW_VERSION}.0", "white");
-      
-      await term.type("Detecting Hardware Environment... ", "dim");
-      const cores = navigator.hardwareConcurrency || 1;
-      await term.println("OK", "green");
-      await term.println(\`  > vCPU: \${cores} Cores\`, "dim");
-      await term.println(\`  > Difficulty: \${CFG.difficulty}\`, "dim");
-      
-      await term.type("Loading Solver... ", "dim");
-      const loadStart = performance.now();
-      const esmUrl = decodeB64Url(CFG.esmUrlB64);
-      
-      let solvePow;
-      try {
-        const module = await import(esmUrl);
-        solvePow = module.solvePow;
-      } catch(e) {
-        throw new Error("Module Load Failed");
-      }
-      await term.println(\`DONE (\${(performance.now() - loadStart).toFixed(0)}ms)\`, "green");
-
-      await term.type("Calculating Proof-of-Work... ", "cyan");
-      
-      const spinSpan = document.createElement("span");
-      spinSpan.className = "white";
-      term.currentLine.insertBefore(spinSpan, term.cursor);
-      let spinFrame = 0;
-      const spinner = setInterval(() => { spinSpan.textContent = "|/-\\\\"[spinFrame++ % 4]; }, 80);
-
-      await new Promise(r => setTimeout(r, 50));
-
-      const binding = decodeB64Url(CFG.bindingB64);
-      const startT = performance.now();
-      const nonce = await solvePow(binding, CFG.difficulty);
-      const timeT = performance.now() - startT;
-
-      clearInterval(spinner);
-      spinSpan.remove();
-
-      await term.println("MATCH", "green");
-      await term.println(\`  > Nonce: \${nonce}\`, "dim");
-      await term.println(\`  > Time:  \${timeT.toFixed(0)}ms\`, "dim");
-
-      await term.type("Verifying Ticket... ", "dim");
-      const nonceB64 = encodeB64Url(String(nonce));
-      const cookieVal = \`\${CFG.ticketB64}.\${nonceB64}\`;
-      document.cookie = \`\${CFG.solCookieName}=\${cookieVal}; Max-Age=\${CFG.solMaxAge}; Path=/; Secure; SameSite=None\`;
-      
-      await new Promise(r => setTimeout(r, 400));
-      await term.println("ACCESS GRANTED", "green");
-      document.title = "SubmitThisForm";
-      
-      term.newLine();
-      await term.println("Redirecting...", "yellow");
-      
-      const target = decodeB64Url(CFG.reloadUrlB64);
-      setTimeout(() => {
-        if (isRunning) window.location.replace(target);
-      }, 500);
-
-    } catch (e) {
-      if (!isRunning) return;
-      term.newLine();
-      await term.println("FATAL ERROR", "red");
-      await term.println(e.message, "red");
-      term.newLine();
-      term.writeDirect(term.promptStr + " ");
+      return await res.json();
+    } catch {
+      return {};
     }
-  }
+  };
 
-  boot();
+  (async () => {
+    try {
+      log("Loading solver...");
+      const esmUrl = decodeB64Url(CFG.esmUrlB64);
+      const module = await import(esmUrl);
+      const computePoswCommit = module.computePoswCommit;
+      if (typeof computePoswCommit !== "function") {
+        throw new Error("Solver Missing");
+      }
+      log("Computing hash chain...");
+      const binding = decodeB64Url(CFG.bindingB64);
+      const commit = await computePoswCommit(binding, CFG.steps);
+      log("Root: " + String(commit.rootB64 || "").slice(0, 12) + "...");
+      const apiPrefix = normalizeApiPrefix(decodeB64Url(CFG.apiPrefixB64));
+      log("Submitting commit...");
+      await postJson(apiPrefix + "/commit", {
+        ticketB64: CFG.ticketB64,
+        rootB64: commit.rootB64,
+        pathHash: CFG.pathHash,
+      });
+      log("Requesting challenge...");
+      const chal = await postJson(apiPrefix + "/challenge", {});
+      if (!chal || !Array.isArray(chal.indices)) {
+        throw new Error("Challenge Failed");
+      }
+      log("Opening proofs...");
+      const opens = await commit.open(chal.indices);
+      await postJson(apiPrefix + "/open", { sid: chal.sid, opens });
+      log("Access granted. Redirecting...");
+      const target = decodeB64Url(CFG.reloadUrlB64);
+      window.location.replace(target);
+    } catch (e) {
+      log("ERROR: " + (e && e.message ? e.message : String(e)));
+    }
+  })();
 </script>
 </body>
 </html>`;
 
-const respondPowChallengeHtml = async (request, url, canonicalPath, nowSeconds, config, powSecret) => {
+const respondPowChallengeHtml = async (
+  request,
+  url,
+  canonicalPath,
+  nowSeconds,
+  config,
+  powSecret,
+  cfgId
+) => {
   const ttl = normalizeNumber(config.POW_CHAL_TTL_SEC, DEFAULTS.POW_CHAL_TTL_SEC) || 0;
   const exp = nowSeconds + Math.max(1, ttl);
-  const difficulty = getPowDifficulty(config);
+  const steps = getPowSteps(config);
   const bindingValues = await getPowBindingValues(request, canonicalPath, config);
   if (!bindingValues) {
     return respondText(request.headers.get("Origin") || "", "tls fingerprint missing", 403);
@@ -1147,8 +905,9 @@ const respondPowChallengeHtml = async (request, url, canonicalPath, nowSeconds, 
   const ticket = {
     v: powVersion,
     e: exp,
-    d: difficulty,
+    L: steps,
     r: randomBase64Url(16),
+    cfgId,
     mac: "",
   };
   const bindingString = makePowBindingString(
@@ -1164,21 +923,343 @@ const respondPowChallengeHtml = async (request, url, canonicalPath, nowSeconds, 
   const ticketB64 = encodePowTicket(ticket);
   const bindingStringB64 = base64UrlEncodeNoPad(utf8ToBytes(bindingString));
   const reloadUrlB64 = base64UrlEncodeNoPad(utf8ToBytes(url.toString()));
+  const apiPrefixB64 = base64UrlEncodeNoPad(utf8ToBytes(POW_API_PREFIX));
   const esmUrlB64 = base64UrlEncodeNoPad(utf8ToBytes(String(config.POW_ESM_URL)));
-  const solMaxAge = getPowSolMaxAge(config);
   const html = buildPowChallengeHtml({
     bindingStringB64,
-    difficulty,
+    steps,
     ticketB64,
+    pathHash,
     reloadUrlB64,
-    solCookieName: config.POW_SOL_COOKIE,
-    solMaxAge,
+    apiPrefixB64,
     esmUrlB64,
   });
   const headers = safeHeaders(request.headers.get("Origin") || "");
   headers.set("Content-Type", "text/html; charset=utf-8");
   headers.set("Cache-Control", "no-store");
   return new Response(html, { status: 200, headers });
+};
+
+const readJsonBody = async (request) => {
+  try {
+    return await request.json();
+  } catch {
+    return null;
+  }
+};
+
+const setCookie = (headers, name, value, maxAge) => {
+  const parts = [
+    `${name}=${encodeURIComponent(String(value || ""))}`,
+    "Path=/",
+    "Secure",
+    "SameSite=None",
+    "HttpOnly",
+  ];
+  if (typeof maxAge === "number") {
+    parts.push(`Max-Age=${Math.max(0, Math.floor(maxAge))}`);
+  }
+  headers.append("Set-Cookie", parts.join("; "));
+};
+
+const clearCookie = (headers, name) => {
+  setCookie(headers, name, "deleted", 0);
+};
+
+const getPowSecret = (config) => {
+  const signSecret = typeof config.HMAC_SECRET === "string" ? config.HMAC_SECRET : "";
+  const powToken = typeof config.POW_TOKEN === "string" ? config.POW_TOKEN : "";
+  return powToken || signSecret;
+};
+
+const randomInt = (max) => {
+  const limit = Math.max(1, Math.floor(Number(max) || 1));
+  const buf = new Uint32Array(1);
+  crypto.getRandomValues(buf);
+  return buf[0] % limit;
+};
+
+const sampleIndices = (maxIndex, extraCount, forceEdge1, forceEdgeLast) => {
+  const max = Math.floor(Number(maxIndex) || 0);
+  if (max <= 0) return [];
+  const out = new Set();
+  if (forceEdge1 && max >= 1) out.add(1);
+  if (forceEdgeLast && max >= 1) out.add(max);
+  const extra = Math.max(0, Math.floor(Number(extraCount) || 0));
+  const lo = 2;
+  const hi = max - 1;
+  const len = Math.max(0, hi - lo + 1);
+  if (extra > 0 && len > 0) {
+    const bucketCount = Math.min(extra, len);
+    for (let b = 0; b < bucketCount; b++) {
+      const bLo = lo + Math.floor((b * len) / bucketCount);
+      const bHi = lo + Math.floor(((b + 1) * len) / bucketCount) - 1;
+      const width = Math.max(1, bHi - bLo + 1);
+      const pick = bLo + randomInt(width);
+      out.add(pick);
+    }
+  }
+  return Array.from(out).sort((a, b) => a - b);
+};
+
+const handlePowCommit = async (request, url, nowSeconds) => {
+  const origin = request.headers.get("Origin") || "";
+  const body = await readJsonBody(request);
+  if (!body || typeof body !== "object") {
+    return respondText(origin, "invalid payload", 400);
+  }
+  const ticketB64 = typeof body.ticketB64 === "string" ? body.ticketB64 : "";
+  const rootB64 = typeof body.rootB64 === "string" ? body.rootB64 : "";
+  const pathHash = typeof body.pathHash === "string" ? body.pathHash : "";
+  if (!ticketB64 || !rootB64) {
+    return respondText(origin, "invalid payload", 400);
+  }
+  const ticket = parsePowTicket(ticketB64);
+  if (!ticket) return deny(origin, "ticket invalid");
+  const baseConfig = getConfigById(ticket.cfgId);
+  if (!baseConfig) return deny(origin, "config invalid");
+  const config = { ...DEFAULTS, ...baseConfig };
+  const powSecret = getPowSecret(config);
+  if (!powSecret) return respondText(origin, "misconfigured", 500);
+  if (config.powcheck !== true) return respondText(origin, "misconfigured", 500);
+  const powVersion = normalizeNumber(config.POW_VERSION, DEFAULTS.POW_VERSION);
+  if (ticket.v !== powVersion) return deny(origin, "ticket invalid");
+  if (isExpired(ticket.e, nowSeconds)) return deny(origin, "ticket expired");
+  const bindPath = config.POW_BIND_PATH !== false;
+  const normalizedPathHash = bindPath ? pathHash : "any";
+  if (bindPath && !normalizedPathHash) {
+    return respondText(origin, "invalid path", 400);
+  }
+  const bindingValues = await getPowBindingValuesWithPathHash(
+    request,
+    normalizedPathHash,
+    config
+  );
+  if (!bindingValues) return respondText(origin, "tls fingerprint missing", 403);
+  const bindingString = makePowBindingString(
+    ticket,
+    url.hostname,
+    bindingValues.pathHash,
+    bindingValues.ipScope,
+    bindingValues.country,
+    bindingValues.asn,
+    bindingValues.tlsFingerprint
+  );
+  const expectedMac = await hmacSha256Base64UrlNoPad(powSecret, bindingString);
+  if (!timingSafeEqual(expectedMac, ticket.mac)) return deny(origin, "ticket invalid");
+  const rootBytes = base64UrlDecodeToBytes(rootB64);
+  if (!rootBytes || rootBytes.length !== 32) {
+    return respondText(origin, "invalid root", 400);
+  }
+  const ttl = normalizeNumber(config.POW_CHAL_TTL_SEC, DEFAULTS.POW_CHAL_TTL_SEC) || 0;
+  const exp = nowSeconds + Math.max(1, ttl);
+  const mac = await hmacSha256Base64UrlNoPad(
+    powSecret,
+    `commit|${ticketB64}|${rootB64}|${bindingValues.pathHash}|${exp}`
+  );
+  const value = `v2.${ticketB64}.${rootB64}.${bindingValues.pathHash}.${exp}.${mac}`;
+  const headers = safeHeaders(origin);
+  headers.set("Content-Type", "application/json; charset=utf-8");
+  headers.set("Cache-Control", "no-store");
+  setCookie(headers, DEFAULTS.POW_COMMIT_COOKIE, value, ttl);
+  return new Response(JSON.stringify({ ok: true }), { status: 200, headers });
+};
+
+const handlePowChallenge = async (request, url, nowSeconds) => {
+  const origin = request.headers.get("Origin") || "";
+  const cookies = parseCookieHeader(request.headers.get("Cookie"));
+  const commitRaw = cookies.get(DEFAULTS.POW_COMMIT_COOKIE) || "";
+  const commit = parsePowCommitCookie(commitRaw);
+  if (!commit) return deny(origin, "commit missing");
+  const ticket = parsePowTicket(commit.ticketB64);
+  if (!ticket) return deny(origin, "ticket invalid");
+  const baseConfig = getConfigById(ticket.cfgId);
+  if (!baseConfig) return deny(origin, "config invalid");
+  const config = { ...DEFAULTS, ...baseConfig };
+  const powSecret = getPowSecret(config);
+  if (!powSecret) return respondText(origin, "misconfigured", 500);
+  if (config.powcheck !== true) return respondText(origin, "misconfigured", 500);
+  if (isExpired(commit.exp, nowSeconds)) return deny(origin, "commit expired");
+  if (isExpired(ticket.e, nowSeconds)) return deny(origin, "ticket expired");
+  const expectedMac = await hmacSha256Base64UrlNoPad(
+    powSecret,
+    `commit|${commit.ticketB64}|${commit.rootB64}|${commit.pathHash}|${commit.exp}`
+  );
+  if (!timingSafeEqual(expectedMac, commit.mac)) return deny(origin, "commit invalid");
+  const powVersion = normalizeNumber(config.POW_VERSION, DEFAULTS.POW_VERSION);
+  if (ticket.v !== powVersion) return deny(origin, "ticket invalid");
+  if (!Number.isFinite(ticket.L) || ticket.L <= 0) return deny(origin, "ticket invalid");
+  const indices = sampleIndices(
+    ticket.L,
+    normalizeNumber(config.POW_SAMPLE_K, DEFAULTS.POW_SAMPLE_K),
+    config.POW_FORCE_EDGE_1 === true,
+    config.POW_FORCE_EDGE_LAST === true
+  );
+  if (!indices.length) return deny(origin, "challenge invalid");
+  const sid = randomBase64Url(12);
+  const ttl = normalizeNumber(config.POW_CHAL_TTL_SEC, DEFAULTS.POW_CHAL_TTL_SEC) || 0;
+  const exp = nowSeconds + Math.max(1, ttl);
+  const indicesStr = indices.join(",");
+  const mac = await hmacSha256Base64UrlNoPad(
+    powSecret,
+    `chal|${sid}|${commit.ticketB64}|${indicesStr}|${exp}`
+  );
+  const value = `v2.${sid}.${commit.ticketB64}.${indicesStr}.${exp}.${mac}`;
+  const headers = safeHeaders(origin);
+  headers.set("Content-Type", "application/json; charset=utf-8");
+  headers.set("Cache-Control", "no-store");
+  setCookie(headers, DEFAULTS.POW_CHAL_COOKIE, value, ttl);
+  return new Response(JSON.stringify({ sid, L: ticket.L, indices }), { status: 200, headers });
+};
+
+const handlePowOpen = async (request, url, nowSeconds) => {
+  const origin = request.headers.get("Origin") || "";
+  const cookies = parseCookieHeader(request.headers.get("Cookie"));
+  const commitRaw = cookies.get(DEFAULTS.POW_COMMIT_COOKIE) || "";
+  const chalRaw = cookies.get(DEFAULTS.POW_CHAL_COOKIE) || "";
+  const commit = parsePowCommitCookie(commitRaw);
+  const chal = parsePowChalCookie(chalRaw);
+  if (!commit || !chal) return deny(origin, "challenge missing");
+  if (commit.ticketB64 !== chal.ticketB64) return deny(origin, "challenge invalid");
+  const ticket = parsePowTicket(commit.ticketB64);
+  if (!ticket) return deny(origin, "ticket invalid");
+  const baseConfig = getConfigById(ticket.cfgId);
+  if (!baseConfig) return deny(origin, "config invalid");
+  const config = { ...DEFAULTS, ...baseConfig };
+  const powSecret = getPowSecret(config);
+  if (!powSecret) return respondText(origin, "misconfigured", 500);
+  if (config.powcheck !== true) return respondText(origin, "misconfigured", 500);
+  const powVersion = normalizeNumber(config.POW_VERSION, DEFAULTS.POW_VERSION);
+  if (ticket.v !== powVersion) return deny(origin, "ticket invalid");
+  if (isExpired(commit.exp, nowSeconds) || isExpired(chal.exp, nowSeconds)) {
+    return deny(origin, "challenge expired");
+  }
+  if (isExpired(ticket.e, nowSeconds)) return deny(origin, "ticket expired");
+  const commitMac = await hmacSha256Base64UrlNoPad(
+    powSecret,
+    `commit|${commit.ticketB64}|${commit.rootB64}|${commit.pathHash}|${commit.exp}`
+  );
+  if (!timingSafeEqual(commitMac, commit.mac)) return deny(origin, "commit invalid");
+  const chalMac = await hmacSha256Base64UrlNoPad(
+    powSecret,
+    `chal|${chal.sid}|${chal.ticketB64}|${chal.indicesStr}|${chal.exp}`
+  );
+  if (!timingSafeEqual(chalMac, chal.mac)) return deny(origin, "challenge invalid");
+  const body = await readJsonBody(request);
+  if (!body || typeof body !== "object") {
+    return respondText(origin, "invalid payload", 400);
+  }
+  const sid = typeof body.sid === "string" ? body.sid : "";
+  const opens = Array.isArray(body.opens) ? body.opens : null;
+  if (!sid || !opens) return respondText(origin, "invalid payload", 400);
+  if (sid !== chal.sid) return deny(origin, "challenge invalid");
+  const indices = parseIndicesStr(chal.indicesStr);
+  if (!indices || indices.length !== opens.length) return deny(origin, "challenge invalid");
+  const openMap = new Map();
+  for (const open of opens) {
+    const idx = open && Number.parseInt(open.i, 10);
+    if (!Number.isFinite(idx) || idx < 1 || idx > ticket.L) {
+      return respondText(origin, "invalid payload", 400);
+    }
+    if (openMap.has(idx)) return respondText(origin, "invalid payload", 400);
+    openMap.set(idx, open);
+  }
+  for (const idx of indices) {
+    if (!openMap.has(idx)) return deny(origin, "challenge invalid");
+  }
+  const bindingValues = await getPowBindingValuesWithPathHash(
+    request,
+    commit.pathHash,
+    config
+  );
+  if (!bindingValues) return respondText(origin, "tls fingerprint missing", 403);
+  const bindingString = makePowBindingString(
+    ticket,
+    url.hostname,
+    bindingValues.pathHash,
+    bindingValues.ipScope,
+    bindingValues.country,
+    bindingValues.asn,
+    bindingValues.tlsFingerprint
+  );
+  const expectedMac = await hmacSha256Base64UrlNoPad(powSecret, bindingString);
+  if (!timingSafeEqual(expectedMac, ticket.mac)) return deny(origin, "ticket invalid");
+  const rootBytes = base64UrlDecodeToBytes(commit.rootB64);
+  if (!rootBytes || rootBytes.length !== 32) return deny(origin, "commit invalid");
+  const leafCount = Math.max(0, Math.floor(ticket.L)) + 1;
+  if (leafCount < 2) return deny(origin, "ticket invalid");
+  const seedHash = await hashPoswSeed(bindingString);
+  for (const idx of indices) {
+    const open = openMap.get(idx);
+    const hPrevBytes = base64UrlDecodeToBytes(String(open.hPrev || ""));
+    const hCurrBytes = base64UrlDecodeToBytes(String(open.hCurr || ""));
+    if (!hPrevBytes || !hCurrBytes || hPrevBytes.length !== 32 || hCurrBytes.length !== 32) {
+      return respondText(origin, "invalid payload", 400);
+    }
+    const proofPrev = open.proofPrev;
+    const proofCurr = open.proofCurr;
+    if (!proofPrev || !proofCurr) return respondText(origin, "invalid payload", 400);
+    const expectedCurr = await hashPoswStep(hPrevBytes, idx);
+    if (!bytesEqual(expectedCurr, hCurrBytes)) return deny(origin, "challenge invalid");
+    if (idx === 1 && !bytesEqual(hPrevBytes, seedHash)) {
+      return deny(origin, "challenge invalid");
+    }
+    const okPrev = await verifyMerkleProof(
+      rootBytes,
+      hPrevBytes,
+      idx - 1,
+      leafCount,
+      proofPrev
+    );
+    if (!okPrev) return deny(origin, "challenge invalid");
+    const okCurr = await verifyMerkleProof(
+      rootBytes,
+      hCurrBytes,
+      idx,
+      leafCount,
+      proofCurr
+    );
+    if (!okCurr) return deny(origin, "challenge invalid");
+  }
+  const solTtl = normalizeNumber(config.POW_SOL_TTL_SEC, DEFAULTS.POW_SOL_TTL_SEC) || 0;
+  const remaining = ticket.e - nowSeconds;
+  const ttl = Math.max(1, Math.min(solTtl, remaining));
+  if (!Number.isFinite(ttl) || ttl <= 0) return deny(origin, "ticket expired");
+  const exp = nowSeconds + ttl;
+  const solMac = await hmacSha256Base64UrlNoPad(
+    powSecret,
+    `ok|${commit.ticketB64}|${exp}`
+  );
+  const solValue = `v2.${commit.ticketB64}.${exp}.${solMac}`;
+  const headers = safeHeaders(origin);
+  headers.set("Content-Type", "application/json; charset=utf-8");
+  headers.set("Cache-Control", "no-store");
+  setCookie(headers, DEFAULTS.POW_SOL_COOKIE, solValue, ttl);
+  clearCookie(headers, DEFAULTS.POW_COMMIT_COOKIE);
+  clearCookie(headers, DEFAULTS.POW_CHAL_COOKIE);
+  return new Response(JSON.stringify({ ok: true }), { status: 200, headers });
+};
+
+const handlePowApi = async (request, url, nowSeconds) => {
+  const origin = request.headers.get("Origin") || "";
+  if (request.method !== "POST") {
+    return respondText(origin, "method not allowed", 405);
+  }
+  const path = normalizePath(url.pathname);
+  if (!path || !path.startsWith(`${POW_API_PREFIX}/`)) {
+    return respondText(origin, "not found", 404);
+  }
+  const action = path.slice(POW_API_PREFIX.length);
+  if (action === "/commit") {
+    return handlePowCommit(request, url, nowSeconds);
+  }
+  if (action === "/challenge") {
+    return handlePowChallenge(request, url, nowSeconds);
+  }
+  if (action === "/open") {
+    return handlePowOpen(request, url, nowSeconds);
+  }
+  return respondText(origin, "not found", 404);
 };
 
 export default {
@@ -1188,13 +1269,16 @@ export default {
     const hostname = url.hostname;
 
     if (request.method === "OPTIONS") {
-      return new Response(null, { headers: safeHeaders(origin) });
+      return new Response(null, { status: 204, headers: safeHeaders(origin) });
     }
 
     const nowSeconds = Math.floor(Date.now() / 1000);
 
     const requestPath = normalizePath(url.pathname);
     if (!requestPath) return respondText(origin, "invalid path", 400);
+    if (requestPath.startsWith(`${POW_API_PREFIX}/`)) {
+      return handlePowApi(request, url, nowSeconds);
+    }
     const isInfoPath = requestPath === "/info";
     let authPath = requestPath;
     let matchPath = requestPath;
@@ -1207,13 +1291,12 @@ export default {
       if (!canonical) return respondText(origin, "invalid path", 400);
       authPath = canonical;
       matchPath = canonical;
-    } else {
-      authPath = stripDownloadPrefix(authPath);
     }
 
-    const selected = pickConfig(hostname, matchPath);
-    const config = selected ? { ...DEFAULTS, ...selected } : null;
+    const selected = pickConfigWithId(hostname, matchPath);
+    const config = selected ? { ...DEFAULTS, ...selected.config } : null;
     if (!config) return respondText(origin, "misconfigured", 500);
+    const cfgId = selected.cfgId;
     const signSecret = typeof config.HMAC_SECRET === "string" ? config.HMAC_SECRET : "";
     const powToken = typeof config.POW_TOKEN === "string" ? config.POW_TOKEN : "";
     const powSecret = powToken || signSecret;
@@ -1245,7 +1328,15 @@ export default {
       return respondText(origin, "misconfigured", 500);
     }
 
-    const powOk = await verifyPowSol(request, url, authPath, nowSeconds, config, powSecret);
+    const powOk = await verifyPowSol(
+      request,
+      url,
+      authPath,
+      nowSeconds,
+      config,
+      powSecret,
+      cfgId
+    );
     if (powOk) {
       return fetch(request);
     }
@@ -1254,6 +1345,6 @@ export default {
       return respondJson(origin, { code: "pow_required" }, 403);
     }
 
-    return respondPowChallengeHtml(request, url, authPath, nowSeconds, config, powSecret);
+    return respondPowChallengeHtml(request, url, authPath, nowSeconds, config, powSecret, cfgId);
   },
 };
