@@ -14,6 +14,7 @@ const DEFAULTS = {
   POW_BIND_IPRANGE: true,
   POW_BIND_COUNTRY: false,
   POW_BIND_ASN: false,
+  POW_BIND_TLS: false,
   IPV4_PREFIX: 32,
   IPV6_PREFIX: 64,
   POW_SOL_COOKIE: "__Host-pow_sol",
@@ -23,9 +24,9 @@ const DEFAULTS = {
 
 const CONFIG = [
   // Example:
-  // { pattern: "alist-landing-*.example.com/*", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", POW_TOKEN: "replace-with-powToken", powcheck: true, stripDownloadPrefix: true, POW_DIFFICULTY_BASE: 20, POW_DIFFICULTY_COEFF: 1.2, POW_CHAL_TTL_SEC: 180, POW_SOL_TTL_SEC: 600, POW_BIND_PATH: true, POW_BIND_IPRANGE: true, POW_BIND_COUNTRY: false, POW_BIND_ASN: false, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
-  // { pattern: "alist-landing-*.example.com/**", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", POW_TOKEN: "replace-with-powToken", powcheck: true, stripDownloadPrefix: true, POW_DIFFICULTY_BASE: 20, POW_DIFFICULTY_COEFF: 1.2, POW_CHAL_TTL_SEC: 180, POW_SOL_TTL_SEC: 600, POW_BIND_PATH: true, POW_BIND_IPRANGE: true, POW_BIND_COUNTRY: false, POW_BIND_ASN: false, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
-  // { pattern: "alist-landing-*.example.com", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", POW_TOKEN: "replace-with-powToken", powcheck: true, stripDownloadPrefix: true, POW_DIFFICULTY_BASE: 20, POW_DIFFICULTY_COEFF: 1.2, POW_CHAL_TTL_SEC: 180, POW_SOL_TTL_SEC: 600, POW_BIND_PATH: true, POW_BIND_IPRANGE: true, POW_BIND_COUNTRY: false, POW_BIND_ASN: false, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
+  // { pattern: "alist-landing-*.example.com/*", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", POW_TOKEN: "replace-with-powToken", powcheck: true, stripDownloadPrefix: true, POW_DIFFICULTY_BASE: 20, POW_DIFFICULTY_COEFF: 1.2, POW_CHAL_TTL_SEC: 180, POW_SOL_TTL_SEC: 600, POW_BIND_PATH: true, POW_BIND_IPRANGE: true, POW_BIND_COUNTRY: false, POW_BIND_ASN: false, POW_BIND_TLS: false, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
+  // { pattern: "alist-landing-*.example.com/**", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", POW_TOKEN: "replace-with-powToken", powcheck: true, stripDownloadPrefix: true, POW_DIFFICULTY_BASE: 20, POW_DIFFICULTY_COEFF: 1.2, POW_CHAL_TTL_SEC: 180, POW_SOL_TTL_SEC: 600, POW_BIND_PATH: true, POW_BIND_IPRANGE: true, POW_BIND_COUNTRY: false, POW_BIND_ASN: false, POW_BIND_TLS: false, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
+  // { pattern: "alist-landing-*.example.com", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", POW_TOKEN: "replace-with-powToken", powcheck: true, stripDownloadPrefix: true, POW_DIFFICULTY_BASE: 20, POW_DIFFICULTY_COEFF: 1.2, POW_CHAL_TTL_SEC: 180, POW_SOL_TTL_SEC: 600, POW_BIND_PATH: true, POW_BIND_IPRANGE: true, POW_BIND_COUNTRY: false, POW_BIND_ASN: false, POW_BIND_TLS: false, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
 ];
 
 const splitPattern = (pattern) => {
@@ -455,6 +456,21 @@ const normalizeAsn = (value) => {
   return Number.isFinite(num) ? String(Math.trunc(num)) : "unknown";
 };
 
+const normalizeTlsFingerprint = (value) => {
+  if (typeof value !== "string") return "";
+  return value.trim();
+};
+
+const buildTlsFingerprintHash = async (request) => {
+  const cf = getRequestCf(request);
+  if (!cf) return "";
+  const extensions = normalizeTlsFingerprint(cf.tlsClientExtensionsSha1);
+  const ciphers = normalizeTlsFingerprint(cf.tlsClientCiphersSha1);
+  if (!extensions || !ciphers) return "";
+  const digest = await sha256Bytes(`${extensions}|${ciphers}`);
+  return base64UrlEncodeNoPad(digest);
+};
+
 const getPowDifficulty = (config) => {
   const base = normalizeNumber(config.POW_DIFFICULTY_BASE, DEFAULTS.POW_DIFFICULTY_BASE);
   const coeff = normalizeNumber(config.POW_DIFFICULTY_COEFF, DEFAULTS.POW_DIFFICULTY_COEFF);
@@ -482,7 +498,8 @@ const makePowBindingString = (
   pathHash,
   ipScope,
   country,
-  asn
+  asn,
+  tlsFingerprint
 ) => {
   const host = typeof hostname === "string" ? hostname.toLowerCase() : "";
   return (
@@ -503,7 +520,9 @@ const makePowBindingString = (
     "&cc=" +
     country +
     "&asn=" +
-    asn
+    asn +
+    "&tls=" +
+    tlsFingerprint
   );
 };
 
@@ -573,12 +592,20 @@ const getPowBindingValues = async (request, canonicalPath, config) => {
   const bindIp = config.POW_BIND_IPRANGE !== false;
   const bindCountry = config.POW_BIND_COUNTRY === true;
   const bindAsn = config.POW_BIND_ASN === true;
+  const bindTls = config.POW_BIND_TLS === true;
   const pathHash = bindPath ? base64UrlEncodeNoPad(await sha256Bytes(canonicalPath)) : "any";
   const ipScope = bindIp ? computeIpScope(getClientIP(request), config) : "any";
   const cf = getRequestCf(request);
   const country = bindCountry ? normalizeCountry(cf && cf.country) : "any";
   const asn = bindAsn ? normalizeAsn(cf && cf.asn) : "any";
-  return { pathHash, ipScope, country, asn };
+  let tlsFingerprint = "any";
+  if (bindTls) {
+    tlsFingerprint = await buildTlsFingerprintHash(request);
+    if (!tlsFingerprint) {
+      return null;
+    }
+  }
+  return { pathHash, ipScope, country, asn, tlsFingerprint };
 };
 
 const verifyPowSol = async (request, url, canonicalPath, nowSeconds, config, powSecret) => {
@@ -591,14 +618,17 @@ const verifyPowSol = async (request, url, canonicalPath, nowSeconds, config, pow
   if (ticket.v !== powVersion) return false;
   if (!Number.isFinite(ticket.e) || ticket.e <= 0 || ticket.e < nowSeconds) return false;
   if (!powSecret) return false;
-  const { pathHash, ipScope, country, asn } = await getPowBindingValues(request, canonicalPath, config);
+  const bindingValues = await getPowBindingValues(request, canonicalPath, config);
+  if (!bindingValues) return false;
+  const { pathHash, ipScope, country, asn, tlsFingerprint } = bindingValues;
   const bindingString = makePowBindingString(
     ticket,
     url.hostname,
     pathHash,
     ipScope,
     country,
-    asn
+    asn,
+    tlsFingerprint
   );
   const expectedMac = await hmacSha256Base64UrlNoPad(powSecret, bindingString);
   if (!timingSafeEqual(expectedMac, ticket.mac)) return false;
@@ -1108,7 +1138,11 @@ const respondPowChallengeHtml = async (request, url, canonicalPath, nowSeconds, 
   const ttl = normalizeNumber(config.POW_CHAL_TTL_SEC, DEFAULTS.POW_CHAL_TTL_SEC) || 0;
   const exp = nowSeconds + Math.max(1, ttl);
   const difficulty = getPowDifficulty(config);
-  const { pathHash, ipScope, country, asn } = await getPowBindingValues(request, canonicalPath, config);
+  const bindingValues = await getPowBindingValues(request, canonicalPath, config);
+  if (!bindingValues) {
+    return respondText(request.headers.get("Origin") || "", "tls fingerprint missing", 403);
+  }
+  const { pathHash, ipScope, country, asn, tlsFingerprint } = bindingValues;
   const powVersion = normalizeNumber(config.POW_VERSION, DEFAULTS.POW_VERSION);
   const ticket = {
     v: powVersion,
@@ -1123,7 +1157,8 @@ const respondPowChallengeHtml = async (request, url, canonicalPath, nowSeconds, 
     pathHash,
     ipScope,
     country,
-    asn
+    asn,
+    tlsFingerprint
   );
   ticket.mac = await hmacSha256Base64UrlNoPad(powSecret, bindingString);
   const ticketB64 = encodePowTicket(ticket);
