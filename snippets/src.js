@@ -7,10 +7,12 @@ const DEFAULTS = {
   stripDownloadPrefix: false,
   POW_VERSION: 2,
   POW_API_PREFIX: "/__pow",
-  POW_DIFFICULTY_BASE: 1024,
+  POW_DIFFICULTY_BASE: 4096,
   POW_DIFFICULTY_COEFF: 1.0,
   POW_MIN_STEPS: 512,
   POW_MAX_STEPS: 8192,
+  POW_HASHCASH_BITS: 4,
+  POW_SEGMENT_LEN: 1,
   POW_SAMPLE_K: 3,
   POW_FORCE_EDGE_1: true,
   POW_FORCE_EDGE_LAST: true,
@@ -32,9 +34,9 @@ const DEFAULTS = {
 
 const CONFIG = [
   // Example:
-  // { pattern: "alist-landing-*.example.com/*", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", POW_TOKEN: "replace-with-powToken", powcheck: true, stripDownloadPrefix: true, POW_DIFFICULTY_BASE: 20, POW_DIFFICULTY_COEFF: 1.2, POW_MIN_STEPS: 512, POW_MAX_STEPS: 8192, POW_SAMPLE_K: 3, POW_FORCE_EDGE_1: true, POW_FORCE_EDGE_LAST: true, POW_CHAL_TTL_SEC: 180, POW_SOL_TTL_SEC: 600, POW_BIND_PATH: true, POW_BIND_IPRANGE: true, POW_BIND_COUNTRY: false, POW_BIND_ASN: false, POW_BIND_TLS: false, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
-  // { pattern: "alist-landing-*.example.com/**", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", POW_TOKEN: "replace-with-powToken", powcheck: true, stripDownloadPrefix: true, POW_DIFFICULTY_BASE: 20, POW_DIFFICULTY_COEFF: 1.2, POW_MIN_STEPS: 512, POW_MAX_STEPS: 8192, POW_SAMPLE_K: 3, POW_FORCE_EDGE_1: true, POW_FORCE_EDGE_LAST: true, POW_CHAL_TTL_SEC: 180, POW_SOL_TTL_SEC: 600, POW_BIND_PATH: true, POW_BIND_IPRANGE: true, POW_BIND_COUNTRY: false, POW_BIND_ASN: false, POW_BIND_TLS: false, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
-  // { pattern: "alist-landing-*.example.com", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", POW_TOKEN: "replace-with-powToken", powcheck: true, stripDownloadPrefix: true, POW_DIFFICULTY_BASE: 20, POW_DIFFICULTY_COEFF: 1.2, POW_MIN_STEPS: 512, POW_MAX_STEPS: 8192, POW_SAMPLE_K: 3, POW_FORCE_EDGE_1: true, POW_FORCE_EDGE_LAST: true, POW_CHAL_TTL_SEC: 180, POW_SOL_TTL_SEC: 600, POW_BIND_PATH: true, POW_BIND_IPRANGE: true, POW_BIND_COUNTRY: false, POW_BIND_ASN: false, POW_BIND_TLS: false, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
+  // { pattern: "alist-landing-*.example.com/*", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", POW_TOKEN: "replace-with-powToken", powcheck: true, stripDownloadPrefix: true, POW_DIFFICULTY_BASE: 4096, POW_DIFFICULTY_COEFF: 1.0, POW_MIN_STEPS: 512, POW_MAX_STEPS: 8192, POW_HASHCASH_BITS: 4, POW_SEGMENT_LEN: 1, POW_SAMPLE_K: 3, POW_FORCE_EDGE_1: true, POW_FORCE_EDGE_LAST: true, POW_CHAL_TTL_SEC: 180, POW_SOL_TTL_SEC: 600, POW_BIND_PATH: true, POW_BIND_IPRANGE: true, POW_BIND_COUNTRY: false, POW_BIND_ASN: false, POW_BIND_TLS: false, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
+  // { pattern: "alist-landing-*.example.com/**", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", POW_TOKEN: "replace-with-powToken", powcheck: true, stripDownloadPrefix: true, POW_DIFFICULTY_BASE: 4096, POW_DIFFICULTY_COEFF: 1.0, POW_MIN_STEPS: 512, POW_MAX_STEPS: 8192, POW_HASHCASH_BITS: 4, POW_SEGMENT_LEN: 1, POW_SAMPLE_K: 3, POW_FORCE_EDGE_1: true, POW_FORCE_EDGE_LAST: true, POW_CHAL_TTL_SEC: 180, POW_SOL_TTL_SEC: 600, POW_BIND_PATH: true, POW_BIND_IPRANGE: true, POW_BIND_COUNTRY: false, POW_BIND_ASN: false, POW_BIND_TLS: false, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
+  // { pattern: "alist-landing-*.example.com", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", POW_TOKEN: "replace-with-powToken", powcheck: true, stripDownloadPrefix: true, POW_DIFFICULTY_BASE: 4096, POW_DIFFICULTY_COEFF: 1.0, POW_MIN_STEPS: 512, POW_MAX_STEPS: 8192, POW_HASHCASH_BITS: 4, POW_SEGMENT_LEN: 1, POW_SAMPLE_K: 3, POW_FORCE_EDGE_1: true, POW_FORCE_EDGE_LAST: true, POW_CHAL_TTL_SEC: 180, POW_SOL_TTL_SEC: 600, POW_BIND_PATH: true, POW_BIND_IPRANGE: true, POW_BIND_COUNTRY: false, POW_BIND_ASN: false, POW_BIND_TLS: false, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
 ];
 
 const splitPattern = (pattern) => {
@@ -289,6 +291,22 @@ const bytesEqual = (a, b) => {
     diff |= a[i] ^ b[i];
   }
   return diff === 0;
+};
+
+const leadingZeroBits = (bytes) => {
+  let count = 0;
+  for (const b of bytes || []) {
+    if (b === 0) {
+      count += 8;
+      continue;
+    }
+    for (let i = 7; i >= 0; i--) {
+      if (b & (1 << i)) {
+        return count + (7 - i);
+      }
+    }
+  }
+  return count;
 };
 
 const timingSafeEqual = (a, b) => {
@@ -548,6 +566,7 @@ const POSW_SEED_PREFIX = encoder.encode("posw|seed|");
 const POSW_STEP_PREFIX = encoder.encode("posw|step|");
 const MERKLE_LEAF_PREFIX = encoder.encode("leaf|");
 const MERKLE_NODE_PREFIX = encoder.encode("node|");
+const PIPE_BYTES = encoder.encode("|");
 
 const makePowBindingString = (
   ticket,
@@ -585,8 +604,15 @@ const makePowBindingString = (
   );
 };
 
-const hashPoswSeed = async (bindingString) =>
-  sha256Bytes(concatBytes(POSW_SEED_PREFIX, utf8ToBytes(bindingString)));
+const hashPoswSeed = async (bindingString, nonce) =>
+  sha256Bytes(
+    concatBytes(
+      POSW_SEED_PREFIX,
+      utf8ToBytes(bindingString),
+      PIPE_BYTES,
+      utf8ToBytes(nonce || "")
+    )
+  );
 
 const hashPoswStep = async (prevBytes, index) =>
   sha256Bytes(concatBytes(POSW_STEP_PREFIX, encodeUint32BE(index), prevBytes));
@@ -671,15 +697,18 @@ const parsePowSolCookie = (value) => {
 const parsePowCommitCookie = (value) => {
   if (!value || typeof value !== "string") return null;
   const parts = value.split(".");
-  if (parts.length !== 6) return null;
+  if (parts.length !== 7) return null;
   if (parts[0] !== "v2") return null;
   const ticketB64 = parts[1] || "";
   const rootB64 = parts[2] || "";
   const pathHash = parts[3] || "";
-  const exp = Number.parseInt(parts[4], 10);
-  const mac = parts[5] || "";
-  if (!ticketB64 || !rootB64 || !pathHash || !Number.isFinite(exp) || !mac) return null;
-  return { ticketB64, rootB64, pathHash, exp, mac };
+  const nonce = parts[4] || "";
+  const exp = Number.parseInt(parts[5], 10);
+  const mac = parts[6] || "";
+  if (!ticketB64 || !rootB64 || !pathHash || !nonce || !Number.isFinite(exp) || !mac) {
+    return null;
+  }
+  return { ticketB64, rootB64, pathHash, nonce, exp, mac };
 };
 
 const parsePowChalCookie = (value) => {
@@ -786,6 +815,7 @@ const buildPowChallengeHtml = ({
   steps,
   ticketB64,
   pathHash,
+  hashcashBits,
   reloadUrlB64,
   apiPrefixB64,
   esmUrlB64,
@@ -804,6 +834,7 @@ const buildPowChallengeHtml = ({
     steps: ${steps},
     ticketB64: "${ticketB64}",
     pathHash: "${pathHash}",
+    hashcashBits: ${hashcashBits},
     reloadUrlB64: "${reloadUrlB64}",
     apiPrefixB64: "${apiPrefixB64}",
     esmUrlB64: "${esmUrlB64}",
@@ -873,7 +904,9 @@ const buildPowChallengeHtml = ({
         update(spinIndex, "Computing hash chain... " + spinChars[spinFrame++ % spinChars.length]);
       }, 120);
       const binding = decodeB64Url(CFG.bindingB64);
-      const commit = await computePoswCommit(binding, CFG.steps);
+      const commit = await computePoswCommit(binding, CFG.steps, {
+        hashcashBits: CFG.hashcashBits,
+      });
       clearInterval(spinTimer);
       update(spinIndex, "Computing hash chain... done");
       log("Root: " + String(commit.rootB64 || "").slice(0, 12) + "...");
@@ -883,6 +916,7 @@ const buildPowChallengeHtml = ({
         ticketB64: CFG.ticketB64,
         rootB64: commit.rootB64,
         pathHash: CFG.pathHash,
+        nonce: commit.nonce,
       });
       log("Requesting challenge...");
       const chal = await postJson(apiPrefix + "/challenge", {});
@@ -916,6 +950,12 @@ const respondPowChallengeHtml = async (
   const ttl = normalizeNumber(config.POW_CHAL_TTL_SEC, DEFAULTS.POW_CHAL_TTL_SEC) || 0;
   const exp = nowSeconds + Math.max(1, ttl);
   const steps = getPowSteps(config);
+  const hashcashBits = Math.max(
+    0,
+    Math.floor(
+      normalizeNumber(config.POW_HASHCASH_BITS, DEFAULTS.POW_HASHCASH_BITS)
+    )
+  );
   const bindingValues = await getPowBindingValues(request, canonicalPath, config);
   if (!bindingValues) {
     return respondText(request.headers.get("Origin") || "", "tls fingerprint missing", 403);
@@ -950,6 +990,7 @@ const respondPowChallengeHtml = async (
     steps,
     ticketB64,
     pathHash,
+    hashcashBits,
     reloadUrlB64,
     apiPrefixB64,
     esmUrlB64,
@@ -1031,7 +1072,8 @@ const handlePowCommit = async (request, url, nowSeconds) => {
   const ticketB64 = typeof body.ticketB64 === "string" ? body.ticketB64 : "";
   const rootB64 = typeof body.rootB64 === "string" ? body.rootB64 : "";
   const pathHash = typeof body.pathHash === "string" ? body.pathHash : "";
-  if (!ticketB64 || !rootB64) {
+  const nonce = typeof body.nonce === "string" ? body.nonce : "";
+  if (!ticketB64 || !rootB64 || !nonce) {
     return respondText(origin, "invalid payload", 400);
   }
   const ticket = parsePowTicket(ticketB64);
@@ -1045,6 +1087,9 @@ const handlePowCommit = async (request, url, nowSeconds) => {
   const powVersion = normalizeNumber(config.POW_VERSION, DEFAULTS.POW_VERSION);
   if (ticket.v !== powVersion) return deny(origin, "ticket invalid");
   if (isExpired(ticket.e, nowSeconds)) return deny(origin, "ticket expired");
+  if (nonce.length > 128) {
+    return respondText(origin, "invalid payload", 400);
+  }
   const bindPath = config.POW_BIND_PATH !== false;
   const normalizedPathHash = bindPath ? pathHash : "any";
   if (bindPath && !normalizedPathHash) {
@@ -1075,9 +1120,9 @@ const handlePowCommit = async (request, url, nowSeconds) => {
   const exp = nowSeconds + Math.max(1, ttl);
   const mac = await hmacSha256Base64UrlNoPad(
     powSecret,
-    `commit|${ticketB64}|${rootB64}|${bindingValues.pathHash}|${exp}`
+    `commit|${ticketB64}|${rootB64}|${bindingValues.pathHash}|${nonce}|${exp}`
   );
-  const value = `v2.${ticketB64}.${rootB64}.${bindingValues.pathHash}.${exp}.${mac}`;
+  const value = `v2.${ticketB64}.${rootB64}.${bindingValues.pathHash}.${nonce}.${exp}.${mac}`;
   const headers = safeHeaders(origin);
   headers.set("Content-Type", "application/json; charset=utf-8");
   headers.set("Cache-Control", "no-store");
@@ -1103,7 +1148,7 @@ const handlePowChallenge = async (request, url, nowSeconds) => {
   if (isExpired(ticket.e, nowSeconds)) return deny(origin, "ticket expired");
   const expectedMac = await hmacSha256Base64UrlNoPad(
     powSecret,
-    `commit|${commit.ticketB64}|${commit.rootB64}|${commit.pathHash}|${commit.exp}`
+    `commit|${commit.ticketB64}|${commit.rootB64}|${commit.pathHash}|${commit.nonce}|${commit.exp}`
   );
   if (!timingSafeEqual(expectedMac, commit.mac)) return deny(origin, "commit invalid");
   const powVersion = normalizeNumber(config.POW_VERSION, DEFAULTS.POW_VERSION);
@@ -1157,7 +1202,7 @@ const handlePowOpen = async (request, url, nowSeconds) => {
   if (isExpired(ticket.e, nowSeconds)) return deny(origin, "ticket expired");
   const commitMac = await hmacSha256Base64UrlNoPad(
     powSecret,
-    `commit|${commit.ticketB64}|${commit.rootB64}|${commit.pathHash}|${commit.exp}`
+    `commit|${commit.ticketB64}|${commit.rootB64}|${commit.pathHash}|${commit.nonce}|${commit.exp}`
   );
   if (!timingSafeEqual(commitMac, commit.mac)) return deny(origin, "commit invalid");
   const chalMac = await hmacSha256Base64UrlNoPad(
@@ -1208,7 +1253,24 @@ const handlePowOpen = async (request, url, nowSeconds) => {
   if (!rootBytes || rootBytes.length !== 32) return deny(origin, "commit invalid");
   const leafCount = Math.max(0, Math.floor(ticket.L)) + 1;
   if (leafCount < 2) return deny(origin, "ticket invalid");
-  const seedHash = await hashPoswSeed(bindingString);
+  const hashcashBits = Math.max(
+    0,
+    Math.floor(
+      normalizeNumber(config.POW_HASHCASH_BITS, DEFAULTS.POW_HASHCASH_BITS)
+    )
+  );
+  const segmentLen = Math.max(
+    1,
+    Math.min(
+      ticket.L,
+      Math.floor(
+        normalizeNumber(config.POW_SEGMENT_LEN, DEFAULTS.POW_SEGMENT_LEN)
+      )
+    )
+  );
+  if (hashcashBits > 0 && !openMap.has(ticket.L)) return deny(origin, "challenge invalid");
+  const seedHash = await hashPoswSeed(bindingString, commit.nonce);
+  let hashcashOk = hashcashBits <= 0;
   for (const idx of indices) {
     const open = openMap.get(idx);
     const hPrevBytes = base64UrlDecodeToBytes(String(open.hPrev || ""));
@@ -1219,15 +1281,30 @@ const handlePowOpen = async (request, url, nowSeconds) => {
     const proofPrev = open.proofPrev;
     const proofCurr = open.proofCurr;
     if (!proofPrev || !proofCurr) return respondText(origin, "invalid payload", 400);
-    const expectedCurr = await hashPoswStep(hPrevBytes, idx);
-    if (!bytesEqual(expectedCurr, hCurrBytes)) return deny(origin, "challenge invalid");
+    let prevBytes = hPrevBytes;
+    const firstIdx = idx - segmentLen;
+    if (firstIdx < 0) return deny(origin, "challenge invalid");
+    for (let step = 1; step <= segmentLen; step++) {
+      const expected = await hashPoswStep(prevBytes, firstIdx + step);
+      if (step === segmentLen) {
+        if (!bytesEqual(expected, hCurrBytes)) return deny(origin, "challenge invalid");
+      } else {
+        prevBytes = expected;
+      }
+    }
     if (idx === 1 && !bytesEqual(hPrevBytes, seedHash)) {
       return deny(origin, "challenge invalid");
+    }
+    if (idx === ticket.L && hashcashBits > 0) {
+      if (leadingZeroBits(hCurrBytes) < hashcashBits) {
+        return deny(origin, "challenge invalid");
+      }
+      hashcashOk = true;
     }
     const okPrev = await verifyMerkleProof(
       rootBytes,
       hPrevBytes,
-      idx - 1,
+      idx - segmentLen,
       leafCount,
       proofPrev
     );
@@ -1241,6 +1318,7 @@ const handlePowOpen = async (request, url, nowSeconds) => {
     );
     if (!okCurr) return deny(origin, "challenge invalid");
   }
+  if (!hashcashOk) return deny(origin, "challenge invalid");
   const solTtl = normalizeNumber(config.POW_SOL_TTL_SEC, DEFAULTS.POW_SOL_TTL_SEC) || 0;
   const remaining = ticket.e - nowSeconds;
   const ttl = Math.max(1, Math.min(solTtl, remaining));

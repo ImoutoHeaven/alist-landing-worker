@@ -4,6 +4,7 @@ const POSW_SEED_PREFIX = encoder.encode("posw|seed|");
 const POSW_STEP_PREFIX = encoder.encode("posw|step|");
 const MERKLE_LEAF_PREFIX = encoder.encode("leaf|");
 const MERKLE_NODE_PREFIX = encoder.encode("node|");
+const PIPE_BYTES = encoder.encode("|");
 
 const utf8ToBytes = (value) => encoder.encode(String(value ?? ""));
 
@@ -46,11 +47,19 @@ const normalizeSteps = (steps) => {
   return Math.max(1, Math.floor(value));
 };
 
+const normalizeBits = (bits) => {
+  const value = Number(bits);
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  return Math.max(0, Math.floor(value));
+};
+
 const shouldYield = (counter, every) =>
   Number.isFinite(every) && every > 0 && counter % every === 0;
 
-const hashSeed = async (bindingString) =>
-  sha256Bytes(concatBytes(POSW_SEED_PREFIX, utf8ToBytes(bindingString)));
+const hashSeed = async (bindingString, nonce) =>
+  sha256Bytes(
+    concatBytes(POSW_SEED_PREFIX, utf8ToBytes(bindingString), PIPE_BYTES, utf8ToBytes(nonce))
+  );
 
 const hashStep = async (prevBytes, index) =>
   sha256Bytes(concatBytes(POSW_STEP_PREFIX, encodeUint32BE(index), prevBytes));
@@ -60,6 +69,29 @@ const hashLeaf = async (leafIndex, leafBytes) =>
 
 const hashNode = async (leftBytes, rightBytes) =>
   sha256Bytes(concatBytes(MERKLE_NODE_PREFIX, leftBytes, rightBytes));
+
+const leadingZeroBits = (bytes) => {
+  let count = 0;
+  for (const b of bytes || []) {
+    if (b === 0) {
+      count += 8;
+      continue;
+    }
+    for (let i = 7; i >= 0; i--) {
+      if (b & (1 << i)) {
+        return count + (7 - i);
+      }
+    }
+  }
+  return count;
+};
+
+const randomNonce = (byteLength = 16) => {
+  const len = Number.isInteger(byteLength) && byteLength > 0 ? byteLength : 16;
+  const bytes = new Uint8Array(len);
+  crypto.getRandomValues(bytes);
+  return base64UrlEncodeNoPad(bytes);
+};
 
 const buildMerkleLevels = async (leafHashes, yieldEvery, signal) => {
   const levels = [leafHashes];
@@ -106,61 +138,72 @@ export async function computePoswCommit(bindingString, steps, options = {}) {
     throw new Error("bindingString required");
   }
   const L = normalizeSteps(steps);
+  const hashcashBits = normalizeBits(options.hashcashBits);
   const yieldEvery = Number.isFinite(options.yieldEvery)
     ? Math.max(1, Math.floor(options.yieldEvery))
     : 256;
   const signal = options.signal;
 
-  const chain = new Array(L + 1);
-  chain[0] = await hashSeed(bindingString);
-  for (let i = 1; i <= L; i++) {
+  for (let attempt = 0; ; attempt++) {
     if (signal && signal.aborted) throw new Error("posw aborted");
-    chain[i] = await hashStep(chain[i - 1], i);
-    if (shouldYield(i, yieldEvery)) {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    }
-  }
-
-  const leafHashes = new Array(chain.length);
-  for (let i = 0; i < chain.length; i++) {
-    if (signal && signal.aborted) throw new Error("posw aborted");
-    leafHashes[i] = await hashLeaf(i, chain[i]);
-    if (shouldYield(i, yieldEvery)) {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    }
-  }
-
-  const levels = await buildMerkleLevels(leafHashes, yieldEvery, signal);
-  const root = levels[levels.length - 1][0];
-  const rootB64 = base64UrlEncodeNoPad(root);
-
-  const open = async (indices) => {
-    if (!Array.isArray(indices) || indices.length === 0) {
-      throw new Error("indices required");
-    }
-    const out = [];
-    const seen = new Set();
-    for (const raw of indices) {
-      const idx = Number(raw);
-      if (!Number.isFinite(idx) || idx < 1 || idx > L) {
-        throw new Error("indices invalid");
+    const nonce = randomNonce(16);
+    const chain = new Array(L + 1);
+    chain[0] = await hashSeed(bindingString, nonce);
+    for (let i = 1; i <= L; i++) {
+      if (signal && signal.aborted) throw new Error("posw aborted");
+      chain[i] = await hashStep(chain[i - 1], i);
+      if (shouldYield(i, yieldEvery)) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
       }
-      if (seen.has(idx)) {
-        throw new Error("indices invalid");
-      }
-      seen.add(idx);
-      const hPrev = chain[idx - 1];
-      const hCurr = chain[idx];
-      out.push({
-        i: idx,
-        hPrev: base64UrlEncodeNoPad(hPrev),
-        hCurr: base64UrlEncodeNoPad(hCurr),
-        proofPrev: buildProof(levels, idx - 1),
-        proofCurr: buildProof(levels, idx),
-      });
     }
-    return out;
-  };
+    if (hashcashBits > 0 && leadingZeroBits(chain[L]) < hashcashBits) {
+      if (shouldYield(attempt, yieldEvery)) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+      continue;
+    }
 
-  return { rootB64, open };
+    const leafHashes = new Array(chain.length);
+    for (let i = 0; i < chain.length; i++) {
+      if (signal && signal.aborted) throw new Error("posw aborted");
+      leafHashes[i] = await hashLeaf(i, chain[i]);
+      if (shouldYield(i, yieldEvery)) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+    }
+
+    const levels = await buildMerkleLevels(leafHashes, yieldEvery, signal);
+    const root = levels[levels.length - 1][0];
+    const rootB64 = base64UrlEncodeNoPad(root);
+
+    const open = async (indices) => {
+      if (!Array.isArray(indices) || indices.length === 0) {
+        throw new Error("indices required");
+      }
+      const out = [];
+      const seen = new Set();
+      for (const raw of indices) {
+        const idx = Number(raw);
+        if (!Number.isFinite(idx) || idx < 1 || idx > L) {
+          throw new Error("indices invalid");
+        }
+        if (seen.has(idx)) {
+          throw new Error("indices invalid");
+        }
+        seen.add(idx);
+        const hPrev = chain[idx - 1];
+        const hCurr = chain[idx];
+        out.push({
+          i: idx,
+          hPrev: base64UrlEncodeNoPad(hPrev),
+          hCurr: base64UrlEncodeNoPad(hCurr),
+          proofPrev: buildProof(levels, idx - 1),
+          proofCurr: buildProof(levels, idx),
+        });
+      }
+      return out;
+    };
+
+    return { rootB64, nonce, open };
+  }
 }
