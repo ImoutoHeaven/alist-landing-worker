@@ -811,7 +811,7 @@ const buildPowChallengeHtml = ({
 
   const logEl = document.getElementById("log");
   const log = (msg) => {
-    logEl.textContent += "\n" + msg;
+    logEl.textContent += "\\n" + msg;
   };
 
   const decodeB64Url = (str) => {
@@ -874,6 +874,7 @@ const buildPowChallengeHtml = ({
       const opens = await commit.open(chal.indices);
       await postJson(apiPrefix + "/open", { sid: chal.sid, opens });
       log("Access granted. Redirecting...");
+      document.title = "Redirecting";
       const target = decodeB64Url(CFG.reloadUrlB64);
       window.location.replace(target);
     } catch (e) {
