@@ -53,6 +53,13 @@ const normalizeBits = (bits) => {
   return Math.max(0, Math.floor(value));
 };
 
+const normalizeSegmentLen = (value, maxSteps) => {
+  const num = Number(value);
+  if (!Number.isFinite(num) || num <= 0) return 1;
+  const max = Number.isFinite(maxSteps) && maxSteps > 0 ? Math.floor(maxSteps) : 1;
+  return Math.max(1, Math.min(max, Math.floor(num)));
+};
+
 const shouldYield = (counter, every) =>
   Number.isFinite(every) && every > 0 && counter % every === 0;
 
@@ -139,6 +146,7 @@ export async function computePoswCommit(bindingString, steps, options = {}) {
   }
   const L = normalizeSteps(steps);
   const hashcashBits = normalizeBits(options.hashcashBits);
+  const segmentLen = normalizeSegmentLen(options.segmentLen, L);
   const yieldEvery = Number.isFinite(options.yieldEvery)
     ? Math.max(1, Math.floor(options.yieldEvery))
     : 256;
@@ -191,13 +199,15 @@ export async function computePoswCommit(bindingString, steps, options = {}) {
           throw new Error("indices invalid");
         }
         seen.add(idx);
-        const hPrev = chain[idx - 1];
+        const effectiveSegmentLen = Math.min(segmentLen, idx);
+        const prevIdx = idx - effectiveSegmentLen;
+        const hPrev = chain[prevIdx];
         const hCurr = chain[idx];
         out.push({
           i: idx,
           hPrev: base64UrlEncodeNoPad(hPrev),
           hCurr: base64UrlEncodeNoPad(hCurr),
-          proofPrev: buildProof(levels, idx - 1),
+          proofPrev: buildProof(levels, prevIdx),
           proofCurr: buildProof(levels, idx),
         });
       }

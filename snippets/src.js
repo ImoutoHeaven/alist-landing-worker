@@ -816,6 +816,7 @@ const buildPowChallengeHtml = ({
   ticketB64,
   pathHash,
   hashcashBits,
+  segmentLen,
   reloadUrlB64,
   apiPrefixB64,
   esmUrlB64,
@@ -835,6 +836,7 @@ const buildPowChallengeHtml = ({
     ticketB64: "${ticketB64}",
     pathHash: "${pathHash}",
     hashcashBits: ${hashcashBits},
+    segmentLen: ${segmentLen},
     reloadUrlB64: "${reloadUrlB64}",
     apiPrefixB64: "${apiPrefixB64}",
     esmUrlB64: "${esmUrlB64}",
@@ -906,6 +908,7 @@ const buildPowChallengeHtml = ({
       const binding = decodeB64Url(CFG.bindingB64);
       const commit = await computePoswCommit(binding, CFG.steps, {
         hashcashBits: CFG.hashcashBits,
+        segmentLen: CFG.segmentLen,
       });
       clearInterval(spinTimer);
       update(spinIndex, "Computing hash chain... done");
@@ -991,6 +994,15 @@ const respondPowChallengeHtml = async (
     ticketB64,
     pathHash,
     hashcashBits,
+    segmentLen: Math.max(
+      1,
+      Math.min(
+        steps,
+        Math.floor(
+          normalizeNumber(config.POW_SEGMENT_LEN, DEFAULTS.POW_SEGMENT_LEN)
+        )
+      )
+    ),
     reloadUrlB64,
     apiPrefixB64,
     esmUrlB64,
@@ -1281,12 +1293,13 @@ const handlePowOpen = async (request, url, nowSeconds) => {
     const proofPrev = open.proofPrev;
     const proofCurr = open.proofCurr;
     if (!proofPrev || !proofCurr) return respondText(origin, "invalid payload", 400);
+    const effectiveSegmentLen = Math.min(segmentLen, idx);
     let prevBytes = hPrevBytes;
-    const firstIdx = idx - segmentLen;
+    const firstIdx = idx - effectiveSegmentLen;
     if (firstIdx < 0) return deny(origin, "challenge invalid");
-    for (let step = 1; step <= segmentLen; step++) {
+    for (let step = 1; step <= effectiveSegmentLen; step++) {
       const expected = await hashPoswStep(prevBytes, firstIdx + step);
-      if (step === segmentLen) {
+      if (step === effectiveSegmentLen) {
         if (!bytesEqual(expected, hCurrBytes)) return deny(origin, "challenge invalid");
       } else {
         prevBytes = expected;
@@ -1304,7 +1317,7 @@ const handlePowOpen = async (request, url, nowSeconds) => {
     const okPrev = await verifyMerkleProof(
       rootBytes,
       hPrevBytes,
-      idx - segmentLen,
+      idx - effectiveSegmentLen,
       leafCount,
       proofPrev
     );
