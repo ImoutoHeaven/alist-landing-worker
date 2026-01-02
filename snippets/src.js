@@ -810,9 +810,21 @@ const buildPowChallengeHtml = ({
   };
 
   const logEl = document.getElementById("log");
-  const log = (msg) => {
-    logEl.textContent += "\\n" + msg;
+  const lines = ["Starting..."];
+  const render = () => {
+    logEl.textContent = lines.join("\\n");
   };
+  const log = (msg) => {
+    lines.push(msg);
+    render();
+    return lines.length - 1;
+  };
+  const update = (idx, msg) => {
+    if (idx < 0 || idx >= lines.length) return;
+    lines[idx] = msg;
+    render();
+  };
+  render();
 
   const decodeB64Url = (str) => {
     try {
@@ -854,9 +866,16 @@ const buildPowChallengeHtml = ({
       if (typeof computePoswCommit !== "function") {
         throw new Error("Solver Missing");
       }
-      log("Computing hash chain...");
+      const spinIndex = log("Computing hash chain...");
+      const spinChars = "|/-\\\\";
+      let spinFrame = 0;
+      const spinTimer = setInterval(() => {
+        update(spinIndex, "Computing hash chain... " + spinChars[spinFrame++ % spinChars.length]);
+      }, 120);
       const binding = decodeB64Url(CFG.bindingB64);
       const commit = await computePoswCommit(binding, CFG.steps);
+      clearInterval(spinTimer);
+      update(spinIndex, "Computing hash chain... done");
       log("Root: " + String(commit.rootB64 || "").slice(0, 12) + "...");
       const apiPrefix = normalizeApiPrefix(decodeB64Url(CFG.apiPrefixB64));
       log("Submitting commit...");
