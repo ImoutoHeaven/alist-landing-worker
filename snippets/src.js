@@ -29,7 +29,7 @@ const DEFAULTS = {
   POW_CHAL_COOKIE: "__Host-pow_chal",
   POW_SOL_COOKIE: "__Host-pow_sol",
   POW_ESM_URL:
-    "https://cdn.jsdelivr.net/gh/ImoutoHeaven/alist-landing-worker@controller-overhaul/snippets/esm/esm.js",
+    "https://cdn.jsdelivr.net/gh/ImoutoHeaven/alist-landing-worker@bdd7bd164039786b29c8556355346741c8e9f1cc/snippets/esm/esm.js",
 };
 
 const CONFIG = [
