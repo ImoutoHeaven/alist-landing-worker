@@ -825,10 +825,80 @@ const buildPowChallengeHtml = ({
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VerifyRequest</title>
+<title>Security Check</title>
+<style>
+:root {
+  --bg: #f7f7f7;
+  --card: #ffffff;
+  --text: #333333;
+  --accent: #0070f3;
+  --mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111111;
+    --card: #1c1c1c;
+    --text: #eaeaea;
+    --accent: #3291ff;
+  }
+}
+body {
+  margin: 0;
+  padding: 20px;
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  box-sizing: border-box;
+}
+.card {
+  background: var(--card);
+  padding: 30px;
+  border-radius: 12px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+  max-width: 400px;
+  width: 100%;
+  text-align: center;
+}
+h1 { margin: 0 0 15px; font-size: 20px; font-weight: 600; }
+.spinner {
+  width: 40px;
+  height: 40px;
+  margin: 20px auto;
+  border: 4px solid rgba(0,0,0,0.1);
+  border-left-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+@media (prefers-color-scheme: dark) {
+  .spinner { border-color: rgba(255,255,255,0.1); border-left-color: var(--accent); }
+}
+@keyframes spin { 100% { transform: rotate(360deg); } }
+#log {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: #888;
+  margin-top: 20px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  text-align: left;
+  background: rgba(127,127,127,0.1);
+  padding: 10px;
+  border-radius: 6px;
+  max-height: 150px;
+  overflow-y: auto;
+}
+</style>
 </head>
 <body>
-<pre id="log">Starting...</pre>
+<div class="card">
+  <h1>Verifying your request...</h1>
+  <div class="spinner"></div>
+  <div id="log">Initializing...</div>
+</div>
 <script type="module">
   const CFG = {
     bindingB64: "${bindingStringB64}",
@@ -843,9 +913,10 @@ const buildPowChallengeHtml = ({
   };
 
   const logEl = document.getElementById("log");
-  const lines = ["Starting..."];
+  const lines = ["Initializing..."];
   const render = () => {
     logEl.textContent = lines.join("\\n");
+    logEl.scrollTop = logEl.scrollHeight;
   };
   const log = (msg) => {
     lines.push(msg);
@@ -912,7 +983,7 @@ const buildPowChallengeHtml = ({
       });
       clearInterval(spinTimer);
       update(spinIndex, "Computing hash chain... done");
-      log("Root: " + String(commit.rootB64 || "").slice(0, 12) + "...");
+      // log("Root: " + String(commit.rootB64 || "").slice(0, 12) + "...");
       const apiPrefix = normalizeApiPrefix(decodeB64Url(CFG.apiPrefixB64));
       log("Submitting commit...");
       await postJson(apiPrefix + "/commit", {
