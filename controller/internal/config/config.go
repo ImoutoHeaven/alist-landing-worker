@@ -146,13 +146,13 @@ type PathConfig struct {
 
 // CommonConfig holds shared upstream and auth settings.
 type CommonConfig struct {
-	AListBaseURL   string            `yaml:"alistBaseUrl" json:"alistBaseUrl"`
-	AListAuth      map[string]string `yaml:"alistAuthHeaders" json:"alistAuthHeaders"`
-	TokenHMACKeyID string            `yaml:"tokenHmacKeyId" json:"tokenHmacKeyId"`
-	TokenHMACKey   string            `yaml:"tokenHmacKey" json:"tokenHmacKey"`
-	SignSecret     string            `yaml:"signSecret" json:"signSecret"`
-	WorkerAddresses []string         `yaml:"workerAddresses" json:"workerAddresses"`
-	LandingWorkerAddresses []string  `yaml:"landingWorkerAddresses" json:"landingWorkerAddresses"`
+	AListBaseURL           string            `yaml:"alistBaseUrl" json:"alistBaseUrl"`
+	AListAuth              map[string]string `yaml:"alistAuthHeaders" json:"alistAuthHeaders"`
+	TokenHMACKeyID         string            `yaml:"tokenHmacKeyId" json:"tokenHmacKeyId"`
+	TokenHMACKey           string            `yaml:"tokenHmacKey" json:"tokenHmacKey"`
+	SignSecret             string            `yaml:"signSecret" json:"signSecret"`
+	WorkerAddresses        []string          `yaml:"workerAddresses" json:"workerAddresses"`
+	LandingWorkerAddresses []string          `yaml:"landingWorkerAddresses" json:"landingWorkerAddresses"`
 }
 
 // LandingCaptchaConfig carries captcha defaults for landing.
@@ -315,24 +315,25 @@ type LandingAdditionalConfig struct {
 
 // LandingConfig describes landing-side static configuration.
 type LandingConfig struct {
-	PageSecret           string                     `yaml:"pageSecret" json:"pageSecret"`
-	Captcha              LandingCaptchaConfig       `yaml:"captcha" json:"captcha"`
-	Turnstile            LandingTurnstileConfig     `yaml:"turnstile" json:"turnstile"`
-	Altcha               LandingAltchaConfig        `yaml:"altcha" json:"altcha"`
-	Powdet               LandingPowdetConfig        `yaml:"powdet" json:"powdet"`
-	PathRules            DownloadPathRules          `yaml:"pathRules" json:"pathRules"`
-	Paths                PathConfig                 `yaml:"paths" json:"paths"`
-	FastRedirect         bool                       `yaml:"fastRedirect" json:"fastRedirect"`
-	AutoRedirect         bool                       `yaml:"autoRedirect" json:"autoRedirect"`
-	IPv4Only             bool                       `yaml:"ipv4Only" json:"ipv4Only"`
-	DownloadWorkerHrw    bool                       `yaml:"downloadWorkerHrwEnabled" json:"downloadWorkerHrwEnabled"`
-	DownloadWorkerHrwMax string                     `yaml:"downloadWorkerHrwMaxSize" json:"downloadWorkerHrwMaxSize"`
-	DB                   LandingDBConfig            `yaml:"db" json:"db"`
-	Crypt                LandingCryptConfig         `yaml:"crypt" json:"crypt"`
-	WebDownloader        LandingWebDownloaderConfig `yaml:"webDownloader" json:"webDownloader"`
-	ClientDecryptEnabled bool                       `yaml:"clientDecryptEnabled" json:"clientDecryptEnabled"`
-	Additional           LandingAdditionalConfig    `yaml:"additional" json:"additional"`
-	Extra                map[string]any             `yaml:",inline" json:"-"`
+	PageSecret            string                     `yaml:"pageSecret" json:"pageSecret"`
+	TlsFingerprintBinding bool                       `yaml:"tlsFingerprintBinding" json:"tlsFingerprintBinding"`
+	Captcha               LandingCaptchaConfig       `yaml:"captcha" json:"captcha"`
+	Turnstile             LandingTurnstileConfig     `yaml:"turnstile" json:"turnstile"`
+	Altcha                LandingAltchaConfig        `yaml:"altcha" json:"altcha"`
+	Powdet                LandingPowdetConfig        `yaml:"powdet" json:"powdet"`
+	PathRules             DownloadPathRules          `yaml:"pathRules" json:"pathRules"`
+	Paths                 PathConfig                 `yaml:"paths" json:"paths"`
+	FastRedirect          bool                       `yaml:"fastRedirect" json:"fastRedirect"`
+	AutoRedirect          bool                       `yaml:"autoRedirect" json:"autoRedirect"`
+	IPv4Only              bool                       `yaml:"ipv4Only" json:"ipv4Only"`
+	DownloadWorkerHrw     bool                       `yaml:"downloadWorkerHrwEnabled" json:"downloadWorkerHrwEnabled"`
+	DownloadWorkerHrwMax  string                     `yaml:"downloadWorkerHrwMaxSize" json:"downloadWorkerHrwMaxSize"`
+	DB                    LandingDBConfig            `yaml:"db" json:"db"`
+	Crypt                 LandingCryptConfig         `yaml:"crypt" json:"crypt"`
+	WebDownloader         LandingWebDownloaderConfig `yaml:"webDownloader" json:"webDownloader"`
+	ClientDecryptEnabled  bool                       `yaml:"clientDecryptEnabled" json:"clientDecryptEnabled"`
+	Additional            LandingAdditionalConfig    `yaml:"additional" json:"additional"`
+	Extra                 map[string]any             `yaml:",inline" json:"-"`
 }
 
 // PowdetServiceArgonConfig describes argon2 parameters for powdet service.
@@ -450,18 +451,18 @@ type DownloadAuthConfig struct {
 
 // DownloadConfig collects download-side strategy and upstream config.
 type DownloadConfig struct {
-	Address               string                             `yaml:"address" json:"address"`
-	DB                    DownloadDBConfig                   `yaml:"db" json:"db"`
-	FairQueue             DownloadFairQueueConfig            `yaml:"fairQueue" json:"fairQueue"`
-	ThrottleProfiles      map[string]DownloadThrottleProfile `yaml:"throttleProfiles" json:"throttleProfiles"`
-	OriginBindingDefault  string                             `yaml:"originBindingDefault" json:"originBindingDefault"`
-	OverrideCacheControl  bool                               `yaml:"override-cache-control" json:"overrideCacheControl"`
-	CacheOverrideTime     string                             `yaml:"cache-override-time" json:"cacheOverrideTime"`
-	CacheOverrideMaxSize  string                             `yaml:"cache-override-max-size" json:"cacheOverrideMaxSize"`
-	PathRules             DownloadPathRules                  `yaml:"pathRules" json:"pathRules"`
-	Paths                 PathConfig                         `yaml:"paths" json:"paths"`
-	Auth                  DownloadAuthConfig                 `yaml:"auth" json:"auth"`
-	Extra                 map[string]interface{}             `yaml:",inline" json:"-"`
+	Address              string                             `yaml:"address" json:"address"`
+	DB                   DownloadDBConfig                   `yaml:"db" json:"db"`
+	FairQueue            DownloadFairQueueConfig            `yaml:"fairQueue" json:"fairQueue"`
+	ThrottleProfiles     map[string]DownloadThrottleProfile `yaml:"throttleProfiles" json:"throttleProfiles"`
+	OriginBindingDefault string                             `yaml:"originBindingDefault" json:"originBindingDefault"`
+	OverrideCacheControl bool                               `yaml:"override-cache-control" json:"overrideCacheControl"`
+	CacheOverrideTime    string                             `yaml:"cache-override-time" json:"cacheOverrideTime"`
+	CacheOverrideMaxSize string                             `yaml:"cache-override-max-size" json:"cacheOverrideMaxSize"`
+	PathRules            DownloadPathRules                  `yaml:"pathRules" json:"pathRules"`
+	Paths                PathConfig                         `yaml:"paths" json:"paths"`
+	Auth                 DownloadAuthConfig                 `yaml:"auth" json:"auth"`
+	Extra                map[string]interface{}             `yaml:",inline" json:"-"`
 }
 
 // SlotHandlerAuthConfig guards slot-handler API.

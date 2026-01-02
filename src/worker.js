@@ -825,6 +825,7 @@ const resolveConfig = (env = {}, bootstrap = null) => {
   if (!pageSecret) {
     throw new Error('controller bootstrap.landing.pageSecret is required');
   }
+  const tlsFingerprintBindingEnabled = Boolean(landingBootstrap.tlsFingerprintBinding);
   const altchaConfig = landingBootstrap.altcha && typeof landingBootstrap.altcha === 'object'
     ? landingBootstrap.altcha
     : null;
@@ -1266,6 +1267,7 @@ const resolveConfig = (env = {}, bootstrap = null) => {
     powdetDynamic,
     powdetDifficultyTableName,
     pageSecret,
+    tlsFingerprintBindingEnabled,
     turnstileSiteKey,
     turnstileSecretKey,
     turnstileTokenBindingEnabled,
@@ -1482,6 +1484,32 @@ const computeClientIpHash = async (clientIP) => {
   }
 };
 
+const normalizeTlsFingerprintValue = (value) => {
+  if (typeof value !== 'string') {
+    return '';
+  }
+  return value.trim();
+};
+
+const computeTlsFingerprintHash = async (request) => {
+  const cf = request && typeof request === 'object' ? request.cf : null;
+  if (!cf || typeof cf !== 'object') {
+    return '';
+  }
+  const extensions = normalizeTlsFingerprintValue(cf.tlsClientExtensionsSha1);
+  const ciphers = normalizeTlsFingerprintValue(cf.tlsClientCiphersSha1);
+  if (!extensions || !ciphers) {
+    return '';
+  }
+  const fingerprint = `${extensions}|${ciphers}`;
+  try {
+    return await sha256Hash(fingerprint);
+  } catch (error) {
+    console.error('[TLS Binding] Failed to hash TLS fingerprint:', error instanceof Error ? error.message : String(error));
+    return '';
+  }
+};
+
 const buildBindingPayload = async (
   secret,
   pathHash,
@@ -1525,10 +1553,18 @@ const buildBindingPayload = async (
   }
 };
 
-const buildAltchaBinding = async (secret, pathHash, ipHash, expiresAtSeconds, salt) => {
+const buildAltchaBinding = async (secret, pathHash, ipHash, expiresAtSeconds, salt, tlsFingerprintHash) => {
   const normalizedSalt = typeof salt === 'string' ? salt : '';
-  const additionalData = normalizedSalt ? { salt: normalizedSalt } : null;
-  return buildBindingPayload(secret, pathHash, ipHash, expiresAtSeconds, 'ALTCHA', additionalData);
+  const normalizedTls = typeof tlsFingerprintHash === 'string' ? tlsFingerprintHash : '';
+  const additionalData = {};
+  if (normalizedSalt) {
+    additionalData.salt = normalizedSalt;
+  }
+  if (normalizedTls) {
+    additionalData.tlsFingerprint = normalizedTls;
+  }
+  const payloadData = Object.keys(additionalData).length > 0 ? additionalData : null;
+  return buildBindingPayload(secret, pathHash, ipHash, expiresAtSeconds, 'ALTCHA', payloadData);
 };
 
 const normalizeAltchaStateRow = (row) => {
@@ -2568,6 +2604,13 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
   let needAltcha = parsedNeeds.needAltcha;
   let needTurnstile = parsedNeeds.needTurnstile;
   let needPowdet = parsedNeeds.needPowdet;
+  let tlsFingerprintHash = '';
+  if (config.tlsFingerprintBindingEnabled && (needAltcha || needTurnstile || needPowdet)) {
+    tlsFingerprintHash = await computeTlsFingerprintHash(request);
+    if (!tlsFingerprintHash) {
+      return respondJson(origin, { code: 403, message: 'tls fingerprint missing' }, 403);
+    }
+  }
 
   let altchaScope = clientIP
     ? await computeAltchaIpScope(clientIP, config.ipv4Suffix, config.ipv6Suffix)
@@ -2805,12 +2848,16 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
     if (payloadBindingExpiresAt < nowSeconds) {
       return respondJson(origin, { code: 463, message: 'turnstile binding expired' }, 403);
     }
+    const turnstileBindingExtra = config.tlsFingerprintBindingEnabled
+      ? { tlsFingerprint: tlsFingerprintHash }
+      : null;
     const expectedBinding = await buildBindingPayload(
       config.pageSecret,
       expectedPathHash,
       expectedIpHash,
       payloadBindingExpiresAt,
-      'Turnstile'
+      'Turnstile',
+      turnstileBindingExtra
     );
     const mismatch =
       payloadPathHash !== expectedBinding.pathHash ||
@@ -2889,7 +2936,8 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
         canonicalPathHash,
         expectedIpHash,
         payloadBindingExpiresAt,
-        payloadSalt
+        payloadSalt,
+        tlsFingerprintHash
       );
       const bindingMismatch =
         canonicalPathHash !== expectedBinding.pathHash ||
@@ -2942,6 +2990,9 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
         randomStr: payloadRandom,
         challenge: payloadChallenge,
       };
+      if (config.tlsFingerprintBindingEnabled) {
+        bindingPayload.tlsFingerprint = tlsFingerprintHash;
+      }
       expectedHmac = await computePowdetHmac(config, bindingPayload);
     } catch (error) {
       console.error('[Powdet] Failed to compute HMAC:', error instanceof Error ? error.message : String(error));
@@ -4240,6 +4291,13 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
   const needsTurnstileBinding = needTurnstile && config.turnstileCookieExpireSeconds > 0;
   const needsPowdetChallenge = needPowdet;
   const shouldGenerateBindings = !shouldRedirect && (needsAltchaChallenge || needsTurnstileBinding || needsPowdetChallenge);
+  let tlsFingerprintHash = '';
+  if (config.tlsFingerprintBindingEnabled && shouldGenerateBindings) {
+    tlsFingerprintHash = await computeTlsFingerprintHash(request);
+    if (!tlsFingerprintHash) {
+      return respondJson(origin, { code: 403, message: 'tls fingerprint missing' }, 403);
+    }
+  }
   let decodedChallengePath = '';
   if (shouldGenerateBindings) {
     decodedChallengePath = decodedPath;
@@ -4352,12 +4410,16 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
         : 0;
       if (ttlSeconds > 0) {
         const expiresAt = nowSeconds + ttlSeconds;
+        const turnstileBindingExtra = config.tlsFingerprintBindingEnabled
+          ? { tlsFingerprint: tlsFingerprintHash }
+          : null;
         const binding = await buildBindingPayload(
           config.pageSecret,
           bindingPathHash,
           bindingIpHash,
           expiresAt,
-          'Turnstile'
+          'Turnstile',
+          turnstileBindingExtra
         );
         if (binding?.bindingMac) {
           const nonce = generateNonce();
@@ -4409,7 +4471,8 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
         challengePathHash,
         challengeIpHash,
         challengeExpiresAt,
-        challenge.salt
+        challenge.salt,
+        tlsFingerprintHash
       );
       altchaChallengePayload = {
         algorithm: challenge.algorithm,
@@ -4450,6 +4513,9 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
         randomStr,
         challenge,
       };
+      if (config.tlsFingerprintBindingEnabled) {
+        bindingPayload.tlsFingerprint = tlsFingerprintHash;
+      }
       const hmac = await computePowdetHmac(config, bindingPayload);
       powdetChallengePayload = {
         challenge,

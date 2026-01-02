@@ -21,6 +21,7 @@ envs:
         - "https://landing-staging.example.com" # Landing worker origins allowed to issue tickets
     landing: # Landing-side configuration for staging
       pageSecret: "replace-with-page-secret" # Used to sign/validate landing page state/token (non-empty when signatures required)
+      tlsFingerprintBinding: false # Bind challenges to tlsClientExtensionsSha1+tlsClientCiphersSha1 when true
       captcha:
         defaultCombo: ["verify-altcha"] # Ordered challenge pipeline; allowed values: verify-altcha|verify-turn|verify-turnstile|verify-powdet|verify-none; empty array = no challenge
       turnstile:
@@ -395,6 +396,7 @@ envs:
     # All prod sub-sections mirror staging; allowed values/defaults/ranges are identical.
     landing: # Production landing config; field meanings match staging.landing
       pageSecret: "replace-with-page-secret"
+      tlsFingerprintBinding: false # Bind challenges to tlsClientExtensionsSha1+tlsClientCiphersSha1 when true
       captcha:
         defaultCombo: ["verify-altcha"] # Same enum as staging: verify-altcha|verify-turnstile|verify-powdet|verify-none; order defines pipeline
       turnstile:
