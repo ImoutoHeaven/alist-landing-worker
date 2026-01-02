@@ -827,76 +827,21 @@ const buildPowChallengeHtml = ({
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Security Check</title>
 <style>
-:root {
-  --bg: #f7f7f7;
-  --card: #ffffff;
-  --text: #333333;
-  --accent: #0070f3;
-  --mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #111111;
-    --card: #1c1c1c;
-    --text: #eaeaea;
-    --accent: #3291ff;
-  }
-}
-body {
-  margin: 0;
-  padding: 20px;
-  background-color: var(--bg);
-  color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  min-height: 100vh;
-  box-sizing: border-box;
-}
-.card {
-  background: var(--card);
-  padding: 30px;
-  border-radius: 12px;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-  max-width: 400px;
-  width: 100%;
-  text-align: center;
-}
+:root { --bg: #111; --card: #1c1c1c; --text: #eee; --accent: #3291ff; --mono: monospace; }
+body { margin: 0; padding: 20px; background: var(--bg); color: var(--text); font-family: sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; box-sizing: border-box; }
+.card { background: var(--card); padding: 30px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); max-width: 400px; width: 100%; text-align: center; }
 h1 { margin: 0 0 15px; font-size: 20px; font-weight: 600; }
-.spinner {
-  width: 40px;
-  height: 40px;
-  margin: 20px auto;
-  border: 4px solid rgba(0,0,0,0.1);
-  border-left-color: var(--accent);
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-}
-@media (prefers-color-scheme: dark) {
-  .spinner { border-color: rgba(255,255,255,0.1); border-left-color: var(--accent); }
-}
-@keyframes spin { 100% { transform: rotate(360deg); } }
-#log {
-  font-family: var(--mono);
-  font-size: 12px;
-  color: #888;
-  margin-top: 20px;
-  white-space: pre-wrap;
-  word-break: break-all;
-  text-align: left;
-  background: rgba(127,127,127,0.1);
-  padding: 10px;
-  border-radius: 6px;
-  max-height: 150px;
-  overflow-y: auto;
-}
+.spinner { width: 40px; height: 40px; margin: 20px auto; border: 4px solid rgba(255,255,255,0.1); border-left-color: var(--accent); border-radius: 50%; animation: s 1s linear infinite; }
+@keyframes s { 100% { transform: rotate(360deg); } }
+#log { font-family: var(--mono); font-size: 12px; color: #888; margin-top: 20px; white-space: pre-wrap; word-break: break-all; text-align: left; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 6px; max-height: 150px; overflow-y: auto; }
+.icon { width: 48px; height: 48px; margin: 20px auto; display: none; }
 </style>
 </head>
 <body>
 <div class="card">
-  <h1>Verifying your request...</h1>
-  <div class="spinner"></div>
+  <h1 id="t">Verifying...</h1>
+  <div id="s" class="spinner"></div>
+  <div id="i" class="icon"></div>
   <div id="log">Initializing...</div>
 </div>
 <script type="module">
@@ -913,6 +858,22 @@ h1 { margin: 0 0 15px; font-size: 20px; font-weight: 600; }
   };
 
   const logEl = document.getElementById("log");
+  const tEl = document.getElementById("t");
+  const sEl = document.getElementById("s");
+  const iEl = document.getElementById("i");
+  
+  const setStatus = (ok) => {
+    sEl.style.display = "none";
+    iEl.style.display = "block";
+    if (ok) {
+      tEl.textContent = "Redirecting...";
+      iEl.innerHTML = '<svg viewBox="0 0 52 52"><circle cx="26" cy="26" r="25" fill="#25AE88"/><path fill="none" stroke="#FFF" stroke-width="5" d="M14.1 27.2l7.1 7.2 16.7-16.8"/></svg>';
+    } else {
+      tEl.textContent = "Failed!";
+      iEl.innerHTML = '<svg viewBox="0 0 52 52"><circle cx="26" cy="26" r="25" fill="#D75A4A"/><path fill="none" stroke="#FFF" stroke-width="5" d="M16 16 36 36 M36 16 16 36"/></svg>';
+    }
+  };
+
   const lines = ["Initializing..."];
   const render = () => {
     logEl.textContent = lines.join("\\n");
@@ -1001,11 +962,13 @@ h1 { margin: 0 0 15px; font-size: 20px; font-weight: 600; }
       const opens = await commit.open(chal.indices);
       await postJson(apiPrefix + "/open", { sid: chal.sid, opens });
       log("Access granted. Redirecting...");
+      setStatus(true);
       document.title = "Redirecting";
       const target = decodeB64Url(CFG.reloadUrlB64);
       window.location.replace(target);
     } catch (e) {
       log("ERROR: " + (e && e.message ? e.message : String(e)));
+      setStatus(false);
     }
   })();
 </script>
