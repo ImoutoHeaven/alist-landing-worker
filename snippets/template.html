@@ -100,20 +100,43 @@ h1 { margin: 0 0 15px; font-size: 20px; font-weight: 600; }
     return prefix.endsWith("/") ? prefix.slice(0, -1) : prefix;
   };
 
-  const postJson = async (url, body) => {
-    const res = await fetch(url, {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body || {}),
-    });
-    if (!res.ok) {
-      throw new Error("Request Failed");
-    }
-    try {
-      return await res.json();
-    } catch {
-      return {};
+  const postJson = async (url, body, retries = 3) => {
+    for (let i = 0; i <= retries; i++) {
+      try {
+        const res = await fetch(url, {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body || {}),
+        });
+        
+        if (res.status === 403) {
+          throw new Error("403");
+        }
+        
+        if (!res.ok) {
+          if (res.status >= 500 && i < retries) {
+            // Retry on 5xx errors
+            throw new Error("Server Error");
+          }
+          throw new Error("Request Failed: " + res.status);
+        }
+
+        try {
+          return await res.json();
+        } catch {
+          return {};
+        }
+      } catch (err) {
+        if (err.message === "403") throw err; // Don't retry 403
+        
+        if (i === retries) throw err;
+        
+        // Wait before retrying (exponential backoff: 500ms, 1000ms, 2000ms)
+        const delay = 500 * Math.pow(2, i);
+        log(\`Connection error. Retrying in \${delay}ms...\`);
+        await new Promise(r => setTimeout(r, delay));
+      }
     }
   };
 
@@ -188,8 +211,13 @@ h1 { margin: 0 0 15px; font-size: 20px; font-weight: 600; }
       const target = decodeB64Url(CFG.reloadUrlB64);
       window.location.replace(target);
     } catch (e) {
-      log("ERROR: " + (e && e.message ? e.message : String(e)));
-      setStatus(false);
+      if (e.message === "403") {
+        log("Session expired. Reloading...");
+        setTimeout(() => window.location.reload(), 1000);
+      } else {
+        log("ERROR: " + (e && e.message ? e.message : String(e)));
+        setStatus(false);
+      }
     }
   })();
 </script>

@@ -5,17 +5,17 @@
 const DEFAULTS = {
   powcheck: false,
   stripDownloadPrefix: false,
-  POW_VERSION: 2,
+  POW_VERSION: 3,
   POW_API_PREFIX: "/__pow",
-  POW_DIFFICULTY_BASE: 4096,
+  POW_DIFFICULTY_BASE: 8192,
   POW_DIFFICULTY_COEFF: 1.0,
   POW_MIN_STEPS: 512,
   POW_MAX_STEPS: 8192,
-  POW_HASHCASH_BITS: 4,
-  POW_SEGMENT_LEN: 1,
-  POW_SAMPLE_K: 3,
-  POW_CHAL_ROUNDS: 1,
-  POW_OPEN_BATCH: 3,
+  POW_HASHCASH_BITS: 3,
+  POW_SEGMENT_LEN: 5,
+  POW_SAMPLE_K: 13,
+  POW_CHAL_ROUNDS: 8,
+  POW_OPEN_BATCH: 13,
   POW_FORCE_EDGE_1: true,
   POW_FORCE_EDGE_LAST: true,
   POW_COMMIT_TTL_SEC: 120,
@@ -25,7 +25,7 @@ const DEFAULTS = {
   POW_BIND_IPRANGE: true,
   POW_BIND_COUNTRY: false,
   POW_BIND_ASN: false,
-  POW_BIND_TLS: false,
+  POW_BIND_TLS: true,
   IPV4_PREFIX: 32,
   IPV6_PREFIX: 64,
   POW_COMMIT_COOKIE: "__Host-pow_commit",
@@ -1435,11 +1435,11 @@ export default {
     if (hasSignSecret) {
       const sign = url.searchParams.get("sign") || "";
       const signMeta = parseSignature(sign);
-      if (!signMeta) return deny(origin, "sign invalid");
-      if (isExpired(signMeta.expire, nowSeconds)) return deny(origin, "sign expired");
+      if (!signMeta) return respondText(origin, "sign invalid", 401);
+      if (isExpired(signMeta.expire, nowSeconds)) return respondText(origin, "sign expired", 401);
 
       const expected = await hmacSha256Sign(signSecret, authPath, signMeta.expire);
-      if (expected !== sign) return deny(origin, "sign mismatch");
+      if (expected !== sign) return respondText(origin, "sign mismatch", 401);
     }
 
     if (config.powcheck !== true) {
