@@ -824,15 +824,15 @@ const buildPowChallengeHtml = ({
   apiPrefixB64,
   esmUrlB64,
 }) => __HTML_TEMPLATE__
-  .replace('${bindingStringB64}', bindingStringB64)
-  .replace('${steps}', String(steps))
-  .replace('${ticketB64}', ticketB64)
-  .replace('${pathHash}', pathHash)
-  .replace('${hashcashBits}', String(hashcashBits))
-  .replace('${segmentLen}', String(segmentLen))
-  .replace('${reloadUrlB64}', reloadUrlB64)
-  .replace('${apiPrefixB64}', apiPrefixB64)
-  .replace('${esmUrlB64}', esmUrlB64);
+  .replace('__BINDING_STRING_B64__', bindingStringB64)
+  .replace('__STEPS__', String(steps))
+  .replace('__TICKET_B64__', ticketB64)
+  .replace('__PATH_HASH__', pathHash)
+  .replace('__HASHCASH_BITS__', String(hashcashBits))
+  .replace('__SEGMENT_LEN__', String(segmentLen))
+  .replace('__RELOAD_URL_B64__', reloadUrlB64)
+  .replace('__API_PREFIX_B64__', apiPrefixB64)
+  .replace('__ESM_URL_B64__', esmUrlB64);
 
 const respondPowChallengeHtml = async (
   request,

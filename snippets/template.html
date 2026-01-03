@@ -26,15 +26,15 @@ h1 { margin: 0 0 15px; font-size: 20px; font-weight: 600; }
 </div>
 <script type="module">
   const CFG = {
-    bindingB64: "${bindingStringB64}",
-    steps: ${steps},
-    ticketB64: "${ticketB64}",
-    pathHash: "${pathHash}",
-    hashcashBits: ${hashcashBits},
-    segmentLen: ${segmentLen},
-    reloadUrlB64: "${reloadUrlB64}",
-    apiPrefixB64: "${apiPrefixB64}",
-    esmUrlB64: "${esmUrlB64}",
+    bindingB64: "__BINDING_STRING_B64__",
+    steps: __STEPS__,
+    ticketB64: "__TICKET_B64__",
+    pathHash: "__PATH_HASH__",
+    hashcashBits: __HASHCASH_BITS__,
+    segmentLen: __SEGMENT_LEN__,
+    reloadUrlB64: "__RELOAD_URL_B64__",
+    apiPrefixB64: "__API_PREFIX_B64__",
+    esmUrlB64: "__ESM_URL_B64__",
   };
 
   const logEl = document.getElementById("log");
@@ -68,7 +68,7 @@ h1 { margin: 0 0 15px; font-size: 20px; font-weight: 600; }
                       position === visible.length - 2 ? 0.7 :
                       position === visible.length - 3 ? 0.45 :
                       0.25;
-      return `<div class="log-line" style="opacity: ${opacity}; color: rgba(238,238,238,${opacity})">${msg}</div>`;
+      return "<div class=\"log-line\" style=\"opacity: " + opacity + "; color: rgba(238,238,238," + opacity + ")\">" + msg + "</div>";
     }).join('');
   };
 
@@ -134,7 +134,7 @@ h1 { margin: 0 0 15px; font-size: 20px; font-weight: 600; }
         
         // Wait before retrying (exponential backoff: 500ms, 1000ms, 2000ms)
         const delay = 500 * Math.pow(2, i);
-        log(\`Connection error. Retrying in \${delay}ms...\`);
+        log("Connection error. Retrying in " + delay + "ms...");
         await new Promise(r => setTimeout(r, delay));
       }
     }
