@@ -287,6 +287,11 @@ const encodeUint32BE = (value) => {
   return out;
 };
 
+const u32FromBytes = (bytes) => {
+  if (!bytes || bytes.length < 4) return 0;
+  return ((bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3]) >>> 0;
+};
+
 const bytesEqual = (a, b) => {
   if (!a || !b || a.length !== b.length) return false;
   let diff = 0;
@@ -565,6 +570,33 @@ const randomBase64Url = (byteLength) => {
   return base64UrlEncodeNoPad(bytes);
 };
 
+const mulberry32 = (seed) => {
+  let a = Number(seed) >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+};
+
+const derivePowSid = async (powSecret, cfgId, commitMac) => {
+  const bytes = await hmacSha256(powSecret, `pow-sid-v3|${cfgId}|${commitMac}`);
+  return base64UrlEncodeNoPad(bytes.slice(0, 12));
+};
+
+const derivePowSeedU32 = async (powSecret, cfgId, commitMac, sid) => {
+  const bytes = await hmacSha256(powSecret, `pow-seed-v3|${cfgId}|${commitMac}|${sid}`);
+  return u32FromBytes(bytes);
+};
+
+const makePowStateToken = async (powSecret, cfgId, sid, commitMac, cursor, batchLen) =>
+  hmacSha256Base64UrlNoPad(
+    powSecret,
+    `pow-state-v3|${cfgId}|${sid}|${commitMac}|${cursor}|${batchLen}`
+  );
+
 const POSW_SEED_PREFIX = encoder.encode("posw|seed|");
 const POSW_STEP_PREFIX = encoder.encode("posw|step|");
 const MERKLE_LEAF_PREFIX = encoder.encode("leaf|");
@@ -820,7 +852,6 @@ const buildPowChallengeHtml = ({
   pathHash,
   hashcashBits,
   segmentLen,
-  openBatch,
   reloadUrlB64,
   apiPrefixB64,
   esmUrlB64,
@@ -856,7 +887,6 @@ h1 { margin: 0 0 15px; font-size: 20px; font-weight: 600; }
     pathHash: "${pathHash}",
     hashcashBits: ${hashcashBits},
     segmentLen: ${segmentLen},
-    openBatch: ${openBatch},
     reloadUrlB64: "${reloadUrlB64}",
     apiPrefixB64: "${apiPrefixB64}",
     esmUrlB64: "${esmUrlB64}",
@@ -910,12 +940,6 @@ h1 { margin: 0 0 15px; font-size: 20px; font-weight: 600; }
     return prefix.endsWith("/") ? prefix.slice(0, -1) : prefix;
   };
 
-  const normalizeOpenBatch = (value) => {
-    const num = Number(value);
-    if (!Number.isFinite(num) || num <= 0) return 1;
-    return Math.max(1, Math.min(32, Math.floor(num)));
-  };
-
   const postJson = async (url, body) => {
     const res = await fetch(url, {
       method: "POST",
@@ -965,36 +989,38 @@ h1 { margin: 0 0 15px; font-size: 20px; font-weight: 600; }
         nonce: commit.nonce,
       });
       log("Requesting challenge...");
-      const chal = await postJson(apiPrefix + "/challenge", {});
-      if (!chal || !Array.isArray(chal.indices)) {
+      let state = await postJson(apiPrefix + "/challenge", {});
+      if (
+        !state ||
+        !Array.isArray(state.indices) ||
+        typeof state.sid !== "string" ||
+        typeof state.cursor !== "number" ||
+        typeof state.token !== "string"
+      ) {
         throw new Error("Challenge Failed");
       }
-      const batchSize = normalizeOpenBatch(CFG.openBatch);
-      let remaining = chal.indices.slice();
-      while (remaining.length > 0) {
-        const batch = remaining.slice(0, batchSize);
-        log(
-          "Opening proofs (" +
-            batch.length +
-            "/" +
-            remaining.length +
-            ")..."
-        );
-        const opens = await commit.open(batch);
-        const resp = await postJson(apiPrefix + "/open", { sid: chal.sid, opens });
-        if (resp && resp.done === true) {
-          remaining = [];
-          break;
-        }
-        if (resp && Array.isArray(resp.remaining)) {
-          remaining = resp.remaining.slice();
-          continue;
-        }
-        const next = await postJson(apiPrefix + "/challenge", {});
-        if (!next || !Array.isArray(next.indices)) {
+      while (state && state.done !== true) {
+        if (!Array.isArray(state.indices) || state.indices.length === 0) {
           throw new Error("Challenge Failed");
         }
-        remaining = next.indices.slice();
+        log("Opening proofs (" + state.indices.length + ")...");
+        const opens = await commit.open(state.indices);
+        state = await postJson(apiPrefix + "/open", {
+          sid: state.sid,
+          cursor: state.cursor,
+          token: state.token,
+          opens,
+        });
+        if (state && state.done === true) break;
+        if (
+          !state ||
+          !Array.isArray(state.indices) ||
+          typeof state.sid !== "string" ||
+          typeof state.cursor !== "number" ||
+          typeof state.token !== "string"
+        ) {
+          throw new Error("Challenge Failed");
+        }
       }
       log("Access granted. Redirecting...");
       setStatus(true);
@@ -1029,15 +1055,6 @@ const respondPowChallengeHtml = async (
     0,
     Math.floor(
       normalizeNumber(config.POW_HASHCASH_BITS, DEFAULTS.POW_HASHCASH_BITS)
-    )
-  );
-  const openBatch = Math.max(
-    1,
-    Math.min(
-      32,
-      Math.floor(
-        normalizeNumber(config.POW_OPEN_BATCH, DEFAULTS.POW_OPEN_BATCH)
-      )
     )
   );
   const bindingValues = await getPowBindingValues(request, canonicalPath, config);
@@ -1084,7 +1101,6 @@ const respondPowChallengeHtml = async (
         )
       )
     ),
-    openBatch,
     reloadUrlB64,
     apiPrefixB64,
     esmUrlB64,
@@ -1127,31 +1143,45 @@ const getPowSecret = (config) => {
   return powToken || signSecret;
 };
 
-const randomInt = (max) => {
-  const limit = Math.max(1, Math.floor(Number(max) || 1));
-  const buf = new Uint32Array(1);
-  crypto.getRandomValues(buf);
-  return buf[0] % limit;
-};
-
-const sampleIndices = (maxIndex, extraCount, forceEdge1, forceEdgeLast) => {
+const sampleIndicesDeterministic = ({
+  maxIndex,
+  extraCount,
+  forceEdge1,
+  forceEdgeLast,
+  seedU32,
+}) => {
   const max = Math.floor(Number(maxIndex) || 0);
   if (max <= 0) return [];
   const out = new Set();
   if (forceEdge1 && max >= 1) out.add(1);
   if (forceEdgeLast && max >= 1) out.add(max);
   const extra = Math.max(0, Math.floor(Number(extraCount) || 0));
-  const lo = 2;
-  const hi = max - 1;
-  const len = Math.max(0, hi - lo + 1);
-  if (extra > 0 && len > 0) {
-    const bucketCount = Math.min(extra, len);
-    for (let b = 0; b < bucketCount; b++) {
-      const bLo = lo + Math.floor((b * len) / bucketCount);
-      const bHi = lo + Math.floor(((b + 1) * len) / bucketCount) - 1;
-      const width = Math.max(1, bHi - bLo + 1);
-      const pick = bLo + randomInt(width);
-      out.add(pick);
+  const target = Math.min(max, out.size + extra);
+  if (target <= out.size) {
+    return Array.from(out).sort((a, b) => a - b);
+  }
+  const rng = mulberry32(seedU32);
+  const bucketCount = Math.min(64, Math.max(1, Math.floor(max / 128)));
+  const perBucket = Math.ceil((target - out.size) / bucketCount);
+  for (let b = 0; b < bucketCount && out.size < target; b++) {
+    const start = 1 + Math.floor((b * max) / bucketCount);
+    const end = 1 + Math.floor(((b + 1) * max) / bucketCount);
+    const span = Math.max(1, end - start);
+    for (let i = 0; i < perBucket && out.size < target; i++) {
+      const idx = start + Math.floor(rng() * span);
+      out.add(Math.max(1, Math.min(max, idx)));
+    }
+  }
+  let attempts = 0;
+  const maxAttempts = max * 4;
+  while (out.size < target && attempts < maxAttempts) {
+    const idx = 1 + Math.floor(rng() * max);
+    out.add(idx);
+    attempts += 1;
+  }
+  if (out.size < target) {
+    for (let i = 1; i <= max && out.size < target; i++) {
+      out.add(i);
     }
   }
   return Array.from(out).sort((a, b) => a - b);
@@ -1221,17 +1251,13 @@ const handlePowCommit = async (request, url, nowSeconds) => {
   headers.set("Content-Type", "application/json; charset=utf-8");
   headers.set("Cache-Control", "no-store");
   setCookie(headers, DEFAULTS.POW_COMMIT_COOKIE, value, ttl);
-  return new Response(
-    JSON.stringify({ ok: true, done: true, remainingCount: 0, remaining: [] }),
-    { status: 200, headers }
-  );
+  return new Response(JSON.stringify({ ok: true }), { status: 200, headers });
 };
 
 const handlePowChallenge = async (request, url, nowSeconds) => {
   const origin = request.headers.get("Origin") || "";
   const cookies = parseCookieHeader(request.headers.get("Cookie"));
   const commitRaw = cookies.get(DEFAULTS.POW_COMMIT_COOKIE) || "";
-  const chalRaw = cookies.get(DEFAULTS.POW_CHAL_COOKIE) || "";
   const commit = parsePowCommitCookie(commitRaw);
   if (!commit) return deny(origin, "commit missing");
   const ticket = parsePowTicket(commit.ticketB64);
@@ -1252,25 +1278,6 @@ const handlePowChallenge = async (request, url, nowSeconds) => {
   const powVersion = normalizeNumber(config.POW_VERSION, DEFAULTS.POW_VERSION);
   if (ticket.v !== powVersion) return deny(origin, "ticket invalid");
   if (!Number.isFinite(ticket.L) || ticket.L <= 0) return deny(origin, "ticket invalid");
-  const chal = parsePowChalCookie(chalRaw);
-  if (chal && chal.ticketB64 === commit.ticketB64 && !isExpired(chal.exp, nowSeconds)) {
-    const chalMac = await hmacSha256Base64UrlNoPad(
-      powSecret,
-      `chal|${chal.sid}|${chal.ticketB64}|${chal.indicesStr}|${chal.exp}`
-    );
-    if (timingSafeEqual(chalMac, chal.mac)) {
-      const indices = parseIndicesStr(chal.indicesStr);
-      if (indices && indices.length) {
-        const headers = safeHeaders(origin);
-        headers.set("Content-Type", "application/json; charset=utf-8");
-        headers.set("Cache-Control", "no-store");
-        return new Response(
-          JSON.stringify({ sid: chal.sid, L: ticket.L, indices }),
-          { status: 200, headers }
-        );
-      }
-    }
-  }
   const rounds = Math.max(
     1,
     Math.floor(
@@ -1283,38 +1290,65 @@ const handlePowChallenge = async (request, url, nowSeconds) => {
       normalizeNumber(config.POW_SAMPLE_K, DEFAULTS.POW_SAMPLE_K)
     )
   );
-  const indices = sampleIndices(
-    ticket.L,
-    sampleK * rounds,
-    config.POW_FORCE_EDGE_1 === true,
-    config.POW_FORCE_EDGE_LAST === true
+  const hashcashBits = Math.max(
+    0,
+    Math.floor(
+      normalizeNumber(config.POW_HASHCASH_BITS, DEFAULTS.POW_HASHCASH_BITS)
+    )
   );
+  const sid = await derivePowSid(powSecret, ticket.cfgId, commit.mac);
+  const seedU32 = await derivePowSeedU32(powSecret, ticket.cfgId, commit.mac, sid);
+  const indices = sampleIndicesDeterministic({
+    maxIndex: ticket.L,
+    extraCount: sampleK * rounds,
+    forceEdge1: config.POW_FORCE_EDGE_1 === true,
+    forceEdgeLast: config.POW_FORCE_EDGE_LAST === true || hashcashBits > 0,
+    seedU32,
+  });
   if (!indices.length) return deny(origin, "challenge invalid");
-  const sid = randomBase64Url(12);
-  const ttl = normalizeNumber(config.POW_CHAL_TTL_SEC, DEFAULTS.POW_CHAL_TTL_SEC) || 0;
-  const exp = nowSeconds + Math.max(1, ttl);
-  const indicesStr = indices.join(",");
-  const mac = await hmacSha256Base64UrlNoPad(
-    powSecret,
-    `chal|${sid}|${commit.ticketB64}|${indicesStr}|${exp}`
+  const batchLen = Math.max(
+    1,
+    Math.min(
+      32,
+      Math.floor(
+        normalizeNumber(config.POW_OPEN_BATCH, DEFAULTS.POW_OPEN_BATCH)
+      )
+    )
   );
-  const value = `v2.${sid}.${commit.ticketB64}.${indicesStr}.${exp}.${mac}`;
+  const cursor = 0;
+  const batch = indices.slice(cursor, cursor + batchLen);
+  if (!batch.length) return deny(origin, "challenge invalid");
+  const token = await makePowStateToken(
+    powSecret,
+    ticket.cfgId,
+    sid,
+    commit.mac,
+    cursor,
+    batchLen
+  );
   const headers = safeHeaders(origin);
   headers.set("Content-Type", "application/json; charset=utf-8");
   headers.set("Cache-Control", "no-store");
-  setCookie(headers, DEFAULTS.POW_CHAL_COOKIE, value, ttl);
-  return new Response(JSON.stringify({ sid, L: ticket.L, indices }), { status: 200, headers });
+  return new Response(
+    JSON.stringify({
+      done: false,
+      sid,
+      L: ticket.L,
+      cursor,
+      batchLen,
+      indices: batch,
+      token,
+    }),
+    { status: 200, headers }
+  );
 };
 
 const handlePowOpen = async (request, url, nowSeconds) => {
   const origin = request.headers.get("Origin") || "";
   const cookies = parseCookieHeader(request.headers.get("Cookie"));
   const commitRaw = cookies.get(DEFAULTS.POW_COMMIT_COOKIE) || "";
-  const chalRaw = cookies.get(DEFAULTS.POW_CHAL_COOKIE) || "";
   const commit = parsePowCommitCookie(commitRaw);
-  const chal = parsePowChalCookie(chalRaw);
-  if (!commit || !chal) return deny(origin, "challenge missing");
-  if (commit.ticketB64 !== chal.ticketB64) return deny(origin, "challenge invalid");
+  if (!commit) return deny(origin, "commit missing");
   const ticket = parsePowTicket(commit.ticketB64);
   if (!ticket) return deny(origin, "ticket invalid");
   const baseConfig = getConfigById(ticket.cfgId);
@@ -1325,30 +1359,24 @@ const handlePowOpen = async (request, url, nowSeconds) => {
   if (config.powcheck !== true) return respondText(origin, "misconfigured", 500);
   const powVersion = normalizeNumber(config.POW_VERSION, DEFAULTS.POW_VERSION);
   if (ticket.v !== powVersion) return deny(origin, "ticket invalid");
-  if (isExpired(commit.exp, nowSeconds) || isExpired(chal.exp, nowSeconds)) {
-    return deny(origin, "challenge expired");
-  }
+  if (isExpired(commit.exp, nowSeconds)) return deny(origin, "commit expired");
   if (isExpired(ticket.e, nowSeconds)) return deny(origin, "ticket expired");
   const commitMac = await hmacSha256Base64UrlNoPad(
     powSecret,
     `commit|${commit.ticketB64}|${commit.rootB64}|${commit.pathHash}|${commit.nonce}|${commit.exp}`
   );
   if (!timingSafeEqual(commitMac, commit.mac)) return deny(origin, "commit invalid");
-  const chalMac = await hmacSha256Base64UrlNoPad(
-    powSecret,
-    `chal|${chal.sid}|${chal.ticketB64}|${chal.indicesStr}|${chal.exp}`
-  );
-  if (!timingSafeEqual(chalMac, chal.mac)) return deny(origin, "challenge invalid");
   const body = await readJsonBody(request);
   if (!body || typeof body !== "object") {
     return respondText(origin, "invalid payload", 400);
   }
   const sid = typeof body.sid === "string" ? body.sid : "";
+  const cursor = Number.parseInt(body.cursor, 10);
+  const token = typeof body.token === "string" ? body.token : "";
   const opens = Array.isArray(body.opens) ? body.opens : null;
-  if (!sid || !opens) return respondText(origin, "invalid payload", 400);
-  if (sid !== chal.sid) return deny(origin, "challenge invalid");
-  const indices = parseIndicesStr(chal.indicesStr);
-  if (!indices || !indices.length) return deny(origin, "challenge invalid");
+  if (!sid || !token || !opens || !Number.isFinite(cursor) || cursor < 0) {
+    return respondText(origin, "invalid payload", 400);
+  }
   const batchMax = Math.max(
     1,
     Math.min(
@@ -1358,8 +1386,52 @@ const handlePowOpen = async (request, url, nowSeconds) => {
       )
     )
   );
+  if (batchMax <= 0) return respondText(origin, "misconfigured", 500);
+  const sidExpected = await derivePowSid(powSecret, ticket.cfgId, commit.mac);
+  if (sid !== sidExpected) return deny(origin, "challenge invalid");
+  const expectedToken = await makePowStateToken(
+    powSecret,
+    ticket.cfgId,
+    sidExpected,
+    commit.mac,
+    cursor,
+    batchMax
+  );
+  if (!timingSafeEqual(expectedToken, token)) return deny(origin, "challenge invalid");
+  const rounds = Math.max(
+    1,
+    Math.floor(
+      normalizeNumber(config.POW_CHAL_ROUNDS, DEFAULTS.POW_CHAL_ROUNDS)
+    )
+  );
+  const sampleK = Math.max(
+    0,
+    Math.floor(
+      normalizeNumber(config.POW_SAMPLE_K, DEFAULTS.POW_SAMPLE_K)
+    )
+  );
+  const hashcashBits = Math.max(
+    0,
+    Math.floor(
+      normalizeNumber(config.POW_HASHCASH_BITS, DEFAULTS.POW_HASHCASH_BITS)
+    )
+  );
+  const seedU32 = await derivePowSeedU32(powSecret, ticket.cfgId, commit.mac, sidExpected);
+  const indices = sampleIndicesDeterministic({
+    maxIndex: ticket.L,
+    extraCount: sampleK * rounds,
+    forceEdge1: config.POW_FORCE_EDGE_1 === true,
+    forceEdgeLast: config.POW_FORCE_EDGE_LAST === true || hashcashBits > 0,
+    seedU32,
+  });
+  if (!indices || !indices.length) return deny(origin, "challenge invalid");
+  if (hashcashBits > 0 && !indices.includes(ticket.L)) {
+    return deny(origin, "challenge invalid");
+  }
+  const expectedBatch = indices.slice(cursor, cursor + batchMax);
+  if (!expectedBatch.length) return deny(origin, "challenge invalid");
   const batchSize = opens.length;
-  if (batchSize < 1 || batchSize > Math.min(batchMax, indices.length)) {
+  if (batchSize !== expectedBatch.length) {
     return deny(origin, "challenge invalid");
   }
   const batch = [];
@@ -1369,7 +1441,7 @@ const handlePowOpen = async (request, url, nowSeconds) => {
     if (!Number.isFinite(idx) || idx < 1 || idx > ticket.L) {
       return respondText(origin, "invalid payload", 400);
     }
-    const expectedIdx = indices[i];
+    const expectedIdx = expectedBatch[i];
     if (idx !== expectedIdx) return deny(origin, "challenge invalid");
     batch.push({ idx, open });
   }
@@ -1394,12 +1466,6 @@ const handlePowOpen = async (request, url, nowSeconds) => {
   if (!rootBytes || rootBytes.length !== 32) return deny(origin, "commit invalid");
   const leafCount = Math.max(0, Math.floor(ticket.L)) + 1;
   if (leafCount < 2) return deny(origin, "ticket invalid");
-  const hashcashBits = Math.max(
-    0,
-    Math.floor(
-      normalizeNumber(config.POW_HASHCASH_BITS, DEFAULTS.POW_HASHCASH_BITS)
-    )
-  );
   const segmentLen = Math.max(
     1,
     Math.min(
@@ -1409,7 +1475,6 @@ const handlePowOpen = async (request, url, nowSeconds) => {
       )
     )
   );
-  if (hashcashBits > 0 && !indices.includes(ticket.L)) return deny(origin, "challenge invalid");
   const seedHash = await hashPoswSeed(bindingString, commit.nonce);
   for (const entry of batch) {
     const idx = entry.idx;
@@ -1459,25 +1524,28 @@ const handlePowOpen = async (request, url, nowSeconds) => {
     );
     if (!okCurr) return deny(origin, "challenge invalid");
   }
-  const remainingIndices = indices.slice(batchSize);
-  if (remainingIndices.length > 0) {
-    const indicesStr = remainingIndices.join(",");
-    const chalMac = await hmacSha256Base64UrlNoPad(
+  const nextCursor = cursor + expectedBatch.length;
+  if (nextCursor < indices.length) {
+    const nextBatch = indices.slice(nextCursor, nextCursor + batchMax);
+    const nextToken = await makePowStateToken(
       powSecret,
-      `chal|${chal.sid}|${chal.ticketB64}|${indicesStr}|${chal.exp}`
+      ticket.cfgId,
+      sidExpected,
+      commit.mac,
+      nextCursor,
+      batchMax
     );
-    const value = `v2.${chal.sid}.${chal.ticketB64}.${indicesStr}.${chal.exp}.${chalMac}`;
     const headers = safeHeaders(origin);
     headers.set("Content-Type", "application/json; charset=utf-8");
     headers.set("Cache-Control", "no-store");
-    const ttl = Math.max(1, Math.floor(chal.exp - nowSeconds));
-    setCookie(headers, DEFAULTS.POW_CHAL_COOKIE, value, ttl);
     return new Response(
       JSON.stringify({
-        ok: true,
         done: false,
-        remainingCount: remainingIndices.length,
-        remaining: remainingIndices,
+        sid: sidExpected,
+        cursor: nextCursor,
+        batchLen: batchMax,
+        indices: nextBatch,
+        token: nextToken,
       }),
       { status: 200, headers }
     );
@@ -1498,10 +1566,7 @@ const handlePowOpen = async (request, url, nowSeconds) => {
   setCookie(headers, DEFAULTS.POW_SOL_COOKIE, solValue, ttl);
   clearCookie(headers, DEFAULTS.POW_COMMIT_COOKIE);
   clearCookie(headers, DEFAULTS.POW_CHAL_COOKIE);
-  return new Response(
-    JSON.stringify({ ok: true, done: true, remainingCount: 0, remaining: [] }),
-    { status: 200, headers }
-  );
+  return new Response(JSON.stringify({ done: true }), { status: 200, headers });
 };
 
 const handlePowApi = async (request, url, nowSeconds) => {
