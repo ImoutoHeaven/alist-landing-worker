@@ -601,6 +601,7 @@ const POSW_STEP_PREFIX = encoder.encode("posw|step|");
 const MERKLE_LEAF_PREFIX = encoder.encode("leaf|");
 const MERKLE_NODE_PREFIX = encoder.encode("node|");
 const PIPE_BYTES = encoder.encode("|");
+const HASHCASH_PREFIX = encoder.encode("hashcash|v3|");
 
 const makePowBindingString = (
   ticket,
@@ -656,6 +657,9 @@ const hashMerkleLeaf = async (leafIndex, leafBytes) =>
 
 const hashMerkleNode = async (leftBytes, rightBytes) =>
   sha256Bytes(concatBytes(MERKLE_NODE_PREFIX, leftBytes, rightBytes));
+
+const hashcashRootLast = async (rootBytes, lastBytes) =>
+  sha256Bytes(concatBytes(HASHCASH_PREFIX, rootBytes, lastBytes));
 
 const computeMerkleDepth = (leafCount) => {
   let depth = 0;
@@ -1300,11 +1304,6 @@ const handlePowOpen = async (request, url, nowSeconds) => {
     if (idx === 1 && !bytesEqual(hPrevBytes, seedHash)) {
       return deny(origin, "challenge invalid");
     }
-    if (idx === ticket.L && hashcashBits > 0) {
-      if (leadingZeroBits(hCurrBytes) < hashcashBits) {
-        return deny(origin, "challenge invalid");
-      }
-    }
     const okPrev = await verifyMerkleProof(
       rootBytes,
       hPrevBytes,
@@ -1321,6 +1320,12 @@ const handlePowOpen = async (request, url, nowSeconds) => {
       proofCurr
     );
     if (!okCurr) return deny(origin, "challenge invalid");
+    if (idx === ticket.L && hashcashBits > 0) {
+      const digest = await hashcashRootLast(rootBytes, hCurrBytes);
+      if (leadingZeroBits(digest) < hashcashBits) {
+        return deny(origin, "challenge invalid");
+      }
+    }
   }
   const nextCursor = cursor + expectedBatch.length;
   if (nextCursor < indices.length) {

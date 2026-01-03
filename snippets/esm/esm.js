@@ -5,6 +5,7 @@ const POSW_STEP_PREFIX = encoder.encode("posw|step|");
 const MERKLE_LEAF_PREFIX = encoder.encode("leaf|");
 const MERKLE_NODE_PREFIX = encoder.encode("node|");
 const PIPE_BYTES = encoder.encode("|");
+const HASHCASH_PREFIX = encoder.encode("hashcash|v3|");
 
 const utf8ToBytes = (value) => encoder.encode(String(value ?? ""));
 
@@ -76,6 +77,9 @@ const hashLeaf = async (leafIndex, leafBytes) =>
 
 const hashNode = async (leftBytes, rightBytes) =>
   sha256Bytes(concatBytes(MERKLE_NODE_PREFIX, leftBytes, rightBytes));
+
+const hashcashRootLast = async (rootBytes, lastBytes) =>
+  sha256Bytes(concatBytes(HASHCASH_PREFIX, rootBytes, lastBytes));
 
 const leadingZeroBits = (bytes) => {
   let count = 0;
@@ -164,13 +168,6 @@ export async function computePoswCommit(bindingString, steps, options = {}) {
         await new Promise((resolve) => setTimeout(resolve, 0));
       }
     }
-    if (hashcashBits > 0 && leadingZeroBits(chain[L]) < hashcashBits) {
-      if (shouldYield(attempt, yieldEvery)) {
-        await new Promise((resolve) => setTimeout(resolve, 0));
-      }
-      continue;
-    }
-
     const leafHashes = new Array(chain.length);
     for (let i = 0; i < chain.length; i++) {
       if (signal && signal.aborted) throw new Error("posw aborted");
@@ -182,6 +179,15 @@ export async function computePoswCommit(bindingString, steps, options = {}) {
 
     const levels = await buildMerkleLevels(leafHashes, yieldEvery, signal);
     const root = levels[levels.length - 1][0];
+    if (hashcashBits > 0) {
+      const digest = await hashcashRootLast(root, chain[L]);
+      if (leadingZeroBits(digest) < hashcashBits) {
+        if (shouldYield(attempt, yieldEvery)) {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+        continue;
+      }
+    }
     const rootB64 = base64UrlEncodeNoPad(root);
 
     const open = async (indices) => {
