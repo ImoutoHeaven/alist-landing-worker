@@ -18,7 +18,7 @@ const DEFAULTS = {
   POW_OPEN_BATCH: 3,
   POW_FORCE_EDGE_1: true,
   POW_FORCE_EDGE_LAST: true,
-  POW_CHAL_TTL_SEC: 120,
+  POW_COMMIT_TTL_SEC: 120,
   POW_TICKET_TTL_SEC: 600,
   POW_SOL_TTL_SEC: 600,
   POW_BIND_PATH: true,
@@ -29,7 +29,6 @@ const DEFAULTS = {
   IPV4_PREFIX: 32,
   IPV6_PREFIX: 64,
   POW_COMMIT_COOKIE: "__Host-pow_commit",
-  POW_CHAL_COOKIE: "__Host-pow_chal",
   POW_SOL_COOKIE: "__Host-pow_sol",
   POW_ESM_URL:
     "https://cdn.jsdelivr.net/gh/ImoutoHeaven/alist-landing-worker@bdd7bd164039786b29c8556355346741c8e9f1cc/snippets/esm/esm.js",
@@ -37,9 +36,9 @@ const DEFAULTS = {
 
 const CONFIG = [
   // Example:
-  // { pattern: "alist-landing-*.example.com/*", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", POW_TOKEN: "replace-with-powToken", powcheck: true, stripDownloadPrefix: true, POW_DIFFICULTY_BASE: 4096, POW_DIFFICULTY_COEFF: 1.0, POW_MIN_STEPS: 512, POW_MAX_STEPS: 8192, POW_HASHCASH_BITS: 4, POW_SEGMENT_LEN: 1, POW_SAMPLE_K: 3, POW_CHAL_ROUNDS: 1, POW_OPEN_BATCH: 3, POW_FORCE_EDGE_1: true, POW_FORCE_EDGE_LAST: true, POW_CHAL_TTL_SEC: 180, POW_TICKET_TTL_SEC: 600, POW_SOL_TTL_SEC: 600, POW_BIND_PATH: true, POW_BIND_IPRANGE: true, POW_BIND_COUNTRY: false, POW_BIND_ASN: false, POW_BIND_TLS: false, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
-  // { pattern: "alist-landing-*.example.com/**", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", POW_TOKEN: "replace-with-powToken", powcheck: true, stripDownloadPrefix: true, POW_DIFFICULTY_BASE: 4096, POW_DIFFICULTY_COEFF: 1.0, POW_MIN_STEPS: 512, POW_MAX_STEPS: 8192, POW_HASHCASH_BITS: 4, POW_SEGMENT_LEN: 1, POW_SAMPLE_K: 3, POW_CHAL_ROUNDS: 1, POW_OPEN_BATCH: 3, POW_FORCE_EDGE_1: true, POW_FORCE_EDGE_LAST: true, POW_CHAL_TTL_SEC: 180, POW_TICKET_TTL_SEC: 600, POW_SOL_TTL_SEC: 600, POW_BIND_PATH: true, POW_BIND_IPRANGE: true, POW_BIND_COUNTRY: false, POW_BIND_ASN: false, POW_BIND_TLS: false, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
-  // { pattern: "alist-landing-*.example.com", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", POW_TOKEN: "replace-with-powToken", powcheck: true, stripDownloadPrefix: true, POW_DIFFICULTY_BASE: 4096, POW_DIFFICULTY_COEFF: 1.0, POW_MIN_STEPS: 512, POW_MAX_STEPS: 8192, POW_HASHCASH_BITS: 4, POW_SEGMENT_LEN: 1, POW_SAMPLE_K: 3, POW_CHAL_ROUNDS: 1, POW_OPEN_BATCH: 3, POW_FORCE_EDGE_1: true, POW_FORCE_EDGE_LAST: true, POW_CHAL_TTL_SEC: 180, POW_TICKET_TTL_SEC: 600, POW_SOL_TTL_SEC: 600, POW_BIND_PATH: true, POW_BIND_IPRANGE: true, POW_BIND_COUNTRY: false, POW_BIND_ASN: false, POW_BIND_TLS: false, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
+  // { pattern: "alist-landing-*.example.com/*", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", POW_TOKEN: "replace-with-powToken", powcheck: true, stripDownloadPrefix: true, POW_DIFFICULTY_BASE: 4096, POW_DIFFICULTY_COEFF: 1.0, POW_MIN_STEPS: 512, POW_MAX_STEPS: 8192, POW_HASHCASH_BITS: 4, POW_SEGMENT_LEN: 1, POW_SAMPLE_K: 3, POW_CHAL_ROUNDS: 1, POW_OPEN_BATCH: 3, POW_FORCE_EDGE_1: true, POW_FORCE_EDGE_LAST: true, POW_COMMIT_TTL_SEC: 180, POW_TICKET_TTL_SEC: 600, POW_SOL_TTL_SEC: 600, POW_BIND_PATH: true, POW_BIND_IPRANGE: true, POW_BIND_COUNTRY: false, POW_BIND_ASN: false, POW_BIND_TLS: false, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
+  // { pattern: "alist-landing-*.example.com/**", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", POW_TOKEN: "replace-with-powToken", powcheck: true, stripDownloadPrefix: true, POW_DIFFICULTY_BASE: 4096, POW_DIFFICULTY_COEFF: 1.0, POW_MIN_STEPS: 512, POW_MAX_STEPS: 8192, POW_HASHCASH_BITS: 4, POW_SEGMENT_LEN: 1, POW_SAMPLE_K: 3, POW_CHAL_ROUNDS: 1, POW_OPEN_BATCH: 3, POW_FORCE_EDGE_1: true, POW_FORCE_EDGE_LAST: true, POW_COMMIT_TTL_SEC: 180, POW_TICKET_TTL_SEC: 600, POW_SOL_TTL_SEC: 600, POW_BIND_PATH: true, POW_BIND_IPRANGE: true, POW_BIND_COUNTRY: false, POW_BIND_ASN: false, POW_BIND_TLS: false, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
+  // { pattern: "alist-landing-*.example.com", config: { HMAC_SECRET: "replace-with-common-tokenHmacKey", POW_TOKEN: "replace-with-powToken", powcheck: true, stripDownloadPrefix: true, POW_DIFFICULTY_BASE: 4096, POW_DIFFICULTY_COEFF: 1.0, POW_MIN_STEPS: 512, POW_MAX_STEPS: 8192, POW_HASHCASH_BITS: 4, POW_SEGMENT_LEN: 1, POW_SAMPLE_K: 3, POW_CHAL_ROUNDS: 1, POW_OPEN_BATCH: 3, POW_FORCE_EDGE_1: true, POW_FORCE_EDGE_LAST: true, POW_COMMIT_TTL_SEC: 180, POW_TICKET_TTL_SEC: 600, POW_SOL_TTL_SEC: 600, POW_BIND_PATH: true, POW_BIND_IPRANGE: true, POW_BIND_COUNTRY: false, POW_BIND_ASN: false, POW_BIND_TLS: false, IPV4_PREFIX: 32, IPV6_PREFIX: 64 } },
 ];
 
 const splitPattern = (pattern) => {
@@ -746,37 +745,6 @@ const parsePowCommitCookie = (value) => {
   return { ticketB64, rootB64, pathHash, nonce, exp, mac };
 };
 
-const parsePowChalCookie = (value) => {
-  if (!value || typeof value !== "string") return null;
-  const parts = value.split(".");
-  if (parts.length !== 6) return null;
-  if (parts[0] !== "v2") return null;
-  const sid = parts[1] || "";
-  const ticketB64 = parts[2] || "";
-  const indicesStr = parts[3] || "";
-  const exp = Number.parseInt(parts[4], 10);
-  const mac = parts[5] || "";
-  if (!sid || !ticketB64 || !indicesStr || !Number.isFinite(exp) || !mac) return null;
-  return { sid, ticketB64, indicesStr, exp, mac };
-};
-
-const parseIndicesStr = (value) => {
-  if (!value || typeof value !== "string") return null;
-  const parts = value.split(",");
-  if (!parts.length) return null;
-  const out = [];
-  const seen = new Set();
-  for (const part of parts) {
-    if (!part) return null;
-    const num = Number.parseInt(part, 10);
-    if (!Number.isFinite(num) || num <= 0) return null;
-    if (seen.has(num)) return null;
-    seen.add(num);
-    out.push(num);
-  }
-  return out;
-};
-
 const computePathHash = async (canonicalPath) =>
   base64UrlEncodeNoPad(await sha256Bytes(canonicalPath));
 
@@ -1240,7 +1208,7 @@ const handlePowCommit = async (request, url, nowSeconds) => {
   if (!rootBytes || rootBytes.length !== 32) {
     return respondText(origin, "invalid root", 400);
   }
-  const ttl = normalizeNumber(config.POW_CHAL_TTL_SEC, DEFAULTS.POW_CHAL_TTL_SEC) || 0;
+  const ttl = normalizeNumber(config.POW_COMMIT_TTL_SEC, DEFAULTS.POW_COMMIT_TTL_SEC) || 0;
   const exp = nowSeconds + Math.max(1, ttl);
   const mac = await hmacSha256Base64UrlNoPad(
     powSecret,
@@ -1565,7 +1533,6 @@ const handlePowOpen = async (request, url, nowSeconds) => {
   headers.set("Cache-Control", "no-store");
   setCookie(headers, DEFAULTS.POW_SOL_COOKIE, solValue, ttl);
   clearCookie(headers, DEFAULTS.POW_COMMIT_COOKIE);
-  clearCookie(headers, DEFAULTS.POW_CHAL_COOKIE);
   return new Response(JSON.stringify({ done: true }), { status: 200, headers });
 };
 
