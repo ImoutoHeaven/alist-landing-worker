@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Security Check</title>
+<style>
+:root { --bg: #111; --card: #1c1c1c; --text: #eee; --accent: #3291ff; --mono: monospace; }
+html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; position: fixed; top: 0; left: 0; right: 0; bottom: 0; }
+body { background: var(--bg); color: var(--text); font-family: sans-serif; display: flex; justify-content: center; align-items: center; box-sizing: border-box; padding: 20px; }
+.card { background: var(--card); padding: 30px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); max-width: 400px; width: 100%; text-align: center; }
+h1 { margin: 0 0 15px; font-size: 20px; font-weight: 600; }
+.spinner { width: 40px; height: 40px; margin: 20px auto; border: 4px solid rgba(255,255,255,0.1); border-left-color: var(--accent); border-radius: 50%; animation: s 1s linear infinite; }
+@keyframes s { 100% { transform: rotate(360deg); } }
+#log { font-family: var(--mono); font-size: 12px; margin-top: 20px; text-align: left; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 6px; height: 80px; overflow: hidden; position: relative; }
+.log-line { transition: opacity 0.3s ease; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.5; }
+.icon { width: 48px; height: 48px; margin: 20px auto; display: none; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1 id="t">Verifying...</h1>
+  <div id="s" class="spinner"></div>
+  <div id="i" class="icon"></div>
+  <div id="log"></div>
+</div>
+<script type="module">
+  const CFG = {
+    bindingB64: "${bindingStringB64}",
+    steps: ${steps},
+    ticketB64: "${ticketB64}",
+    pathHash: "${pathHash}",
+    hashcashBits: ${hashcashBits},
+    segmentLen: ${segmentLen},
+    reloadUrlB64: "${reloadUrlB64}",
+    apiPrefixB64: "${apiPrefixB64}",
+    esmUrlB64: "${esmUrlB64}",
+  };
+
+  const logEl = document.getElementById("log");
+  const tEl = document.getElementById("t");
+  const sEl = document.getElementById("s");
+  const iEl = document.getElementById("i");
+
+  const setStatus = (ok) => {
+    sEl.style.display = "none";
+    iEl.style.display = "block";
+    if (ok) {
+      tEl.textContent = "Redirecting...";
+      iEl.innerHTML = '<svg viewBox="0 0 52 52"><circle cx="26" cy="26" r="25" fill="#25AE88"/><path fill="none" stroke="#FFF" stroke-width="5" d="M14.1 27.2l7.1 7.2 16.7-16.8"/></svg>';
+    } else {
+      tEl.textContent = "Failed!";
+      iEl.innerHTML = '<svg viewBox="0 0 52 52"><circle cx="26" cy="26" r="25" fill="#D75A4A"/><path fill="none" stroke="#FFF" stroke-width="5" d="M16 16 36 36 M36 16 16 36"/></svg>';
+    }
+  };
+
+  const lines = [];
+  const MAX_VISIBLE_LINES = 4;
+
+  const render = () => {
+    const total = lines.length;
+    const start = Math.max(0, total - MAX_VISIBLE_LINES);
+    const visible = lines.slice(start);
+
+    logEl.innerHTML = visible.map((msg, idx) => {
+      const position = idx;
+      const opacity = position === visible.length - 1 ? 1 :
+                      position === visible.length - 2 ? 0.7 :
+                      position === visible.length - 3 ? 0.45 :
+                      0.25;
+      return `<div class="log-line" style="opacity: ${opacity}; color: rgba(238,238,238,${opacity})">${msg}</div>`;
+    }).join('');
+  };
+
+  const log = (msg) => {
+    lines.push(msg);
+    render();
+    return lines.length - 1;
+  };
+
+  const update = (idx, msg) => {
+    if (idx < 0 || idx >= lines.length) return;
+    lines[idx] = msg;
+    render();
+  };
+
+  log("Initializing...");
+
+  const decodeB64Url = (str) => {
+    try {
+      let b64 = str.replace(/-/g, "+").replace(/_/g, "/");
+      const pad = b64.length % 4;
+      if (pad) b64 += "=".repeat(4 - pad);
+      return new TextDecoder().decode(Uint8Array.from(atob(b64), c => c.charCodeAt(0)));
+    } catch(e) { return null; }
+  };
+
+  const normalizeApiPrefix = (prefix) => {
+    if (!prefix || typeof prefix !== "string") return "/__pow";
+    return prefix.endsWith("/") ? prefix.slice(0, -1) : prefix;
+  };
+
+  const postJson = async (url, body) => {
+    const res = await fetch(url, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+    });
+    if (!res.ok) {
+      throw new Error("Request Failed");
+    }
+    try {
+      return await res.json();
+    } catch {
+      return {};
+    }
+  };
+
+  (async () => {
+    try {
+      log("Loading solver...");
+      const esmUrl = decodeB64Url(CFG.esmUrlB64);
+      const module = await import(esmUrl);
+      const computePoswCommit = module.computePoswCommit;
+      if (typeof computePoswCommit !== "function") {
+        throw new Error("Solver Missing");
+      }
+      const spinIndex = log("Computing hash chain...");
+      const spinChars = "|/-\\\\";
+      let spinFrame = 0;
+      const spinTimer = setInterval(() => {
+        update(spinIndex, "Computing hash chain... " + spinChars[spinFrame++ % spinChars.length]);
+      }, 120);
+      const binding = decodeB64Url(CFG.bindingB64);
+      const commit = await computePoswCommit(binding, CFG.steps, {
+        hashcashBits: CFG.hashcashBits,
+        segmentLen: CFG.segmentLen,
+      });
+      clearInterval(spinTimer);
+      update(spinIndex, "Computing hash chain... done");
+      // log("Root: " + String(commit.rootB64 || "").slice(0, 12) + "...");
+      const apiPrefix = normalizeApiPrefix(decodeB64Url(CFG.apiPrefixB64));
+      log("Submitting commit...");
+      await postJson(apiPrefix + "/commit", {
+        ticketB64: CFG.ticketB64,
+        rootB64: commit.rootB64,
+        pathHash: CFG.pathHash,
+        nonce: commit.nonce,
+      });
+      log("Requesting challenge...");
+      let state = await postJson(apiPrefix + "/challenge", {});
+      if (
+        !state ||
+        !Array.isArray(state.indices) ||
+        typeof state.sid !== "string" ||
+        typeof state.cursor !== "number" ||
+        typeof state.token !== "string"
+      ) {
+        throw new Error("Challenge Failed");
+      }
+      while (state && state.done !== true) {
+        if (!Array.isArray(state.indices) || state.indices.length === 0) {
+          throw new Error("Challenge Failed");
+        }
+        log("Opening proofs (" + state.indices.length + ")...");
+        const opens = await commit.open(state.indices);
+        state = await postJson(apiPrefix + "/open", {
+          sid: state.sid,
+          cursor: state.cursor,
+          token: state.token,
+          opens,
+        });
+        if (state && state.done === true) break;
+        if (
+          !state ||
+          !Array.isArray(state.indices) ||
+          typeof state.sid !== "string" ||
+          typeof state.cursor !== "number" ||
+          typeof state.token !== "string"
+        ) {
+          throw new Error("Challenge Failed");
+        }
+      }
+      log("Access granted. Redirecting...");
+      setStatus(true);
+      document.title = "Redirecting";
+      const target = decodeB64Url(CFG.reloadUrlB64);
+      window.location.replace(target);
+    } catch (e) {
+      log("ERROR: " + (e && e.message ? e.message : String(e)));
+      setStatus(false);
+    }
+  })();
+</script>
+</body>
+</html>
