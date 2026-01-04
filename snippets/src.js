@@ -286,10 +286,14 @@ const encodeUint32BE = (value) => {
   return out;
 };
 
-const u32FromBytes = (bytes) => {
-  if (!bytes || bytes.length < 4) return 0;
-  return ((bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3]) >>> 0;
-};
+const u32BE = (bytes, offset) =>
+  ((bytes[offset] << 24) |
+    (bytes[offset + 1] << 16) |
+    (bytes[offset + 2] << 8) |
+    bytes[offset + 3]) >>> 0;
+
+const rotl = (value, count) =>
+  ((value << count) | (value >>> (32 - count))) >>> 0;
 
 const bytesEqual = (a, b) => {
   if (!a || !b || a.length !== b.length) return false;
@@ -569,15 +573,37 @@ const randomBase64Url = (byteLength) => {
   return base64UrlEncodeNoPad(bytes);
 };
 
-const mulberry32 = (seed) => {
-  let a = Number(seed) >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+const makeXoshiro128ss = (seed16) => {
+  let a = u32BE(seed16, 0);
+  let b = u32BE(seed16, 4);
+  let c = u32BE(seed16, 8);
+  let d = u32BE(seed16, 12);
+  if ((a | b | c | d) === 0) d = 1;
+
+  const nextU32 = () => {
+    const result = rotl(Math.imul(a, 5) >>> 0, 7);
+    const out = Math.imul(result, 9) >>> 0;
+    const t = (b << 9) >>> 0;
+    c ^= a;
+    d ^= b;
+    b ^= c;
+    a ^= d;
+    c ^= t;
+    d = rotl(d, 11);
+    return out >>> 0;
   };
+
+  const nextFloat = () => nextU32() / 4294967296;
+  const randInt = (span) => Math.floor(nextFloat() * span);
+  const shuffle = (array) => {
+    for (let i = array.length - 1; i > 0; i--) {
+      const j = randInt(i + 1);
+      const tmp = array[i];
+      array[i] = array[j];
+      array[j] = tmp;
+    }
+  };
+  return { nextU32, nextFloat, randInt, shuffle };
 };
 
 const derivePowSid = async (powSecret, cfgId, commitMac) => {
@@ -585,9 +611,9 @@ const derivePowSid = async (powSecret, cfgId, commitMac) => {
   return base64UrlEncodeNoPad(bytes.slice(0, 12));
 };
 
-const derivePowSeedU32 = async (powSecret, cfgId, commitMac, sid) => {
+const derivePowSeedBytes16 = async (powSecret, cfgId, commitMac, sid) => {
   const bytes = await hmacSha256(powSecret, `pow-seed-v3|${cfgId}|${commitMac}|${sid}`);
-  return u32FromBytes(bytes);
+  return bytes.slice(0, 16);
 };
 
 const makePowStateToken = async (powSecret, cfgId, sid, commitMac, cursor, batchLen) =>
@@ -945,12 +971,32 @@ const getPowSecret = (config) => {
   return powToken || signSecret;
 };
 
-const sampleIndicesDeterministic = ({
+const bucketIdOf = (idx, max, bucketCount) => {
+  const value = Math.floor(((idx - 1) * bucketCount) / max);
+  return Math.max(0, Math.min(bucketCount - 1, value));
+};
+
+const bucketRange = (bucket, max, bucketCount) => {
+  const start = 1 + Math.floor((bucket * max) / bucketCount);
+  const end = 1 + Math.floor(((bucket + 1) * max) / bucketCount);
+  const lo = Math.max(1, Math.min(max, start));
+  const hi = Math.max(lo, Math.min(max + 1, end));
+  return { lo, hi };
+};
+
+const pickFromBucket = (rng, bucket, max, bucketCount) => {
+  const { lo, hi } = bucketRange(bucket, max, bucketCount);
+  const span = Math.max(1, hi - lo);
+  const idx = lo + rng.randInt(span);
+  return Math.max(1, Math.min(max, idx));
+};
+
+const sampleIndicesDeterministicV2 = ({
   maxIndex,
   extraCount,
   forceEdge1,
   forceEdgeLast,
-  seedU32,
+  rng,
 }) => {
   const max = Math.floor(Number(maxIndex) || 0);
   if (max <= 0) return [];
@@ -962,28 +1008,42 @@ const sampleIndicesDeterministic = ({
   if (target <= out.size) {
     return Array.from(out).sort((a, b) => a - b);
   }
-  const rng = mulberry32(seedU32);
   const bucketCount = Math.min(64, Math.max(1, Math.floor(max / 128)));
-  const perBucket = Math.ceil((target - out.size) / bucketCount);
-  for (let b = 0; b < bucketCount && out.size < target; b++) {
-    const start = 1 + Math.floor((b * max) / bucketCount);
-    const end = 1 + Math.floor(((b + 1) * max) / bucketCount);
-    const span = Math.max(1, end - start);
-    for (let i = 0; i < perBucket && out.size < target; i++) {
-      const idx = start + Math.floor(rng() * span);
-      out.add(Math.max(1, Math.min(max, idx)));
-    }
+  const covered = new Array(bucketCount).fill(false);
+  for (const v of out) {
+    covered[bucketIdOf(v, max, bucketCount)] = true;
+  }
+  let need = target - out.size;
+  const buckets = [];
+  for (let b = 0; b < bucketCount; b++) {
+    if (!covered[b]) buckets.push(b);
+  }
+  rng.shuffle(buckets);
+  const coverN = Math.min(need, buckets.length);
+  for (let i = 0; i < coverN; i++) {
+    const bucket = buckets[i];
+    const idx = pickFromBucket(rng, bucket, max, bucketCount);
+    out.add(idx);
+    covered[bucket] = true;
+    need = target - out.size;
+    if (need <= 0) break;
   }
   let attempts = 0;
-  const maxAttempts = max * 4;
-  while (out.size < target && attempts < maxAttempts) {
-    const idx = 1 + Math.floor(rng() * max);
+  const maxAttempts = Math.max(256, need * 32);
+  while (need > 0 && attempts < maxAttempts) {
+    const bucket = rng.randInt(bucketCount);
+    const idx = pickFromBucket(rng, bucket, max, bucketCount);
+    const before = out.size;
     out.add(idx);
+    if (out.size !== before) need -= 1;
     attempts += 1;
   }
-  if (out.size < target) {
-    for (let i = 1; i <= max && out.size < target; i++) {
-      out.add(i);
+  if (need > 0) {
+    for (let i = 1; i <= max && need > 0; i++) {
+      if (!out.has(i)) {
+        out.add(i);
+        need -= 1;
+      }
     }
   }
   return Array.from(out).sort((a, b) => a - b);
@@ -1099,13 +1159,14 @@ const handlePowChallenge = async (request, url, nowSeconds) => {
     )
   );
   const sid = await derivePowSid(powSecret, ticket.cfgId, commit.mac);
-  const seedU32 = await derivePowSeedU32(powSecret, ticket.cfgId, commit.mac, sid);
-  const indices = sampleIndicesDeterministic({
+  const seed16 = await derivePowSeedBytes16(powSecret, ticket.cfgId, commit.mac, sid);
+  const rng = makeXoshiro128ss(seed16);
+  const indices = sampleIndicesDeterministicV2({
     maxIndex: ticket.L,
     extraCount: sampleK * rounds,
     forceEdge1: config.POW_FORCE_EDGE_1 === true,
     forceEdgeLast: config.POW_FORCE_EDGE_LAST === true || hashcashBits > 0,
-    seedU32,
+    rng,
   });
   if (!indices.length) return deny(origin, "challenge invalid");
   const batchLen = Math.max(
@@ -1218,13 +1279,19 @@ const handlePowOpen = async (request, url, nowSeconds) => {
       normalizeNumber(config.POW_HASHCASH_BITS, DEFAULTS.POW_HASHCASH_BITS)
     )
   );
-  const seedU32 = await derivePowSeedU32(powSecret, ticket.cfgId, commit.mac, sidExpected);
-  const indices = sampleIndicesDeterministic({
+  const seed16 = await derivePowSeedBytes16(
+    powSecret,
+    ticket.cfgId,
+    commit.mac,
+    sidExpected
+  );
+  const rng = makeXoshiro128ss(seed16);
+  const indices = sampleIndicesDeterministicV2({
     maxIndex: ticket.L,
     extraCount: sampleK * rounds,
     forceEdge1: config.POW_FORCE_EDGE_1 === true,
     forceEdgeLast: config.POW_FORCE_EDGE_LAST === true || hashcashBits > 0,
-    seedU32,
+    rng,
   });
   if (!indices || !indices.length) return deny(origin, "challenge invalid");
   if (hashcashBits > 0 && !indices.includes(ticket.L)) {
