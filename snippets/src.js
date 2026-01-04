@@ -1392,13 +1392,13 @@ const handlePowOpen = async (request, url, nowSeconds) => {
       )
     )
   );
-  const spineSet =
-    spineK > 0 ? pickSpineSet(indices, ticket.L, segmentLen, spineK) : null;
   if (hashcashBits > 0 && !indices.includes(ticket.L)) {
     return deny(origin, "challenge invalid");
   }
   const expectedBatch = indices.slice(cursor, cursor + batchMax);
   if (!expectedBatch.length) return deny(origin, "challenge invalid");
+  const spineSet =
+    spineK > 0 ? pickSpineSet(expectedBatch, ticket.L, segmentLen, spineK) : null;
   const batchSize = opens.length;
   if (batchSize !== expectedBatch.length) {
     return deny(origin, "challenge invalid");

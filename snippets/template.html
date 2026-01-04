@@ -57,9 +57,6 @@ h1 { margin: 0 0 15px; font-size: 20px; font-weight: 600; }
 
   const lines = [];
   const MAX_VISIBLE_LINES = 4;
-  const spineState = {
-    remaining: Math.max(0, Math.floor(Number(CFG.spineK) || 0)),
-  };
 
   const render = () => {
     const total = lines.length;
@@ -94,14 +91,14 @@ h1 { margin: 0 0 15px; font-size: 20px; font-weight: 600; }
     return effectiveSegmentLen > 1;
   };
 
-  const pickSpineSetForBatch = (indices, totalSteps, segmentLen, state) => {
+  const pickSpineSetForBatch = (indices, totalSteps, segmentLen, spineK) => {
     const set = new Set();
-    if (!state || state.remaining <= 0) return set;
+    const target = Math.max(0, Math.floor(Number(spineK) || 0));
+    if (target <= 0) return set;
     for (const idx of indices) {
-      if (state.remaining <= 0) break;
+      if (set.size >= target) break;
       if (!isSpineEligible(idx, totalSteps, segmentLen)) continue;
       set.add(idx);
-      state.remaining -= 1;
     }
     return set;
   };
@@ -214,7 +211,7 @@ h1 { margin: 0 0 15px; font-size: 20px; font-weight: 600; }
           state.indices,
           totalSteps,
           CFG.segmentLen,
-          spineState
+          CFG.spineK
         );
         const opens = await commit.open(state.indices, { spineSet });
         state = await postJson(apiPrefix + "/open", {
