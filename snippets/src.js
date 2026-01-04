@@ -183,6 +183,26 @@ const base64UrlDecodeToBytes = (b64u) => {
   }
 };
 
+const BASE64URL_RE = /^[A-Za-z0-9_-]+$/;
+const B64_HASH_MAX_LEN = 64;
+const B64_TICKET_MAX_LEN = 256;
+const NONCE_MIN_LEN = 16;
+const NONCE_MAX_LEN = 64;
+const SID_LEN = 16;
+const TOKEN_MIN_LEN = 16;
+const TOKEN_MAX_LEN = 64;
+const MAX_PROOF_SIBS = 64;
+
+const isBase64Url = (value, minLen, maxLen) => {
+  if (typeof value !== "string") return false;
+  const len = value.length;
+  if (len < minLen || len > maxLen) return false;
+  return BASE64URL_RE.test(value);
+};
+
+const isBase64UrlOrAny = (value, minLen, maxLen) =>
+  value === "any" || isBase64Url(value, minLen, maxLen);
+
 const utf8ToBytes = (value) => encoder.encode(String(value ?? ""));
 const bytesToUtf8 = (bytes) => decoder.decode(bytes);
 const normalizeNumber = (value, fallback) => {
@@ -729,6 +749,7 @@ const encodePowTicket = (ticket) => {
 };
 
 const parsePowTicket = (ticketB64) => {
+  if (!isBase64Url(ticketB64, 1, B64_TICKET_MAX_LEN)) return null;
   const bytes = base64UrlDecodeToBytes(ticketB64);
   if (!bytes) return null;
   const raw = bytesToUtf8(bytes);
@@ -743,6 +764,8 @@ const parsePowTicket = (ticketB64) => {
   if (!Number.isFinite(v) || !Number.isFinite(e) || !Number.isFinite(L)) return null;
   if (!Number.isFinite(cfgId) || cfgId < 0) return null;
   if (!r || !mac) return null;
+  if (!isBase64Url(r, 1, B64_HASH_MAX_LEN)) return null;
+  if (!isBase64Url(mac, 1, B64_HASH_MAX_LEN)) return null;
   return { v, e, L, r, cfgId, mac };
 };
 
@@ -755,6 +778,8 @@ const parsePowSolCookie = (value) => {
   const exp = Number.parseInt(parts[2], 10);
   const mac = parts[3] || "";
   if (!ticketB64 || !Number.isFinite(exp) || !mac) return null;
+  if (!isBase64Url(ticketB64, 1, B64_TICKET_MAX_LEN)) return null;
+  if (!isBase64Url(mac, 1, B64_HASH_MAX_LEN)) return null;
   return { ticketB64, exp, mac };
 };
 
@@ -772,6 +797,11 @@ const parsePowCommitCookie = (value) => {
   if (!ticketB64 || !rootB64 || !pathHash || !nonce || !Number.isFinite(exp) || !mac) {
     return null;
   }
+  if (!isBase64Url(ticketB64, 1, B64_TICKET_MAX_LEN)) return null;
+  if (!isBase64Url(rootB64, 1, B64_HASH_MAX_LEN)) return null;
+  if (!isBase64UrlOrAny(pathHash, 1, B64_HASH_MAX_LEN)) return null;
+  if (!isBase64Url(nonce, NONCE_MIN_LEN, NONCE_MAX_LEN)) return null;
+  if (!isBase64Url(mac, 1, B64_HASH_MAX_LEN)) return null;
   return { ticketB64, rootB64, pathHash, nonce, exp, mac };
 };
 
@@ -1048,6 +1078,16 @@ const sampleIndicesDeterministicV2 = ({
   }
   const result = Array.from(out);
   rng.shuffle(result);
+  const anchors = [];
+  if (forceEdge1 && max >= 1) anchors.push(1);
+  if (forceEdgeLast && max >= 1 && max !== 1) anchors.push(max);
+  if (anchors.length) {
+    for (const anchor of anchors) {
+      const idx = result.indexOf(anchor);
+      if (idx >= 0) result.splice(idx, 1);
+    }
+    return anchors.concat(result);
+  }
   return result;
 };
 
@@ -1064,6 +1104,14 @@ const handlePowCommit = async (request, url, nowSeconds) => {
   if (!ticketB64 || !rootB64 || !nonce) {
     return respondText(origin, "invalid payload", 400);
   }
+  if (
+    !isBase64Url(ticketB64, 1, B64_TICKET_MAX_LEN) ||
+    !isBase64Url(rootB64, 1, B64_HASH_MAX_LEN) ||
+    !isBase64Url(nonce, NONCE_MIN_LEN, NONCE_MAX_LEN) ||
+    pathHash.length > B64_HASH_MAX_LEN
+  ) {
+    return respondText(origin, "invalid payload", 400);
+  }
   const ticket = parsePowTicket(ticketB64);
   if (!ticket) return deny(origin, "ticket invalid");
   const baseConfig = getConfigById(ticket.cfgId);
@@ -1075,10 +1123,10 @@ const handlePowCommit = async (request, url, nowSeconds) => {
   const powVersion = normalizeNumber(config.POW_VERSION, DEFAULTS.POW_VERSION);
   if (ticket.v !== powVersion) return deny(origin, "ticket invalid");
   if (isExpired(ticket.e, nowSeconds)) return deny(origin, "ticket expired");
-  if (nonce.length > 128) {
+  const bindPath = config.POW_BIND_PATH !== false;
+  if (bindPath && !isBase64Url(pathHash, 1, B64_HASH_MAX_LEN)) {
     return respondText(origin, "invalid payload", 400);
   }
-  const bindPath = config.POW_BIND_PATH !== false;
   const normalizedPathHash = bindPath ? pathHash : "any";
   if (bindPath && !normalizedPathHash) {
     return respondText(origin, "invalid path", 400);
@@ -1242,6 +1290,12 @@ const handlePowOpen = async (request, url, nowSeconds) => {
   if (!sid || !token || !opens || !Number.isFinite(cursor) || cursor < 0) {
     return respondText(origin, "invalid payload", 400);
   }
+  if (
+    !isBase64Url(sid, SID_LEN, SID_LEN) ||
+    !isBase64Url(token, TOKEN_MIN_LEN, TOKEN_MAX_LEN)
+  ) {
+    return respondText(origin, "invalid payload", 400);
+  }
   const batchMax = Math.max(
     1,
     Math.min(
@@ -1314,6 +1368,37 @@ const handlePowOpen = async (request, url, nowSeconds) => {
     }
     const expectedIdx = expectedBatch[i];
     if (idx !== expectedIdx) return deny(origin, "challenge invalid");
+    const hPrev = open && typeof open.hPrev === "string" ? open.hPrev : "";
+    const hCurr = open && typeof open.hCurr === "string" ? open.hCurr : "";
+    if (
+      !isBase64Url(hPrev, 1, B64_HASH_MAX_LEN) ||
+      !isBase64Url(hCurr, 1, B64_HASH_MAX_LEN)
+    ) {
+      return respondText(origin, "invalid payload", 400);
+    }
+    const proofPrev = open && open.proofPrev;
+    const proofCurr = open && open.proofCurr;
+    if (
+      !proofPrev ||
+      !proofCurr ||
+      !Array.isArray(proofPrev.sibs) ||
+      !Array.isArray(proofCurr.sibs)
+    ) {
+      return respondText(origin, "invalid payload", 400);
+    }
+    if (proofPrev.sibs.length > MAX_PROOF_SIBS || proofCurr.sibs.length > MAX_PROOF_SIBS) {
+      return respondText(origin, "invalid payload", 400);
+    }
+    for (const sib of proofPrev.sibs) {
+      if (!isBase64Url(String(sib || ""), 1, B64_HASH_MAX_LEN)) {
+        return respondText(origin, "invalid payload", 400);
+      }
+    }
+    for (const sib of proofCurr.sibs) {
+      if (!isBase64Url(String(sib || ""), 1, B64_HASH_MAX_LEN)) {
+        return respondText(origin, "invalid payload", 400);
+      }
+    }
     batch.push({ idx, open });
   }
   const bindingValues = await getPowBindingValuesWithPathHash(
@@ -1357,7 +1442,6 @@ const handlePowOpen = async (request, url, nowSeconds) => {
     }
     const proofPrev = open.proofPrev;
     const proofCurr = open.proofCurr;
-    if (!proofPrev || !proofCurr) return respondText(origin, "invalid payload", 400);
     const effectiveSegmentLen = Math.min(segmentLen, idx);
     let prevBytes = hPrevBytes;
     const firstIdx = idx - effectiveSegmentLen;
