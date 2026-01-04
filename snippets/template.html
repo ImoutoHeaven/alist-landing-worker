@@ -32,6 +32,7 @@ h1 { margin: 0 0 15px; font-size: 20px; font-weight: 600; }
     pathHash: "__PATH_HASH__",
     hashcashBits: __HASHCASH_BITS__,
     segmentLen: __SEGMENT_LEN__,
+    spineK: __SPINE_K__,
     reloadUrlB64: "__RELOAD_URL_B64__",
     apiPrefixB64: "__API_PREFIX_B64__",
     esmUrlB64: "__ESM_URL_B64__",
@@ -56,6 +57,9 @@ h1 { margin: 0 0 15px; font-size: 20px; font-weight: 600; }
 
   const lines = [];
   const MAX_VISIBLE_LINES = 4;
+  const spineState = {
+    remaining: Math.max(0, Math.floor(Number(CFG.spineK) || 0)),
+  };
 
   const render = () => {
     const total = lines.length;
@@ -82,6 +86,24 @@ h1 { margin: 0 0 15px; font-size: 20px; font-weight: 600; }
     if (idx < 0 || idx >= lines.length) return;
     lines[idx] = msg;
     render();
+  };
+
+  const isSpineEligible = (idx, totalSteps, segmentLen) => {
+    if (idx === 1 || idx === totalSteps) return false;
+    const effectiveSegmentLen = Math.min(segmentLen, idx);
+    return effectiveSegmentLen > 1;
+  };
+
+  const pickSpineSetForBatch = (indices, totalSteps, segmentLen, state) => {
+    const set = new Set();
+    if (!state || state.remaining <= 0) return set;
+    for (const idx of indices) {
+      if (state.remaining <= 0) break;
+      if (!isSpineEligible(idx, totalSteps, segmentLen)) continue;
+      set.add(idx);
+      state.remaining -= 1;
+    }
+    return set;
   };
 
   log("Initializing...");
@@ -182,12 +204,19 @@ h1 { margin: 0 0 15px; font-size: 20px; font-weight: 600; }
       ) {
         throw new Error("Challenge Failed");
       }
+      const totalSteps = typeof state.L === "number" ? state.L : CFG.steps;
       while (state && state.done !== true) {
         if (!Array.isArray(state.indices) || state.indices.length === 0) {
           throw new Error("Challenge Failed");
         }
         log("Opening proofs (" + state.indices.length + ")...");
-        const opens = await commit.open(state.indices);
+        const spineSet = pickSpineSetForBatch(
+          state.indices,
+          totalSteps,
+          CFG.segmentLen,
+          spineState
+        );
+        const opens = await commit.open(state.indices, { spineSet });
         state = await postJson(apiPrefix + "/open", {
           sid: state.sid,
           cursor: state.cursor,

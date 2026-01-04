@@ -61,6 +61,13 @@ const normalizeSegmentLen = (value, maxSteps) => {
   return Math.max(1, Math.min(max, Math.floor(num)));
 };
 
+const computeMidIndex = (idx, segmentLen) => {
+  const effectiveSegmentLen = Math.min(segmentLen, idx);
+  if (effectiveSegmentLen <= 1) return null;
+  const offset = Math.max(1, Math.floor(effectiveSegmentLen / 2));
+  return idx - offset;
+};
+
 const shouldYield = (counter, every) =>
   Number.isFinite(every) && every > 0 && counter % every === 0;
 
@@ -190,10 +197,11 @@ export async function computePoswCommit(bindingString, steps, options = {}) {
     }
     const rootB64 = base64UrlEncodeNoPad(root);
 
-    const open = async (indices) => {
+    const open = async (indices, options = {}) => {
       if (!Array.isArray(indices) || indices.length === 0) {
         throw new Error("indices required");
       }
+      const spineSet = options && options.spineSet instanceof Set ? options.spineSet : null;
       const out = [];
       const seen = new Set();
       for (const raw of indices) {
@@ -209,13 +217,24 @@ export async function computePoswCommit(bindingString, steps, options = {}) {
         const prevIdx = idx - effectiveSegmentLen;
         const hPrev = chain[prevIdx];
         const hCurr = chain[idx];
-        out.push({
+        const wantsMid = spineSet && spineSet.has(idx);
+        const midIdx = wantsMid ? computeMidIndex(idx, segmentLen) : null;
+        if (wantsMid && midIdx === null) {
+          throw new Error("indices invalid");
+        }
+        const entry = {
           i: idx,
           hPrev: base64UrlEncodeNoPad(hPrev),
           hCurr: base64UrlEncodeNoPad(hCurr),
           proofPrev: buildProof(levels, prevIdx),
           proofCurr: buildProof(levels, idx),
-        });
+        };
+        if (wantsMid) {
+          const hMid = chain[midIdx];
+          entry.hMid = base64UrlEncodeNoPad(hMid);
+          entry.proofMid = buildProof(levels, midIdx);
+        }
+        out.push(entry);
       }
       return out;
     };

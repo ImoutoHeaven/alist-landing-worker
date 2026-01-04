@@ -14,6 +14,7 @@ const DEFAULTS = {
   POW_HASHCASH_BITS: 3,
   POW_SEGMENT_LEN: 5,
   POW_SAMPLE_K: 13,
+  POW_SPINE_K: 0,
   POW_CHAL_ROUNDS: 8,
   POW_OPEN_BATCH: 13,
   POW_FORCE_EDGE_1: true,
@@ -880,6 +881,7 @@ const buildPowChallengeHtml = ({
   pathHash,
   hashcashBits,
   segmentLen,
+  spineK,
   reloadUrlB64,
   apiPrefixB64,
   esmUrlB64,
@@ -890,6 +892,7 @@ const buildPowChallengeHtml = ({
   .replace('__PATH_HASH__', pathHash)
   .replace('__HASHCASH_BITS__', String(hashcashBits))
   .replace('__SEGMENT_LEN__', String(segmentLen))
+  .replace('__SPINE_K__', String(spineK))
   .replace('__RELOAD_URL_B64__', reloadUrlB64)
   .replace('__API_PREFIX_B64__', apiPrefixB64)
   .replace('__ESM_URL_B64__', esmUrlB64);
@@ -914,6 +917,10 @@ const respondPowChallengeHtml = async (
     Math.floor(
       normalizeNumber(config.POW_HASHCASH_BITS, DEFAULTS.POW_HASHCASH_BITS)
     )
+  );
+  const spineK = Math.max(
+    0,
+    Math.floor(normalizeNumber(config.POW_SPINE_K, DEFAULTS.POW_SPINE_K))
   );
   const bindingValues = await getPowBindingValues(request, canonicalPath, config);
   if (!bindingValues) {
@@ -959,6 +966,7 @@ const respondPowChallengeHtml = async (
         )
       )
     ),
+    spineK,
     reloadUrlB64,
     apiPrefixB64,
     esmUrlB64,
@@ -1019,6 +1027,27 @@ const pickFromBucket = (rng, bucket, max, bucketCount) => {
   const span = Math.max(1, hi - lo);
   const idx = lo + rng.randInt(span);
   return Math.max(1, Math.min(max, idx));
+};
+
+const computeMidIndex = (idx, segmentLen) => {
+  const effectiveSegmentLen = Math.min(segmentLen, idx);
+  if (effectiveSegmentLen <= 1) return null;
+  const offset = Math.max(1, Math.floor(effectiveSegmentLen / 2));
+  return idx - offset;
+};
+
+const pickSpineSet = (indices, maxIndex, segmentLen, spineK) => {
+  const target = Math.max(0, Math.floor(spineK || 0));
+  const out = new Set();
+  if (!target || !Array.isArray(indices)) return out;
+  for (const idx of indices) {
+    if (out.size >= target) break;
+    if (!Number.isFinite(idx)) continue;
+    if (idx === 1 || idx === maxIndex) continue;
+    if (computeMidIndex(idx, segmentLen) === null) continue;
+    out.add(idx);
+  }
+  return out;
 };
 
 const sampleIndicesDeterministicV2 = ({
@@ -1335,6 +1364,10 @@ const handlePowOpen = async (request, url, nowSeconds) => {
       normalizeNumber(config.POW_HASHCASH_BITS, DEFAULTS.POW_HASHCASH_BITS)
     )
   );
+  const spineK = Math.max(
+    0,
+    Math.floor(normalizeNumber(config.POW_SPINE_K, DEFAULTS.POW_SPINE_K))
+  );
   const seed16 = await derivePowSeedBytes16(
     powSecret,
     ticket.cfgId,
@@ -1350,6 +1383,17 @@ const handlePowOpen = async (request, url, nowSeconds) => {
     rng,
   });
   if (!indices || !indices.length) return deny(origin, "challenge invalid");
+  const segmentLen = Math.max(
+    1,
+    Math.min(
+      ticket.L,
+      Math.floor(
+        normalizeNumber(config.POW_SEGMENT_LEN, DEFAULTS.POW_SEGMENT_LEN)
+      )
+    )
+  );
+  const spineSet =
+    spineK > 0 ? pickSpineSet(indices, ticket.L, segmentLen, spineK) : null;
   if (hashcashBits > 0 && !indices.includes(ticket.L)) {
     return deny(origin, "challenge invalid");
   }
@@ -1368,6 +1412,7 @@ const handlePowOpen = async (request, url, nowSeconds) => {
     }
     const expectedIdx = expectedBatch[i];
     if (idx !== expectedIdx) return deny(origin, "challenge invalid");
+    const requiresMid = spineSet && spineSet.has(idx);
     const hPrev = open && typeof open.hPrev === "string" ? open.hPrev : "";
     const hCurr = open && typeof open.hCurr === "string" ? open.hCurr : "";
     if (
@@ -1399,7 +1444,25 @@ const handlePowOpen = async (request, url, nowSeconds) => {
         return respondText(origin, "invalid payload", 400);
       }
     }
-    batch.push({ idx, open });
+    if (requiresMid) {
+      const hMid = open && typeof open.hMid === "string" ? open.hMid : "";
+      if (!isBase64Url(hMid, 1, B64_HASH_MAX_LEN)) {
+        return respondText(origin, "invalid payload", 400);
+      }
+      const proofMid = open && open.proofMid;
+      if (!proofMid || !Array.isArray(proofMid.sibs)) {
+        return respondText(origin, "invalid payload", 400);
+      }
+      if (proofMid.sibs.length > MAX_PROOF_SIBS) {
+        return respondText(origin, "invalid payload", 400);
+      }
+      for (const sib of proofMid.sibs) {
+        if (!isBase64Url(String(sib || ""), 1, B64_HASH_MAX_LEN)) {
+          return respondText(origin, "invalid payload", 400);
+        }
+      }
+    }
+    batch.push({ idx, open, requiresMid });
   }
   const bindingValues = await getPowBindingValuesWithPathHash(
     request,
@@ -1422,19 +1485,11 @@ const handlePowOpen = async (request, url, nowSeconds) => {
   if (!rootBytes || rootBytes.length !== 32) return deny(origin, "commit invalid");
   const leafCount = Math.max(0, Math.floor(ticket.L)) + 1;
   if (leafCount < 2) return deny(origin, "ticket invalid");
-  const segmentLen = Math.max(
-    1,
-    Math.min(
-      ticket.L,
-      Math.floor(
-        normalizeNumber(config.POW_SEGMENT_LEN, DEFAULTS.POW_SEGMENT_LEN)
-      )
-    )
-  );
   const seedHash = await hashPoswSeed(bindingString, commit.nonce);
   for (const entry of batch) {
     const idx = entry.idx;
     const open = entry.open;
+    const requiresMid = entry.requiresMid === true;
     const hPrevBytes = base64UrlDecodeToBytes(String(open.hPrev || ""));
     const hCurrBytes = base64UrlDecodeToBytes(String(open.hCurr || ""));
     if (!hPrevBytes || !hCurrBytes || hPrevBytes.length !== 32 || hCurrBytes.length !== 32) {
@@ -1446,13 +1501,34 @@ const handlePowOpen = async (request, url, nowSeconds) => {
     let prevBytes = hPrevBytes;
     const firstIdx = idx - effectiveSegmentLen;
     if (firstIdx < 0) return deny(origin, "challenge invalid");
+    const midIdx = requiresMid ? computeMidIndex(idx, segmentLen) : null;
+    let midExpected = null;
     for (let step = 1; step <= effectiveSegmentLen; step++) {
       const expected = await hashPoswStep(prevBytes, firstIdx + step);
+      if (requiresMid && firstIdx + step === midIdx) {
+        midExpected = expected;
+      }
       if (step === effectiveSegmentLen) {
         if (!bytesEqual(expected, hCurrBytes)) return deny(origin, "challenge invalid");
       } else {
         prevBytes = expected;
       }
+    }
+    if (requiresMid) {
+      if (midIdx === null || !midExpected) return deny(origin, "challenge invalid");
+      const hMidBytes = base64UrlDecodeToBytes(String(open.hMid || ""));
+      if (!hMidBytes || hMidBytes.length !== 32) {
+        return respondText(origin, "invalid payload", 400);
+      }
+      if (!bytesEqual(midExpected, hMidBytes)) return deny(origin, "challenge invalid");
+      const okMid = await verifyMerkleProof(
+        rootBytes,
+        hMidBytes,
+        midIdx,
+        leafCount,
+        open.proofMid
+      );
+      if (!okMid) return deny(origin, "challenge invalid");
     }
     if (idx === 1 && !bytesEqual(hPrevBytes, seedHash)) {
       return deny(origin, "challenge invalid");
