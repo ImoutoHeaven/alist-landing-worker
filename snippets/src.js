@@ -14,7 +14,7 @@ const DEFAULTS = {
   POW_HASHCASH_BITS: 3,
   POW_SEGMENT_LEN: 5,
   POW_SAMPLE_K: 13,
-  POW_SPINE_K: 0,
+  POW_SPINE_K: 2,
   POW_CHAL_ROUNDS: 8,
   POW_OPEN_BATCH: 13,
   POW_FORCE_EDGE_1: true,
@@ -32,7 +32,7 @@ const DEFAULTS = {
   POW_COMMIT_COOKIE: "__Host-pow_commit",
   POW_SOL_COOKIE: "__Host-pow_sol",
   POW_ESM_URL:
-    "https://cdn.jsdelivr.net/gh/ImoutoHeaven/alist-landing-worker@7929375cf5ae7d97b82cfd56360ac59c0ea8936c/snippets/esm/esm.js",
+    "https://cdn.jsdelivr.net/gh/ImoutoHeaven/alist-landing-worker@cbdcae5dd7a8824b9922e4424026d9236f2d2a28/snippets/esm/esm.js",
 };
 
 const CONFIG = [
