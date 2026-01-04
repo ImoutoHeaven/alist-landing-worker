@@ -1046,7 +1046,9 @@ const sampleIndicesDeterministicV2 = ({
       }
     }
   }
-  return Array.from(out).sort((a, b) => a - b);
+  const result = Array.from(out);
+  rng.shuffle(result);
+  return result;
 };
 
 const handlePowCommit = async (request, url, nowSeconds) => {
