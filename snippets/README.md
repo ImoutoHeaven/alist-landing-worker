@@ -154,6 +154,7 @@ PoSW 链本身不是“抗并行”的密码学原语：攻击者可以尝试在
 | 参数 | 默认值 | 意图 / 作用 |
 |---|---:|---|
 | `powcheck` | `false` | 是否启用 PoW 前置；生产需在 `CONFIG` 显式开启。 |
+| `enableInfoEndpoint` | `false` | 是否启用 `/info?path=...` 的“路径代入”特殊逻辑；默认关闭（`/info` 被当作普通路径）。 |
 | `stripDownloadPrefix` | `false` | 是否把 `/d/...`、`/p/...` 统一映射为真实路径参与鉴权/绑定（减少下载前缀带来的路径差异）。 |
 | `POW_VERSION` | `3` | PoW 协议版本号；用于票据/验证兼容。 |
 | `POW_API_PREFIX` | `"/__pow"` | PoW API 前缀（`/commit`、`/challenge`、`/open`）。 |
@@ -225,7 +226,7 @@ const CONFIG = [
 - `expire` 为 Unix 时间戳（秒，十进制整数）。服务端判断过期条件为 `expire > 0 && expire < nowSeconds`，建议只签发短期过期值并由后端做上限控制。
 - `authPath` 是参与签名的“规范化路径”，必须与脚本一致：
   - 普通请求：`authPath = decodeURIComponent(pathname)`，保证以 `/` 开头；若 `stripDownloadPrefix: true` 则签名的是剥离 `/d`、`/p` 前缀后的路径。
-  - `/info` 请求：`authPath` 来自 `path` 参数（见下节），**不会**执行 `stripDownloadPrefix`。
+  - `/info` 请求：仅当 `enableInfoEndpoint: true` 时，`authPath` 才来自 `path` 参数（见下节），且 **不会**执行 `stripDownloadPrefix`；否则 `/info` 与普通路径一致。
 
 > 实践建议：将 `sign` 作为 URL 参数传输时，请对其做 URL 编码（尤其在包含 `=` padding 时）。
 
@@ -233,7 +234,7 @@ const CONFIG = [
 
 ## `/info` 端点说明（路径代入）
 
-脚本内置一个特殊路径 `/info`：它允许通过查询参数把“需要鉴权/绑定的目标路径”代入到本次请求中。
+`/info` 的“路径代入”逻辑存在一定风险，因此本功能**默认关闭**。仅当规则配置 `enableInfoEndpoint: true` 时，脚本才会把 `/info` 当作特殊路径处理。
 
 - 请求格式：`/info?path=%2Fsome%2Fpath[&sign=...]`
 - 行为：当访问 `/info` 时，脚本会把 `path` 参数解析为 `canonicalPath`，并用它替代 `url.pathname` 参与：

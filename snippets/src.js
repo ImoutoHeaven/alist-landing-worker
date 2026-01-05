@@ -4,6 +4,7 @@
 
 const DEFAULTS = {
   powcheck: false,
+  enableInfoEndpoint: false,
   stripDownloadPrefix: false,
   POW_VERSION: 3,
   POW_API_PREFIX: "/__pow",
@@ -1869,7 +1870,13 @@ export default {
     const isInfoPath = requestPath === "/info";
     let authPath = requestPath;
     let matchPath = requestPath;
-    if (isInfoPath) {
+
+    let selected = pickConfigWithId(hostname, matchPath);
+    let config = selected ? { ...DEFAULTS, ...selected.config } : null;
+    if (!config) return respondText(origin, "misconfigured", 500);
+    let cfgId = selected.cfgId;
+
+    if (isInfoPath && config.enableInfoEndpoint === true) {
       const rawPath = url.searchParams.get("path");
       if (!rawPath) return respondText(origin, "path is required", 400);
       const decoded = decodePathParam(rawPath);
@@ -1878,12 +1885,13 @@ export default {
       if (!canonical) return respondText(origin, "invalid path", 400);
       authPath = canonical;
       matchPath = canonical;
+
+      selected = pickConfigWithId(hostname, matchPath);
+      config = selected ? { ...DEFAULTS, ...selected.config } : null;
+      if (!config) return respondText(origin, "misconfigured", 500);
+      cfgId = selected.cfgId;
     }
 
-    const selected = pickConfigWithId(hostname, matchPath);
-    const config = selected ? { ...DEFAULTS, ...selected.config } : null;
-    if (!config) return respondText(origin, "misconfigured", 500);
-    const cfgId = selected.cfgId;
     const signSecret = typeof config.HMAC_SECRET === "string" ? config.HMAC_SECRET : "";
     const powToken = typeof config.POW_TOKEN === "string" ? config.POW_TOKEN : "";
     const powSecret = powToken || signSecret;
