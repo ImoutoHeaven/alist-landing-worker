@@ -47,24 +47,26 @@ const postJson = async (url, body, retries = 3) => {
 const initUi = () => {
   const style = document.createElement("style");
   style.textContent = [
-    ":root{--bg:#111;--card:#1c1c1c;--text:#eee;--accent:#3291ff;--mono:monospace;}",
+    ":root{--bg:#050505;--card-bg:rgba(28,28,28,0.6);--text:#fff;--sub:#888;--accent:#3291ff;--success:#25ae88;--error:#d75a4a;--mono:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;--sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;}",
     "html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;position:fixed;top:0;left:0;right:0;bottom:0;}",
-    "body{background:var(--bg);color:var(--text);font-family:sans-serif;display:flex;justify-content:center;align-items:center;box-sizing:border-box;padding:20px;}",
-    ".card{background:var(--card);padding:30px;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,0.3);max-width:400px;width:100%;text-align:center;animation:pow-in .45s ease-out both;}",
-    "h1{margin:0 0 15px;font-size:20px;font-weight:600;animation:pow-in .5s ease-out both;animation-delay:.05s;}",
-    ".spinner{width:40px;height:40px;margin:20px auto;border:4px solid rgba(255,255,255,0.1);border-left-color:var(--accent);border-radius:50%;animation:s 1s linear infinite,pow-in .5s ease-out both;animation-delay:0s,.1s;}",
+    "body{background:radial-gradient(circle at 50% 10%,#1f1f1f,#000);color:var(--text);font-family:var(--sans);display:flex;justify-content:center;align-items:center;box-sizing:border-box;padding:20px;-webkit-font-smoothing:antialiased;}",
+    ".card{background:var(--card-bg);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);padding:40px;border-radius:24px;box-shadow:0 24px 48px rgba(0,0,0,0.5),inset 0 1px 0 rgba(255,255,255,0.08);max-width:360px;width:100%;text-align:center;border:1px solid rgba(255,255,255,0.04);animation:pow-in .6s cubic-bezier(0.16,1,0.3,1) both;}",
+    "h1{margin:0 0 24px;font-size:22px;font-weight:700;letter-spacing:-0.02em;color:var(--text);}",
+    ".spinner-wrap{margin:32px auto;height:48px;width:48px;position:relative;}",
+    ".spinner{width:100%;height:100%;border:3px solid rgba(255,255,255,0.1);border-left-color:var(--accent);border-radius:50%;animation:s .8s linear infinite;box-sizing:border-box;}",
     "@keyframes s{100%{transform:rotate(360deg);}}",
-    "@keyframes pow-in{0%{opacity:0;transform:translateY(6px) scale(.98)}100%{opacity:1;transform:none}}",
-    "#log{font-family:var(--mono);font-size:12px;margin-top:20px;text-align:left;background:rgba(0,0,0,0.2);padding:10px;border-radius:6px;height:80px;overflow:hidden;position:relative;animation:pow-in .6s ease-out both;animation-delay:.15s;}",
-    ".log-line{transition:opacity 0.3s ease;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.5;}",
-    ".icon{width:48px;height:48px;margin:20px auto;display:none;animation:pow-in .4s ease-out both;animation-delay:.1s;}",
+    "@keyframes pow-in{0%{opacity:0;transform:scale(0.96) translateY(12px)}100%{opacity:1;transform:none}}",
+    "#log{font-family:var(--mono);font-size:11px;margin-top:32px;text-align:left;background:rgba(0,0,0,0.4);padding:16px;border-radius:12px;height:84px;overflow:hidden;position:relative;border:1px solid rgba(255,255,255,0.03);color:var(--sub);box-shadow:inset 0 2px 6px rgba(0,0,0,0.2);}",
+    ".log-line{transition:opacity 0.3s ease;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.6;letter-spacing:-0.01em;}",
+    ".icon{width:56px;height:56px;margin:28px auto;display:none;}",
+    ".icon svg{width:100%;height:100%;display:block;}"
   ].join("");
   (document.head || document.documentElement).appendChild(style);
   const body = document.body;
   body.innerHTML =
     '<div class="card">' +
     '<h1 id="t">Verifying...</h1>' +
-    '<div id="s" class="spinner"></div>' +
+    '<div id="s" class="spinner-wrap"><div class="spinner"></div></div>' +
     '<div id="i" class="icon"></div>' +
     '<div id="log"></div>' +
     "</div>";
@@ -123,12 +125,14 @@ const setStatus = (ok) => {
   ui.iEl.style.display = "block";
   if (ok) {
     ui.tEl.textContent = "Redirecting...";
+    ui.iEl.style.color = "var(--success)";
     ui.iEl.innerHTML =
-      '<svg viewBox="0 0 52 52"><circle cx="26" cy="26" r="25" fill="#25AE88"/><path fill="none" stroke="#FFF" stroke-width="5" d="M14.1 27.2l7.1 7.2 16.7-16.8"/></svg>';
+      '<svg viewBox="0 0 52 52" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><circle cx="26" cy="26" r="24" stroke-opacity="0.2"/><path d="M14.1 27.2l7.1 7.2 16.7-16.8"/></svg>';
   } else {
     ui.tEl.textContent = "Failed!";
+    ui.iEl.style.color = "var(--error)";
     ui.iEl.innerHTML =
-      '<svg viewBox="0 0 52 52"><circle cx="26" cy="26" r="25" fill="#D75A4A"/><path fill="none" stroke="#FFF" stroke-width="5" d="M16 16 36 36 M36 16 16 36"/></svg>';
+      '<svg viewBox="0 0 52 52" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><circle cx="26" cy="26" r="24" stroke-opacity="0.2"/><path d="M16 16 36 36 M36 16 16 36"/></svg>';
   }
 };
 
