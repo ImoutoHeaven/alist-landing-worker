@@ -212,6 +212,44 @@ const CONFIG = [
 
 ---
 
+## `sign` 参数生成规范（HMAC 签名）
+
+当且仅当配置了非空 `HMAC_SECRET` 时，脚本会强制校验查询参数 `?sign=...`。其生成规则为：
+
+- 计算：`mac = HMAC_SHA256(HMAC_SECRET, authPath + ":" + expire)`
+- 编码：`b64 = base64url(mac)`（URL-safe Base64，`+`→`-`、`/`→`_`，**保留** `=` padding）
+- 拼接：`sign = b64 + ":" + expire`
+
+其中：
+
+- `expire` 为 Unix 时间戳（秒，十进制整数）。服务端判断过期条件为 `expire > 0 && expire < nowSeconds`，建议只签发短期过期值并由后端做上限控制。
+- `authPath` 是参与签名的“规范化路径”，必须与脚本一致：
+  - 普通请求：`authPath = decodeURIComponent(pathname)`，保证以 `/` 开头；若 `stripDownloadPrefix: true` 则签名的是剥离 `/d`、`/p` 前缀后的路径。
+  - `/info` 请求：`authPath` 来自 `path` 参数（见下节），**不会**执行 `stripDownloadPrefix`。
+
+> 实践建议：将 `sign` 作为 URL 参数传输时，请对其做 URL 编码（尤其在包含 `=` padding 时）。
+
+---
+
+## `/info` 端点说明（路径代入）
+
+脚本内置一个特殊路径 `/info`：它允许通过查询参数把“需要鉴权/绑定的目标路径”代入到本次请求中。
+
+- 请求格式：`/info?path=%2Fsome%2Fpath[&sign=...]`
+- 行为：当访问 `/info` 时，脚本会把 `path` 参数解析为 `canonicalPath`，并用它替代 `url.pathname` 参与：
+  - `CONFIG` 的规则匹配（`matchPath`）
+  - `sign` 校验输入（`authPath`）
+  - PoW 绑定与校验（路径哈希等）
+- 失败返回：缺少/非法 `path` 会返回 `400`（如 `path is required`、`invalid path encoding`、`invalid path`）。
+
+注意事项：
+
+- `/info` **不会**应用 `stripDownloadPrefix`（避免对 `path` 参数做二次语义变换）。
+- 通过校验后的“回源请求”仍然是对 `/info` 本身的 `fetch(request)`；因此你们的源站/应用需要自行实现 `/info` 的响应逻辑（通常用于查询/诊断/元信息接口），否则会回源 404。
+- 若不需要该能力，建议在源站侧移除/拒绝 `/info`，并在 WAF/RL 中对 `/info` 单独限流。
+
+---
+
 ## 规则匹配与顺序（非常重要）
 
 匹配由 `pickConfigWithId(hostname, path)` 完成，规则行为如下：
