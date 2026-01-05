@@ -33,6 +33,8 @@ const DEFAULTS = {
   POW_SOL_COOKIE: "__Host-pow_sol",
   POW_ESM_URL:
     "https://cdn.jsdelivr.net/gh/ImoutoHeaven/alist-landing-worker@cbdcae5dd7a8824b9922e4424026d9236f2d2a28/snippets/esm/esm.js",
+  POW_GLUE_URL:
+    "https://cdn.jsdelivr.net/gh/ImoutoHeaven/alist-landing-worker@cbdcae5dd7a8824b9922e4424026d9236f2d2a28/snippets/glue.js",
 };
 
 const CONFIG = [
@@ -637,10 +639,66 @@ const derivePowSeedBytes16 = async (powSecret, cfgId, commitMac, sid) => {
   return bytes.slice(0, 16);
 };
 
-const makePowStateToken = async (powSecret, cfgId, sid, commitMac, cursor, batchLen) =>
+const deriveSegLenSeed16 = async (powSecret, cfgId, commitMac, sid) => {
+  const bytes = await hmacSha256(powSecret, `pow-seglen-v3|${cfgId}|${commitMac}|${sid}`);
+  return bytes.slice(0, 16);
+};
+
+const clampInt = (value, lo, hi) => {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return lo;
+  return Math.max(lo, Math.min(hi, Math.floor(num)));
+};
+
+const parseSegmentLenSpec = (raw, defaultValue) => {
+  const fallback = clampInt(defaultValue, 1, 64);
+  if (raw === null || raw === undefined) {
+    return { mode: "fixed", fixed: fallback };
+  }
+  const isNumericString = typeof raw === "string" && /^\d+$/.test(raw.trim());
+  if (typeof raw === "number" || isNumericString) {
+    const fixed = clampInt(raw, 1, 64);
+    return { mode: "fixed", fixed };
+  }
+  if (typeof raw === "string") {
+    const match = raw.trim().match(/^(\d+)\s*-\s*(\d+)$/);
+    if (match) {
+      const min = clampInt(match[1], 1, 64);
+      const max = clampInt(match[2], 1, 64);
+      if (min <= max && max - min <= 63) {
+        return { mode: "range", min, max };
+      }
+    }
+  }
+  return { mode: "fixed", fixed: fallback };
+};
+
+const computeSegLensForIndices = (indices, segSpec, rngSeg) => {
+  if (!segSpec || segSpec.mode !== "range") {
+    const fixed = clampInt(segSpec && segSpec.fixed, 1, 64);
+    return indices.map(() => fixed);
+  }
+  const span = Math.max(1, Math.floor(segSpec.max - segSpec.min + 1));
+  return indices.map(() => segSpec.min + rngSeg.randInt(span));
+};
+
+const serializeSpinePos = (spinePos) =>
+  Array.isArray(spinePos) && spinePos.length ? spinePos.join(",") : "";
+
+const makePowStateToken = async (
+  powSecret,
+  cfgId,
+  sid,
+  commitMac,
+  cursor,
+  batchLen,
+  spinePos
+) =>
   hmacSha256Base64UrlNoPad(
     powSecret,
-    `pow-state-v3|${cfgId}|${sid}|${commitMac}|${cursor}|${batchLen}`
+    `pow-state-v3|${cfgId}|${sid}|${commitMac}|${cursor}|${batchLen}|${serializeSpinePos(
+      spinePos
+    )}`
   );
 
 const POSW_SEED_PREFIX = encoder.encode("posw|seed|");
@@ -881,10 +939,10 @@ const buildPowChallengeHtml = ({
   pathHash,
   hashcashBits,
   segmentLen,
-  spineK,
   reloadUrlB64,
   apiPrefixB64,
   esmUrlB64,
+  glueUrl,
 }) => __HTML_TEMPLATE__
   .replace('__BINDING_STRING_B64__', bindingStringB64)
   .replace('__STEPS__', String(steps))
@@ -892,7 +950,7 @@ const buildPowChallengeHtml = ({
   .replace('__PATH_HASH__', pathHash)
   .replace('__HASHCASH_BITS__', String(hashcashBits))
   .replace('__SEGMENT_LEN__', String(segmentLen))
-  .replace('__SPINE_K__', String(spineK))
+  .replace('__GLUE_URL__', glueUrl)
   .replace('__RELOAD_URL_B64__', reloadUrlB64)
   .replace('__API_PREFIX_B64__', apiPrefixB64)
   .replace('__ESM_URL_B64__', esmUrlB64);
@@ -918,9 +976,9 @@ const respondPowChallengeHtml = async (
       normalizeNumber(config.POW_HASHCASH_BITS, DEFAULTS.POW_HASHCASH_BITS)
     )
   );
-  const spineK = Math.max(
-    0,
-    Math.floor(normalizeNumber(config.POW_SPINE_K, DEFAULTS.POW_SPINE_K))
+  const segSpec = parseSegmentLenSpec(
+    config.POW_SEGMENT_LEN,
+    DEFAULTS.POW_SEGMENT_LEN
   );
   const bindingValues = await getPowBindingValues(request, canonicalPath, config);
   if (!bindingValues) {
@@ -951,22 +1009,22 @@ const respondPowChallengeHtml = async (
   const reloadUrlB64 = base64UrlEncodeNoPad(utf8ToBytes(url.toString()));
   const apiPrefixB64 = base64UrlEncodeNoPad(utf8ToBytes(POW_API_PREFIX));
   const esmUrlB64 = base64UrlEncodeNoPad(utf8ToBytes(String(config.POW_ESM_URL)));
+  const glueUrl = typeof config.POW_GLUE_URL === "string" ? config.POW_GLUE_URL : "";
+  const segmentLenFixed = Math.max(
+    1,
+    Math.min(
+      steps,
+      Math.floor(segSpec.mode === "fixed" ? segSpec.fixed : segSpec.min)
+    )
+  );
   const html = buildPowChallengeHtml({
     bindingStringB64,
     steps,
     ticketB64,
     pathHash,
     hashcashBits,
-    segmentLen: Math.max(
-      1,
-      Math.min(
-        steps,
-        Math.floor(
-          normalizeNumber(config.POW_SEGMENT_LEN, DEFAULTS.POW_SEGMENT_LEN)
-        )
-      )
-    ),
-    spineK,
+    segmentLen: segmentLenFixed,
+    glueUrl,
     reloadUrlB64,
     apiPrefixB64,
     esmUrlB64,
@@ -1036,16 +1094,46 @@ const computeMidIndex = (idx, segmentLen) => {
   return idx - offset;
 };
 
-const pickSpineSet = (indices, maxIndex, segmentLen, spineK) => {
+const randomUint32 = () => {
+  const buf = new Uint32Array(1);
+  crypto.getRandomValues(buf);
+  return buf[0];
+};
+
+const pickSpinePosForBatch = (indices, segs, maxIndex, spineK) => {
   const target = Math.max(0, Math.floor(spineK || 0));
-  const out = new Set();
-  if (!target || !Array.isArray(indices)) return out;
-  for (const idx of indices) {
-    if (out.size >= target) break;
-    if (!Number.isFinite(idx)) continue;
+  if (!target || !Array.isArray(indices) || !Array.isArray(segs)) return [];
+  const eligible = [];
+  const count = Math.min(indices.length, segs.length);
+  for (let pos = 0; pos < count; pos++) {
+    const idx = indices[pos];
+    const segLen = segs[pos];
+    if (!Number.isFinite(idx) || !Number.isFinite(segLen)) continue;
     if (idx === 1 || idx === maxIndex) continue;
-    if (computeMidIndex(idx, segmentLen) === null) continue;
-    out.add(idx);
+    if (computeMidIndex(idx, segLen) === null) continue;
+    eligible.push(pos);
+  }
+  if (eligible.length <= target) return eligible.slice();
+  for (let i = eligible.length - 1; i > 0; i--) {
+    const j = randomUint32() % (i + 1);
+    const tmp = eligible[i];
+    eligible[i] = eligible[j];
+    eligible[j] = tmp;
+  }
+  return eligible.slice(0, target);
+};
+
+const normalizeSpinePosList = (value, maxLen) => {
+  if (!Array.isArray(value)) return null;
+  const seen = new Set();
+  const out = [];
+  for (const raw of value) {
+    const pos = Number.parseInt(raw, 10);
+    if (!Number.isFinite(pos) || pos < 0) return null;
+    if (Number.isFinite(maxLen) && pos >= maxLen) return null;
+    if (seen.has(pos)) return null;
+    seen.add(pos);
+    out.push(pos);
   }
   return out;
 };
@@ -1237,6 +1325,14 @@ const handlePowChallenge = async (request, url, nowSeconds) => {
       normalizeNumber(config.POW_HASHCASH_BITS, DEFAULTS.POW_HASHCASH_BITS)
     )
   );
+  const spineK = Math.max(
+    0,
+    Math.floor(normalizeNumber(config.POW_SPINE_K, DEFAULTS.POW_SPINE_K))
+  );
+  const segSpec = parseSegmentLenSpec(
+    config.POW_SEGMENT_LEN,
+    DEFAULTS.POW_SEGMENT_LEN
+  );
   const sid = await derivePowSid(powSecret, ticket.cfgId, commit.mac);
   const seed16 = await derivePowSeedBytes16(powSecret, ticket.cfgId, commit.mac, sid);
   const rng = makeXoshiro128ss(seed16);
@@ -1248,6 +1344,9 @@ const handlePowChallenge = async (request, url, nowSeconds) => {
     rng,
   });
   if (!indices.length) return deny(origin, "challenge invalid");
+  const segSeed16 = await deriveSegLenSeed16(powSecret, ticket.cfgId, commit.mac, sid);
+  const rngSeg = makeXoshiro128ss(segSeed16);
+  const segLensAll = computeSegLensForIndices(indices, segSpec, rngSeg);
   const batchLen = Math.max(
     1,
     Math.min(
@@ -1260,13 +1359,18 @@ const handlePowChallenge = async (request, url, nowSeconds) => {
   const cursor = 0;
   const batch = indices.slice(cursor, cursor + batchLen);
   if (!batch.length) return deny(origin, "challenge invalid");
+  const segBatch = segLensAll.slice(cursor, cursor + batchLen);
+  const spinePos = spineK > 0
+    ? pickSpinePosForBatch(batch, segBatch, ticket.L, spineK)
+    : [];
   const token = await makePowStateToken(
     powSecret,
     ticket.cfgId,
     sid,
     commit.mac,
     cursor,
-    batchLen
+    batchLen,
+    spinePos
   );
   const headers = safeHeaders(origin);
   headers.set("Content-Type", "application/json; charset=utf-8");
@@ -1279,6 +1383,8 @@ const handlePowChallenge = async (request, url, nowSeconds) => {
       cursor,
       batchLen,
       indices: batch,
+      segs: segBatch,
+      spinePos,
       token,
     }),
     { status: 200, headers }
@@ -1316,7 +1422,11 @@ const handlePowOpen = async (request, url, nowSeconds) => {
   const cursor = Number.parseInt(body.cursor, 10);
   const token = typeof body.token === "string" ? body.token : "";
   const opens = Array.isArray(body.opens) ? body.opens : null;
+  const spinePosRaw = body.spinePos;
   if (!sid || !token || !opens || !Number.isFinite(cursor) || cursor < 0) {
+    return respondText(origin, "invalid payload", 400);
+  }
+  if (!Array.isArray(spinePosRaw)) {
     return respondText(origin, "invalid payload", 400);
   }
   if (
@@ -1335,6 +1445,10 @@ const handlePowOpen = async (request, url, nowSeconds) => {
     )
   );
   if (batchMax <= 0) return respondText(origin, "misconfigured", 500);
+  const spinePos = normalizeSpinePosList(spinePosRaw, batchMax);
+  if (!spinePos) {
+    return respondText(origin, "invalid payload", 400);
+  }
   const sidExpected = await derivePowSid(powSecret, ticket.cfgId, commit.mac);
   if (sid !== sidExpected) return deny(origin, "challenge invalid");
   const expectedToken = await makePowStateToken(
@@ -1343,7 +1457,8 @@ const handlePowOpen = async (request, url, nowSeconds) => {
     sidExpected,
     commit.mac,
     cursor,
-    batchMax
+    batchMax,
+    spinePos
   );
   if (!timingSafeEqual(expectedToken, token)) return deny(origin, "challenge invalid");
   const rounds = Math.max(
@@ -1368,6 +1483,10 @@ const handlePowOpen = async (request, url, nowSeconds) => {
     0,
     Math.floor(normalizeNumber(config.POW_SPINE_K, DEFAULTS.POW_SPINE_K))
   );
+  const segSpec = parseSegmentLenSpec(
+    config.POW_SEGMENT_LEN,
+    DEFAULTS.POW_SEGMENT_LEN
+  );
   const seed16 = await derivePowSeedBytes16(
     powSecret,
     ticket.cfgId,
@@ -1383,22 +1502,45 @@ const handlePowOpen = async (request, url, nowSeconds) => {
     rng,
   });
   if (!indices || !indices.length) return deny(origin, "challenge invalid");
-  const segmentLen = Math.max(
-    1,
-    Math.min(
-      ticket.L,
-      Math.floor(
-        normalizeNumber(config.POW_SEGMENT_LEN, DEFAULTS.POW_SEGMENT_LEN)
-      )
-    )
+  const segSeed16 = await deriveSegLenSeed16(
+    powSecret,
+    ticket.cfgId,
+    commit.mac,
+    sidExpected
   );
+  const rngSeg = makeXoshiro128ss(segSeed16);
+  const segLensAll = computeSegLensForIndices(indices, segSpec, rngSeg);
   if (hashcashBits > 0 && !indices.includes(ticket.L)) {
     return deny(origin, "challenge invalid");
   }
   const expectedBatch = indices.slice(cursor, cursor + batchMax);
   if (!expectedBatch.length) return deny(origin, "challenge invalid");
-  const spineSet =
-    spineK > 0 ? pickSpineSet(expectedBatch, ticket.L, segmentLen, spineK) : null;
+  const segBatch = segLensAll.slice(cursor, cursor + batchMax);
+  if (spinePos.length) {
+    for (const pos of spinePos) {
+      if (pos >= expectedBatch.length) return deny(origin, "challenge invalid");
+    }
+  }
+  const eligibleSpine = [];
+  for (let pos = 0; pos < expectedBatch.length; pos++) {
+    const idx = expectedBatch[pos];
+    const segLen = segBatch[pos];
+    if (!Number.isFinite(idx) || !Number.isFinite(segLen)) continue;
+    if (idx === 1 || idx === ticket.L) continue;
+    if (computeMidIndex(idx, segLen) === null) continue;
+    eligibleSpine.push(pos);
+  }
+  const expectedSpineCount = Math.min(spineK, eligibleSpine.length);
+  if (spinePos.length !== expectedSpineCount) {
+    return deny(origin, "challenge invalid");
+  }
+  if (expectedSpineCount > 0) {
+    const eligibleSet = new Set(eligibleSpine);
+    for (const pos of spinePos) {
+      if (!eligibleSet.has(pos)) return deny(origin, "challenge invalid");
+    }
+  }
+  const spinePosSet = spinePos.length ? new Set(spinePos) : null;
   const batchSize = opens.length;
   if (batchSize !== expectedBatch.length) {
     return deny(origin, "challenge invalid");
@@ -1412,7 +1554,11 @@ const handlePowOpen = async (request, url, nowSeconds) => {
     }
     const expectedIdx = expectedBatch[i];
     if (idx !== expectedIdx) return deny(origin, "challenge invalid");
-    const requiresMid = spineSet && spineSet.has(idx);
+    const requiresMid = spinePosSet && spinePosSet.has(i);
+    const segLen = segBatch[i];
+    if (!Number.isFinite(segLen) || segLen <= 0) {
+      return deny(origin, "challenge invalid");
+    }
     const hPrev = open && typeof open.hPrev === "string" ? open.hPrev : "";
     const hCurr = open && typeof open.hCurr === "string" ? open.hCurr : "";
     if (
@@ -1462,7 +1608,7 @@ const handlePowOpen = async (request, url, nowSeconds) => {
         }
       }
     }
-    batch.push({ idx, open, requiresMid });
+    batch.push({ idx, open, requiresMid, segLen });
   }
   const bindingValues = await getPowBindingValuesWithPathHash(
     request,
@@ -1490,6 +1636,7 @@ const handlePowOpen = async (request, url, nowSeconds) => {
     const idx = entry.idx;
     const open = entry.open;
     const requiresMid = entry.requiresMid === true;
+    const segLen = entry.segLen;
     const hPrevBytes = base64UrlDecodeToBytes(String(open.hPrev || ""));
     const hCurrBytes = base64UrlDecodeToBytes(String(open.hCurr || ""));
     if (!hPrevBytes || !hCurrBytes || hPrevBytes.length !== 32 || hCurrBytes.length !== 32) {
@@ -1497,11 +1644,11 @@ const handlePowOpen = async (request, url, nowSeconds) => {
     }
     const proofPrev = open.proofPrev;
     const proofCurr = open.proofCurr;
-    const effectiveSegmentLen = Math.min(segmentLen, idx);
+    const effectiveSegmentLen = Math.min(segLen, idx);
     let prevBytes = hPrevBytes;
     const firstIdx = idx - effectiveSegmentLen;
     if (firstIdx < 0) return deny(origin, "challenge invalid");
-    const midIdx = requiresMid ? computeMidIndex(idx, segmentLen) : null;
+    const midIdx = requiresMid ? computeMidIndex(idx, segLen) : null;
     let midExpected = null;
     for (let step = 1; step <= effectiveSegmentLen; step++) {
       const expected = await hashPoswStep(prevBytes, firstIdx + step);
@@ -1559,13 +1706,18 @@ const handlePowOpen = async (request, url, nowSeconds) => {
   const nextCursor = cursor + expectedBatch.length;
   if (nextCursor < indices.length) {
     const nextBatch = indices.slice(nextCursor, nextCursor + batchMax);
+    const nextSegBatch = segLensAll.slice(nextCursor, nextCursor + batchMax);
+    const nextSpinePos = spineK > 0
+      ? pickSpinePosForBatch(nextBatch, nextSegBatch, ticket.L, spineK)
+      : [];
     const nextToken = await makePowStateToken(
       powSecret,
       ticket.cfgId,
       sidExpected,
       commit.mac,
       nextCursor,
-      batchMax
+      batchMax,
+      nextSpinePos
     );
     const headers = safeHeaders(origin);
     headers.set("Content-Type", "application/json; charset=utf-8");
@@ -1577,6 +1729,8 @@ const handlePowOpen = async (request, url, nowSeconds) => {
         cursor: nextCursor,
         batchLen: batchMax,
         indices: nextBatch,
+        segs: nextSegBatch,
+        spinePos: nextSpinePos,
         token: nextToken,
       }),
       { status: 200, headers }

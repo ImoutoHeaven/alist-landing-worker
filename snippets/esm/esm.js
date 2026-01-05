@@ -68,6 +68,22 @@ const computeMidIndex = (idx, segmentLen) => {
   return idx - offset;
 };
 
+const normalizeSpinePosSet = (spinePos, maxLen) => {
+  if (!Array.isArray(spinePos)) return null;
+  const set = new Set();
+  for (const raw of spinePos) {
+    const pos = Number.parseInt(raw, 10);
+    if (!Number.isFinite(pos) || pos < 0 || pos >= maxLen) {
+      throw new Error("indices invalid");
+    }
+    if (set.has(pos)) {
+      throw new Error("indices invalid");
+    }
+    set.add(pos);
+  }
+  return set;
+};
+
 const shouldYield = (counter, every) =>
   Number.isFinite(every) && every > 0 && counter % every === 0;
 
@@ -202,9 +218,17 @@ export async function computePoswCommit(bindingString, steps, options = {}) {
         throw new Error("indices required");
       }
       const spineSet = options && options.spineSet instanceof Set ? options.spineSet : null;
+      const segLens = Array.isArray(options.segLens) ? options.segLens : null;
+      if (segLens && segLens.length !== indices.length) {
+        throw new Error("indices invalid");
+      }
+      const spinePosSet = options && Array.isArray(options.spinePos)
+        ? normalizeSpinePosSet(options.spinePos, indices.length)
+        : null;
       const out = [];
       const seen = new Set();
-      for (const raw of indices) {
+      for (let pos = 0; pos < indices.length; pos++) {
+        const raw = indices[pos];
         const idx = Number(raw);
         if (!Number.isFinite(idx) || idx < 1 || idx > L) {
           throw new Error("indices invalid");
@@ -213,12 +237,18 @@ export async function computePoswCommit(bindingString, steps, options = {}) {
           throw new Error("indices invalid");
         }
         seen.add(idx);
-        const effectiveSegmentLen = Math.min(segmentLen, idx);
+        const segLenThis = segLens ? Number(segLens[pos]) : segmentLen;
+        if (!Number.isFinite(segLenThis) || segLenThis <= 0) {
+          throw new Error("indices invalid");
+        }
+        const effectiveSegmentLen = Math.min(segLenThis, idx);
         const prevIdx = idx - effectiveSegmentLen;
         const hPrev = chain[prevIdx];
         const hCurr = chain[idx];
-        const wantsMid = spineSet && spineSet.has(idx);
-        const midIdx = wantsMid ? computeMidIndex(idx, segmentLen) : null;
+        const wantsMid = spinePosSet
+          ? spinePosSet.has(pos)
+          : spineSet && spineSet.has(idx);
+        const midIdx = wantsMid ? computeMidIndex(idx, segLenThis) : null;
         if (wantsMid && midIdx === null) {
           throw new Error("indices invalid");
         }
