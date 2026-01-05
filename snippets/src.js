@@ -32,9 +32,9 @@ const DEFAULTS = {
   POW_COMMIT_COOKIE: "__Host-pow_commit",
   POW_SOL_COOKIE: "__Host-pow_sol",
   POW_ESM_URL:
-    "https://cdn.jsdelivr.net/gh/ImoutoHeaven/alist-landing-worker@30bac2d9e8532a1c27f81571c93235184cf00805/snippets/esm/esm.js",
+    "https://cdn.jsdelivr.net/gh/ImoutoHeaven/alist-landing-worker@02527d6911314efafd90725ce2b18f561fd36c51/snippets/esm/esm.js",
   POW_GLUE_URL:
-    "https://cdn.jsdelivr.net/gh/ImoutoHeaven/alist-landing-worker@30bac2d9e8532a1c27f81571c93235184cf00805/snippets/glue.js",
+    "https://cdn.jsdelivr.net/gh/ImoutoHeaven/alist-landing-worker@02527d6911314efafd90725ce2b18f561fd36c51/snippets/glue.js",
 };
 
 const CONFIG = [
