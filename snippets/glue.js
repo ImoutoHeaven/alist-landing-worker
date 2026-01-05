@@ -47,44 +47,25 @@ const postJson = async (url, body, retries = 3) => {
 const initUi = () => {
   const style = document.createElement("style");
   style.textContent = [
-    ":root{--bg-1:#0f2027;--bg-2:#203a43;--bg-3:#2c5364;--card-bg:rgba(255,255,255,0.03);--card-border:rgba(255,255,255,0.08);--text:#fff;--sub:#a0a0a0;--accent:#00d2ff;--success:#25ae88;--error:#d75a4a;--mono:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;--sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;}",
-    "html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;position:fixed;top:0;left:0;right:0;bottom:0;}",
-    "body{background:linear-gradient(-45deg,var(--bg-1),var(--bg-2),var(--bg-3),#1a1a2e);background-size:400% 400%;animation:gradientBG 15s ease infinite;color:var(--text);font-family:var(--sans);display:flex;justify-content:center;align-items:center;-webkit-font-smoothing:antialiased;}",
-    "@keyframes gradientBG{0%{background-position:0% 50%}50%{background-position:100% 50%}100%{background-position:0% 50%}}",
-    ".card{background:var(--card-bg);backdrop-filter:blur(40px);-webkit-backdrop-filter:blur(40px);padding:48px;border-radius:32px;box-shadow:0 30px 60px rgba(0,0,0,0.5),inset 0 0 0 1px var(--card-border);max-width:380px;width:90%;text-align:center;animation:pow-in 0.8s cubic-bezier(0.2,0.8,0.2,1) both;}",
-    "h1{margin:0 0 24px;font-size:24px;font-weight:600;letter-spacing:-0.01em;text-shadow:0 2px 10px rgba(0,0,0,0.3);color:var(--text);}",
-    ".spinner-wrap{margin:40px auto;height:56px;width:56px;position:relative;}",
-    ".spinner{width:100%;height:100%;border:3px solid rgba(255,255,255,0.05);border-top-color:var(--accent);border-radius:50%;animation:s 1s linear infinite;box-sizing:border-box;}",
-    "@keyframes s{100%{transform:rotate(360deg);}}",
-    "@keyframes pow-in{0%{opacity:0;transform:scale(0.92) translateY(20px)}100%{opacity:1;transform:none}}",
-    "#log{font-family:var(--mono);font-size:12px;margin-top:32px;text-align:left;background:rgba(0,0,0,0.2);padding:16px 20px;border-radius:16px;height:90px;overflow:hidden;position:relative;border:1px solid rgba(255,255,255,0.05);color:var(--sub);box-shadow:inset 0 2px 6px rgba(0,0,0,0.1);}",
-    ".log-line{transition:opacity 0.4s ease;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.8;letter-spacing:-0.01em;}",
-    ".icon{width:64px;height:64px;margin:36px auto;display:none;}",
-    ".icon svg{width:100%;height:100%;display:block;filter:drop-shadow(0 0 10px rgba(37,174,136,0.4));}",
-    ".c-path{stroke-dasharray:60;stroke-dashoffset:60;animation:draw 0.6s 0.1s cubic-bezier(0.65,0,0.45,1) forwards;}",
-    ".c-circ{stroke-dasharray:160;stroke-dashoffset:160;animation:draw 0.8s cubic-bezier(0.65,0,0.45,1) forwards;}",
-    "@keyframes draw{to{stroke-dashoffset:0;}}"
+    ":root{--bg:#09090b;--card-bg:#18181b;--border:#27272a;--text:#e4e4e7;--sub:#a1a1aa;--accent:#fff;--font:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;--mono:ui-monospace,'SFMono-Regular',Menlo,Monaco,Consolas,monospace;}",
+    "html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-family:var(--font);display:flex;justify-content:center;align-items:center;-webkit-font-smoothing:antialiased;}",
+    ".card{background:var(--card-bg);border:1px solid var(--border);border-radius:12px;padding:32px;width:90%;max-width:360px;text-align:center;box-shadow:0 0 0 1px rgba(255,255,255,0.05),0 4px 12px rgba(0,0,0,0.4);animation:fade-in 0.6s cubic-bezier(0.16,1,0.3,1) both;}",
+    "h1{margin:0 0 24px;font-size:15px;font-weight:500;color:var(--accent);letter-spacing:-0.01em;}",
+    "#log{font-family:var(--mono);font-size:13px;color:var(--sub);text-align:left;height:120px;overflow:hidden;position:relative;mask-image:linear-gradient(to bottom,transparent,black 30%);-webkit-mask-image:linear-gradient(to bottom,transparent,black 30%);display:flex;flex-direction:column;justify-content:flex-end;}",
+    ".log-line{padding:3px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}",
+    "@keyframes fade-in{from{opacity:0;transform:scale(0.98)}to{opacity:1;transform:scale(1)}}"
   ].join("");
   (document.head || document.documentElement).appendChild(style);
-  const body = document.body;
-  body.innerHTML =
-    '<div class="card">' +
-    '<h1 id="t">Verifying...</h1>' +
-    '<div id="s" class="spinner-wrap"><div class="spinner"></div></div>' +
-    '<div id="i" class="icon"></div>' +
-    '<div id="log"></div>' +
-    "</div>";
+  document.body.innerHTML = '<div class="card"><h1 id="t">Verifying...</h1><div id="log"></div></div>';
   return {
     logEl: document.getElementById("log"),
-    tEl: document.getElementById("t"),
-    sEl: document.getElementById("s"),
-    iEl: document.getElementById("i"),
+    tEl: document.getElementById("t")
   };
 };
 
 const ui = initUi();
 const lines = [];
-const MAX_VISIBLE_LINES = 4;
+const MAX_VISIBLE_LINES = 6;
 document.title = "Verifying...";
 
 const render = () => {
@@ -92,23 +73,7 @@ const render = () => {
   const start = Math.max(0, total - MAX_VISIBLE_LINES);
   const visible = lines.slice(start);
   ui.logEl.innerHTML = visible
-    .map((msg, idx) => {
-      const position = idx;
-      const opacity =
-        position === visible.length - 1 ? 1 :
-        position === visible.length - 2 ? 0.7 :
-        position === visible.length - 3 ? 0.45 :
-        0.25;
-      return (
-        '<div class="log-line" style="opacity:' +
-        opacity +
-        ";color:rgba(238,238,238," +
-        opacity +
-        ')">' +
-        msg +
-        "</div>"
-      );
-    })
+    .map((msg) => `<div class="log-line">${msg}</div>`)
     .join("");
 };
 
@@ -125,18 +90,12 @@ const update = (idx, msg) => {
 };
 
 const setStatus = (ok) => {
-  ui.sEl.style.display = "none";
-  ui.iEl.style.display = "block";
   if (ok) {
     ui.tEl.textContent = "Redirecting...";
-    ui.iEl.style.color = "var(--success)";
-    ui.iEl.innerHTML =
-      '<svg viewBox="0 0 52 52" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><circle class="c-circ" cx="26" cy="26" r="24" stroke-opacity="0.2"/><path class="c-path" d="M14.1 27.2l7.1 7.2 16.7-16.8"/></svg>';
+    ui.tEl.style.color = "#4ade80";
   } else {
-    ui.tEl.textContent = "Failed!";
-    ui.iEl.style.color = "var(--error)";
-    ui.iEl.innerHTML =
-      '<svg viewBox="0 0 52 52" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><circle cx="26" cy="26" r="24" stroke-opacity="0.2"/><path d="M16 16 36 36 M36 16 16 36"/></svg>';
+    ui.tEl.textContent = "Failed";
+    ui.tEl.style.color = "#f87171";
   }
 };
 
@@ -163,7 +122,7 @@ export default async function runPow(
     }
     const binding = decodeB64Url(String(bindingB64 || ""));
     const spinIndex = log("Computing hash chain...");
-    const spinChars = "|/-\\\\";
+    const spinChars = "|/-\\";
     let spinFrame = 0;
     let attemptCount = 0;
     const spinTimer = setInterval(() => {
