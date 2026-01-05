@@ -12,7 +12,7 @@ const DEFAULTS = {
   POW_MIN_STEPS: 512,
   POW_MAX_STEPS: 8192,
   POW_HASHCASH_BITS: 3,
-  POW_SEGMENT_LEN: 5,
+  POW_SEGMENT_LEN: "16-32",
   POW_SAMPLE_K: 13,
   POW_SPINE_K: 2,
   POW_CHAL_ROUNDS: 8,
@@ -194,6 +194,8 @@ const NONCE_MAX_LEN = 64;
 const SID_LEN = 16;
 const TOKEN_MIN_LEN = 16;
 const TOKEN_MAX_LEN = 64;
+const SPINE_SEED_MIN_LEN = 16;
+const SPINE_SEED_MAX_LEN = 64;
 const MAX_PROOF_SIBS = 64;
 
 const isBase64Url = (value, minLen, maxLen) => {
@@ -639,6 +641,22 @@ const derivePowSeedBytes16 = async (powSecret, cfgId, commitMac, sid) => {
   return bytes.slice(0, 16);
 };
 
+const deriveSpineSeed16 = async (
+  powSecret,
+  cfgId,
+  commitMac,
+  sid,
+  cursor,
+  batchLen,
+  spineSeed
+) => {
+  const bytes = await hmacSha256(
+    powSecret,
+    `pow-spine-v3|${cfgId}|${commitMac}|${sid}|${cursor}|${batchLen}|${spineSeed}`
+  );
+  return bytes.slice(0, 16);
+};
+
 const deriveSegLenSeed16 = async (powSecret, cfgId, commitMac, sid) => {
   const bytes = await hmacSha256(powSecret, `pow-seglen-v3|${cfgId}|${commitMac}|${sid}`);
   return bytes.slice(0, 16);
@@ -684,6 +702,20 @@ const computeSegLensForIndices = (indices, segSpec, rngSeg) => {
 
 const serializeSpinePos = (spinePos) =>
   Array.isArray(spinePos) && spinePos.length ? spinePos.join(",") : "";
+
+const makePowCommitMac = async (
+  powSecret,
+  ticketB64,
+  rootB64,
+  pathHash,
+  nonce,
+  exp,
+  spineSeed
+) =>
+  hmacSha256Base64UrlNoPad(
+    powSecret,
+    `commit|${ticketB64}|${rootB64}|${pathHash}|${nonce}|${exp}|${spineSeed}`
+  );
 
 const makePowStateToken = async (
   powSecret,
@@ -845,23 +877,28 @@ const parsePowSolCookie = (value) => {
 const parsePowCommitCookie = (value) => {
   if (!value || typeof value !== "string") return null;
   const parts = value.split(".");
-  if (parts.length !== 7) return null;
-  if (parts[0] !== "v2") return null;
+  if (parts.length !== 8) return null;
+  if (parts[0] !== "v3") return null;
   const ticketB64 = parts[1] || "";
   const rootB64 = parts[2] || "";
   const pathHash = parts[3] || "";
   const nonce = parts[4] || "";
   const exp = Number.parseInt(parts[5], 10);
-  const mac = parts[6] || "";
+  const spineSeed = parts[6] || "";
+  const mac = parts[7] || "";
   if (!ticketB64 || !rootB64 || !pathHash || !nonce || !Number.isFinite(exp) || !mac) {
     return null;
   }
+  if (!spineSeed) return null;
   if (!isBase64Url(ticketB64, 1, B64_TICKET_MAX_LEN)) return null;
   if (!isBase64Url(rootB64, 1, B64_HASH_MAX_LEN)) return null;
   if (!isBase64UrlOrAny(pathHash, 1, B64_HASH_MAX_LEN)) return null;
   if (!isBase64Url(nonce, NONCE_MIN_LEN, NONCE_MAX_LEN)) return null;
+  if (!isBase64Url(spineSeed, SPINE_SEED_MIN_LEN, SPINE_SEED_MAX_LEN)) {
+    return null;
+  }
   if (!isBase64Url(mac, 1, B64_HASH_MAX_LEN)) return null;
-  return { ticketB64, rootB64, pathHash, nonce, exp, mac };
+  return { ticketB64, rootB64, pathHash, nonce, exp, mac, spineSeed };
 };
 
 const computePathHash = async (canonicalPath) =>
@@ -1100,7 +1137,7 @@ const randomUint32 = () => {
   return buf[0];
 };
 
-const pickSpinePosForBatch = (indices, segs, maxIndex, spineK) => {
+const pickSpinePosForBatch = (indices, segs, maxIndex, spineK, rng) => {
   const target = Math.max(0, Math.floor(spineK || 0));
   if (!target || !Array.isArray(indices) || !Array.isArray(segs)) return [];
   const eligible = [];
@@ -1115,7 +1152,7 @@ const pickSpinePosForBatch = (indices, segs, maxIndex, spineK) => {
   }
   if (eligible.length <= target) return eligible.slice();
   for (let i = eligible.length - 1; i > 0; i--) {
-    const j = randomUint32() % (i + 1);
+    const j = rng ? rng.randInt(i + 1) : randomUint32() % (i + 1);
     const tmp = eligible[i];
     eligible[i] = eligible[j];
     eligible[j] = tmp;
@@ -1271,11 +1308,17 @@ const handlePowCommit = async (request, url, nowSeconds) => {
   }
   const ttl = normalizeNumber(config.POW_COMMIT_TTL_SEC, DEFAULTS.POW_COMMIT_TTL_SEC) || 0;
   const exp = nowSeconds + Math.max(1, ttl);
-  const mac = await hmacSha256Base64UrlNoPad(
+  const spineSeed = randomBase64Url(16);
+  const mac = await makePowCommitMac(
     powSecret,
-    `commit|${ticketB64}|${rootB64}|${bindingValues.pathHash}|${nonce}|${exp}`
+    ticketB64,
+    rootB64,
+    bindingValues.pathHash,
+    nonce,
+    exp,
+    spineSeed
   );
-  const value = `v2.${ticketB64}.${rootB64}.${bindingValues.pathHash}.${nonce}.${exp}.${mac}`;
+  const value = `v3.${ticketB64}.${rootB64}.${bindingValues.pathHash}.${nonce}.${exp}.${spineSeed}.${mac}`;
   const headers = safeHeaders(origin);
   headers.set("Content-Type", "application/json; charset=utf-8");
   headers.set("Cache-Control", "no-store");
@@ -1299,9 +1342,14 @@ const handlePowChallenge = async (request, url, nowSeconds) => {
   if (config.powcheck !== true) return respondText(origin, "misconfigured", 500);
   if (isExpired(commit.exp, nowSeconds)) return deny(origin, "commit expired");
   if (isExpired(ticket.e, nowSeconds)) return deny(origin, "ticket expired");
-  const expectedMac = await hmacSha256Base64UrlNoPad(
+  const expectedMac = await makePowCommitMac(
     powSecret,
-    `commit|${commit.ticketB64}|${commit.rootB64}|${commit.pathHash}|${commit.nonce}|${commit.exp}`
+    commit.ticketB64,
+    commit.rootB64,
+    commit.pathHash,
+    commit.nonce,
+    commit.exp,
+    commit.spineSeed
   );
   if (!timingSafeEqual(expectedMac, commit.mac)) return deny(origin, "commit invalid");
   const powVersion = normalizeNumber(config.POW_VERSION, DEFAULTS.POW_VERSION);
@@ -1360,8 +1408,18 @@ const handlePowChallenge = async (request, url, nowSeconds) => {
   const batch = indices.slice(cursor, cursor + batchLen);
   if (!batch.length) return deny(origin, "challenge invalid");
   const segBatch = segLensAll.slice(cursor, cursor + batchLen);
+  const spineSeed16 = await deriveSpineSeed16(
+    powSecret,
+    ticket.cfgId,
+    commit.mac,
+    sid,
+    cursor,
+    batchLen,
+    commit.spineSeed
+  );
+  const rngSpine = makeXoshiro128ss(spineSeed16);
   const spinePos = spineK > 0
-    ? pickSpinePosForBatch(batch, segBatch, ticket.L, spineK)
+    ? pickSpinePosForBatch(batch, segBatch, ticket.L, spineK, rngSpine)
     : [];
   const token = await makePowStateToken(
     powSecret,
@@ -1409,9 +1467,14 @@ const handlePowOpen = async (request, url, nowSeconds) => {
   if (ticket.v !== powVersion) return deny(origin, "ticket invalid");
   if (isExpired(commit.exp, nowSeconds)) return deny(origin, "commit expired");
   if (isExpired(ticket.e, nowSeconds)) return deny(origin, "ticket expired");
-  const commitMac = await hmacSha256Base64UrlNoPad(
+  const commitMac = await makePowCommitMac(
     powSecret,
-    `commit|${commit.ticketB64}|${commit.rootB64}|${commit.pathHash}|${commit.nonce}|${commit.exp}`
+    commit.ticketB64,
+    commit.rootB64,
+    commit.pathHash,
+    commit.nonce,
+    commit.exp,
+    commit.spineSeed
   );
   if (!timingSafeEqual(commitMac, commit.mac)) return deny(origin, "commit invalid");
   const body = await readJsonBody(request);
@@ -1707,8 +1770,18 @@ const handlePowOpen = async (request, url, nowSeconds) => {
   if (nextCursor < indices.length) {
     const nextBatch = indices.slice(nextCursor, nextCursor + batchMax);
     const nextSegBatch = segLensAll.slice(nextCursor, nextCursor + batchMax);
+    const nextSpineSeed16 = await deriveSpineSeed16(
+      powSecret,
+      ticket.cfgId,
+      commit.mac,
+      sidExpected,
+      nextCursor,
+      batchMax,
+      commit.spineSeed
+    );
+    const rngSpineNext = makeXoshiro128ss(nextSpineSeed16);
     const nextSpinePos = spineK > 0
-      ? pickSpinePosForBatch(nextBatch, nextSegBatch, ticket.L, spineK)
+      ? pickSpinePosForBatch(nextBatch, nextSegBatch, ticket.L, spineK, rngSpineNext)
       : [];
     const nextToken = await makePowStateToken(
       powSecret,
