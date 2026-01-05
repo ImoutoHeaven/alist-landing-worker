@@ -178,6 +178,7 @@ export async function computePoswCommit(bindingString, steps, options = {}) {
     ? Math.max(1, Math.floor(options.yieldEvery))
     : 256;
   const signal = options.signal;
+  const onStatus = options.onStatus;
 
   for (let attempt = 0; ; attempt++) {
     if (signal && signal.aborted) throw new Error("posw aborted");
@@ -205,6 +206,9 @@ export async function computePoswCommit(bindingString, steps, options = {}) {
     if (hashcashBits > 0) {
       const digest = await hashcashRootLast(root, chain[L]);
       if (leadingZeroBits(digest) < hashcashBits) {
+        if (typeof onStatus === "function") {
+          onStatus("retry", attempt + 1);
+        }
         if (shouldYield(attempt, yieldEvery)) {
           await new Promise((resolve) => setTimeout(resolve, 0));
         }

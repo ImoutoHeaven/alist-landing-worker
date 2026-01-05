@@ -47,19 +47,23 @@ const postJson = async (url, body, retries = 3) => {
 const initUi = () => {
   const style = document.createElement("style");
   style.textContent = [
-    ":root{--bg:#050505;--card-bg:rgba(28,28,28,0.6);--text:#fff;--sub:#888;--accent:#3291ff;--success:#25ae88;--error:#d75a4a;--mono:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;--sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;}",
+    ":root{--bg-1:#0f2027;--bg-2:#203a43;--bg-3:#2c5364;--card-bg:rgba(255,255,255,0.03);--card-border:rgba(255,255,255,0.08);--text:#fff;--sub:#a0a0a0;--accent:#00d2ff;--success:#25ae88;--error:#d75a4a;--mono:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;--sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;}",
     "html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;position:fixed;top:0;left:0;right:0;bottom:0;}",
-    "body{background:radial-gradient(circle at 50% 10%,#1f1f1f,#000);color:var(--text);font-family:var(--sans);display:flex;justify-content:center;align-items:center;box-sizing:border-box;padding:20px;-webkit-font-smoothing:antialiased;}",
-    ".card{background:var(--card-bg);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);padding:40px;border-radius:24px;box-shadow:0 24px 48px rgba(0,0,0,0.5),inset 0 1px 0 rgba(255,255,255,0.08);max-width:360px;width:100%;text-align:center;border:1px solid rgba(255,255,255,0.04);animation:pow-in .6s cubic-bezier(0.16,1,0.3,1) both;}",
-    "h1{margin:0 0 24px;font-size:22px;font-weight:700;letter-spacing:-0.02em;color:var(--text);}",
-    ".spinner-wrap{margin:32px auto;height:48px;width:48px;position:relative;}",
-    ".spinner{width:100%;height:100%;border:3px solid rgba(255,255,255,0.1);border-left-color:var(--accent);border-radius:50%;animation:s .8s linear infinite;box-sizing:border-box;}",
+    "body{background:linear-gradient(-45deg,var(--bg-1),var(--bg-2),var(--bg-3),#1a1a2e);background-size:400% 400%;animation:gradientBG 15s ease infinite;color:var(--text);font-family:var(--sans);display:flex;justify-content:center;align-items:center;-webkit-font-smoothing:antialiased;}",
+    "@keyframes gradientBG{0%{background-position:0% 50%}50%{background-position:100% 50%}100%{background-position:0% 50%}}",
+    ".card{background:var(--card-bg);backdrop-filter:blur(40px);-webkit-backdrop-filter:blur(40px);padding:48px;border-radius:32px;box-shadow:0 30px 60px rgba(0,0,0,0.5),inset 0 0 0 1px var(--card-border);max-width:380px;width:90%;text-align:center;animation:pow-in 0.8s cubic-bezier(0.2,0.8,0.2,1) both;}",
+    "h1{margin:0 0 24px;font-size:24px;font-weight:600;letter-spacing:-0.01em;text-shadow:0 2px 10px rgba(0,0,0,0.3);color:var(--text);}",
+    ".spinner-wrap{margin:40px auto;height:56px;width:56px;position:relative;}",
+    ".spinner{width:100%;height:100%;border:3px solid rgba(255,255,255,0.05);border-top-color:var(--accent);border-radius:50%;animation:s 1s linear infinite;box-sizing:border-box;}",
     "@keyframes s{100%{transform:rotate(360deg);}}",
-    "@keyframes pow-in{0%{opacity:0;transform:scale(0.96) translateY(12px)}100%{opacity:1;transform:none}}",
-    "#log{font-family:var(--mono);font-size:11px;margin-top:32px;text-align:left;background:rgba(0,0,0,0.4);padding:16px;border-radius:12px;height:84px;overflow:hidden;position:relative;border:1px solid rgba(255,255,255,0.03);color:var(--sub);box-shadow:inset 0 2px 6px rgba(0,0,0,0.2);}",
-    ".log-line{transition:opacity 0.3s ease;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.6;letter-spacing:-0.01em;}",
-    ".icon{width:56px;height:56px;margin:28px auto;display:none;}",
-    ".icon svg{width:100%;height:100%;display:block;}"
+    "@keyframes pow-in{0%{opacity:0;transform:scale(0.92) translateY(20px)}100%{opacity:1;transform:none}}",
+    "#log{font-family:var(--mono);font-size:12px;margin-top:32px;text-align:left;background:rgba(0,0,0,0.2);padding:16px 20px;border-radius:16px;height:90px;overflow:hidden;position:relative;border:1px solid rgba(255,255,255,0.05);color:var(--sub);box-shadow:inset 0 2px 6px rgba(0,0,0,0.1);}",
+    ".log-line{transition:opacity 0.4s ease;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.8;letter-spacing:-0.01em;}",
+    ".icon{width:64px;height:64px;margin:36px auto;display:none;}",
+    ".icon svg{width:100%;height:100%;display:block;filter:drop-shadow(0 0 10px rgba(37,174,136,0.4));}",
+    ".c-path{stroke-dasharray:60;stroke-dashoffset:60;animation:draw 0.6s 0.1s cubic-bezier(0.65,0,0.45,1) forwards;}",
+    ".c-circ{stroke-dasharray:160;stroke-dashoffset:160;animation:draw 0.8s cubic-bezier(0.65,0,0.45,1) forwards;}",
+    "@keyframes draw{to{stroke-dashoffset:0;}}"
   ].join("");
   (document.head || document.documentElement).appendChild(style);
   const body = document.body;
@@ -127,7 +131,7 @@ const setStatus = (ok) => {
     ui.tEl.textContent = "Redirecting...";
     ui.iEl.style.color = "var(--success)";
     ui.iEl.innerHTML =
-      '<svg viewBox="0 0 52 52" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><circle cx="26" cy="26" r="24" stroke-opacity="0.2"/><path d="M14.1 27.2l7.1 7.2 16.7-16.8"/></svg>';
+      '<svg viewBox="0 0 52 52" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><circle class="c-circ" cx="26" cy="26" r="24" stroke-opacity="0.2"/><path class="c-path" d="M14.1 27.2l7.1 7.2 16.7-16.8"/></svg>';
   } else {
     ui.tEl.textContent = "Failed!";
     ui.iEl.style.color = "var(--error)";
@@ -161,15 +165,23 @@ export default async function runPow(
     const spinIndex = log("Computing hash chain...");
     const spinChars = "|/-\\\\";
     let spinFrame = 0;
+    let attemptCount = 0;
     const spinTimer = setInterval(() => {
-      update(spinIndex, "Computing hash chain... " + spinChars[spinFrame++ % spinChars.length]);
+      let msg = "Computing hash chain...";
+      if (attemptCount > 0) {
+        msg = "Screening hash (attempt " + attemptCount + ")...";
+      }
+      update(spinIndex, msg + " " + spinChars[spinFrame++ % spinChars.length]);
     }, 120);
     const commit = await computePoswCommit(binding, steps, {
       hashcashBits,
       segmentLen,
+      onStatus: (type, val) => {
+        if (type === "retry") attemptCount = val;
+      },
     });
     clearInterval(spinTimer);
-    update(spinIndex, "Computing hash chain... done");
+    update(spinIndex, (attemptCount > 0 ? "Screening hash... done" : "Computing hash chain... done"));
     const apiPrefix = normalizeApiPrefix(decodeB64Url(String(apiPrefixB64 || "")));
     log("Submitting commit...");
     await postJson(apiPrefix + "/commit", {
@@ -189,11 +201,13 @@ export default async function runPow(
     ) {
       throw new Error("Challenge Failed");
     }
+    let round = 0;
     while (state && state.done !== true) {
+      round++;
       if (!Array.isArray(state.indices) || state.indices.length === 0) {
         throw new Error("Challenge Failed");
       }
-      log("Opening proofs (" + state.indices.length + ")...");
+      log("Verifying #" + round + " (" + state.indices.length + ")...");
       const indices = state.indices;
       const segs =
         Array.isArray(state.segs) && state.segs.length === indices.length
