@@ -38,6 +38,54 @@
 
 ---
 
+## CCR 机制（Commit → Challenge → Response/Open）
+
+本实现的 PoW 交互是典型的 **CCR**（也可理解为“先承诺、再出题、再作答”）：
+
+1. **Commit（承诺）**：浏览器先完成 PoSW 计算得到 `rootB64 + nonce`，调用 `POST /__pow/commit`。服务端校验 `ticket.mac` 等绑定后，签发短期 `__Host-pow_commit`（其中包含 `ticketB64/rootB64/pathHash/nonce/exp/spineSeed/mac`）。
+2. **Challenge（出题）**：浏览器调用 `POST /__pow/challenge`，服务端基于 `powSecret` + `commit.mac` 通过确定性 RNG 生成抽样 `indices`、每个索引的 `segLen`、以及本批需额外提供“中点证明”的 `spinePos`，并返回 `token`（绑定 `cursor/spinePos`）。
+3. **Response/Open（作答）**：浏览器对本批 `indices` 生成 `opens`（见下节），调用 `POST /__pow/open`。服务端验证通过则推进 `cursor` 并返回下一批 challenge；全部批次通过后签发 `__Host-pow_sol` 通行证 Cookie。
+
+CCR 的关键收益：
+
+- **先承诺 root，再抽样验证**：避免服务端保存大状态，同时让客户端无法“见题再改题”。
+- **串行推进（RTT-LOCK）**：每批 `/open` 必须携带与 `cursor/spinePos` 绑定的 `token`，无法并行/乱序。
+
+---
+
+## PoSW + Merkle：为什么能抽样验证
+
+### PoSW 链（顺序工作量）
+
+浏览器按严格顺序构造长度为 `L` 的哈希链（示意）：
+
+- `chain[0] = SHA256("posw|seed|" + binding + "|" + nonce)`
+- `chain[i] = SHA256("posw|step|" + i + chain[i-1])`（`i=1..L`）
+
+该结构的目的不是阻止攻击者并行算更多会话，而是确保“单条链的生成具有强顺序性”，并能与抽样段验证配合形成概率约束。
+
+### Merkle 承诺（一次承诺、任意抽样开示）
+
+将所有 `chain[i]` 做叶子哈希并构建 Merkle 树，得到 `rootB64` 作为承诺：
+
+- 叶子：`leaf[i] = SHA256("leaf|" + i + chain[i])`
+- 节点：`node = SHA256("node|" + left + right)`
+
+抽样时，浏览器对每个被要求的索引 `i` 给出：
+
+- `hPrev = chain[i-segLen]` 与其 Merkle 证明 `proofPrev`
+- `hCurr = chain[i]` 与其 Merkle 证明 `proofCurr`
+- 若该位置被选中为 `spinePos`，还需提供段内某个“中点” `hMid` 与 `proofMid`
+
+服务端验证分两层：
+
+- **段内顺序推导**：从 `hPrev` 连续推导 `segLen` 次，检查是否等于 `hCurr`（必要时同时校验中点）。
+- **Merkle 证明**：验证 `hPrev/hCurr(/hMid)` 都确实包含在承诺的 `rootB64` 中。
+
+因此，攻击者若试图“漏步/稀疏计算/随便编造”，就必须赌抽样段恰好不覆盖其坏步/坏区间；默认参数会使该赌局在期望上变为负收益。
+
+---
+
 ## 协议串行（RTT-LOCK）与吞吐上限
 
 PoW 通过过程是**严格串行**的：每一批 `/open` 都依赖上一次返回的 `cursor`/`token`（`token` 绑定了 `cursor` 与 `spinePos`），因此无法并行、无法乱序。
