@@ -283,3 +283,19 @@ const CONFIG = [
 - 在 Cloudflare WAF 配置全站前置 Rate Limit（例如 `50 req / 10s / per IP`），把 PoW 铸币过程视为固定“汇率”消耗，形成无状态配额管控。
 - 关注 `POW_OPEN_BATCH` 与 Rate Limit 的配合：批次越多（越串行），“每枚 token 消耗的请求预算”越高，越能把吞吐压到可控范围。
 - 对高风险路径提高 `POW_DIFFICULTY_COEFF` 或降低 `POW_OPEN_BATCH`（增强 RTT-LOCK），而不是盲目提高 `POW_SAMPLE_K/POW_CHAL_ROUNDS`。
+
+---
+
+## 与 Managed Challenge 的正交防护（推荐叠加）
+
+你们可以在 WAF Rate Limit 之外，再叠加 Cloudflare **Managed Challenge**（其发放 `cf_clearance` Cookie）。这与本 Snippets 的 `__Host-pow_*` Cookie 体系是正交的：
+
+- **两套通行证互不依赖**：Managed Challenge 只关心 `cf_clearance`；本脚本只关心 `__Host-pow_sol`（以及短期 `__Host-pow_commit`）。浏览器会自动携带这两类 Cookie，因此可自然叠加。
+- **对 `/__pow/*` 的影响更小**：只要 Managed Challenge 在用户首次进入站点时就完成并写入 `cf_clearance`，后续调用 `/__pow/*` API 也会携带 `cf_clearance`，不会额外增加 PoW 协议摩擦（通常无需专门“放开” `/__pow`）。
+- **TLS 指纹的同源绑定增益**：Managed Challenge 必然依赖 Cloudflare 的 TLS/浏览器指纹体系发放 `cf_clearance`；而本脚本默认 `POW_BIND_TLS=true` 将 TLS 指纹哈希纳入 PoW 绑定。两者叠加能显著降低“搬运/中转/分工”攻击（例如一端过 Challenge、另一端刷接口）的可行性。
+- **同一请求链路的原子性**：TLS 指纹采集、WAF 判定与 Snippets/Worker 逻辑发生在 Cloudflare 边缘的同一处理流水线上，对攻击者而言在物理上难以拆分成两个互相独立的阶段来绕过绑定。
+
+实践建议：
+
+- 让 Managed Challenge 尽量发生在“入口/导航请求”阶段，避免首次 `/__pow/*` 调用就被挑战页打断导致 PoW 交互不稳定。
+- Rate Limit 仍建议覆盖 `/__pow/*` 与受保护路径，使 token 铸造可按固定“汇率”消耗配额，形成确定的吞吐上限。
