@@ -1,56 +1,17 @@
 import { build } from "esbuild";
-import { mkdir, rm, stat, readFile } from "fs/promises";
+import { mkdir, rm, stat } from "fs/promises";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
-import { minify } from "html-minifier-terser";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const entry = resolve(__dirname, "src.js");
-const templatePath = resolve(__dirname, "template.html");
+const entry = resolve(__dirname, "sign.js");
 const outdir = resolve(__dirname, "dist");
 const outfile = resolve(outdir, "snippet.js");
 
-// Read and minify HTML template
-console.log("Reading HTML template...");
-const templateContent = await readFile(templatePath, "utf-8");
-
-console.log("Minifying HTML template...");
-const minifiedHtml = await minify(templateContent, {
-  collapseWhitespace: true,
-  removeComments: true,
-  removeRedundantAttributes: true,
-  removeEmptyAttributes: true,
-  minifyCSS: true,
-  minifyJS: {
-    compress: {
-      dead_code: true,
-      drop_console: false,
-      drop_debugger: true,
-      keep_classnames: false,
-      keep_fnames: false,
-    },
-    mangle: {
-      toplevel: true,
-    },
-  },
-  minifyURLs: true,
-  removeAttributeQuotes: true,
-  removeOptionalTags: false,
-  removeScriptTypeAttributes: true,
-  removeStyleLinkTypeAttributes: true,
-  useShortDoctype: true,
-  keepClosingSlash: false,
-  caseSensitive: false,
-  conservativeCollapse: false,
-  quoteCharacter: '"',
-});
-
-console.log(`Template: ${templateContent.length} → ${minifiedHtml.length} bytes (${Math.round((1 - minifiedHtml.length / templateContent.length) * 100)}% reduction)`);
-
-await rm(outdir, { recursive: true, force: true });
 await mkdir(outdir, { recursive: true });
+await rm(outfile, { force: true });
 
 await build({
   entryPoints: [entry],
@@ -62,9 +23,6 @@ await build({
   minify: true,
   legalComments: "none",
   charset: "ascii",
-  define: {
-    '__HTML_TEMPLATE__': JSON.stringify(minifiedHtml),
-  },
 });
 
 const { size } = await stat(outfile);
