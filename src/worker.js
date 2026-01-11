@@ -794,6 +794,28 @@ const normalizeOriginList = (values) => {
   return normalized;
 };
 
+const normalizeHeaderMap = (value) => {
+  const normalized = {};
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return normalized;
+  }
+  for (const [rawName, rawValue] of Object.entries(value)) {
+    const name = typeof rawName === 'string' ? rawName.trim() : '';
+    if (!name) {
+      continue;
+    }
+    if (rawValue === undefined || rawValue === null) {
+      continue;
+    }
+    const stringValue = typeof rawValue === 'string' ? rawValue : String(rawValue);
+    if (!stringValue || stringValue.trim().length === 0) {
+      continue;
+    }
+    normalized[name] = stringValue;
+  }
+  return normalized;
+};
+
 const resolveConfig = (env = {}, bootstrap = null) => {
   const normalizeString = (value, defaultValue = '') => {
     if (value === undefined || value === null) return defaultValue;
@@ -812,6 +834,7 @@ const resolveConfig = (env = {}, bootstrap = null) => {
     throw new Error('controller common.tokenHmacKey is required');
   }
   const signSecretFromController = normalizeString(commonBootstrap.signSecret) || token;
+  const alistAuthHeaders = normalizeHeaderMap(commonBootstrap.alistAuthHeaders);
 
   const landingBootstrap = bootstrap && typeof bootstrap === 'object'
     ? bootstrap.landing || null
@@ -1304,6 +1327,7 @@ const resolveConfig = (env = {}, bootstrap = null) => {
     fileRateLimitActive,
     appendAdditional,
     alistAddress: normalizedAlistAddress,
+    alistAuthHeaders,
     minBandwidthBytesPerSecond: bandwidthBytesPerSecond,
     minDurationSeconds,
     maxDurationTime: maxDurationMilliseconds,
@@ -2043,6 +2067,11 @@ const fetchAlistFileInfo = async (config, path, clientIP) => {
     headers['CF-Connecting-IP-WORKERS'] = clientIP;
   }
   applyVerifyHeaders(headers, config.verifyHeader, config.verifySecret);
+  if (config.alistAuthHeaders && typeof config.alistAuthHeaders === 'object') {
+    for (const [headerName, headerValue] of Object.entries(config.alistAuthHeaders)) {
+      headers[headerName] = headerValue;
+    }
+  }
 
   const response = await fetch(`${config.alistAddress}/api/fs/get`, {
     method: 'POST',
