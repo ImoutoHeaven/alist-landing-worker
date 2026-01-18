@@ -852,10 +852,14 @@ const resolveConfig = (env = {}, bootstrap = null) => {
     ? landingBootstrap.frontend
     : {};
   const frontendGlueUrl = normalizeString(frontendConfig.glueUrl);
+  const frontendHtmlUrl = normalizeString(frontendConfig.htmlUrl);
   const frontendCommonCssUrl = normalizeString(frontendConfig.commonCssUrl);
   const frontendThemeCssUrl = normalizeString(frontendConfig.themeCssUrl);
   if (!frontendGlueUrl) {
     throw new Error('controller bootstrap.landing.frontend.glueUrl is required');
+  }
+  if (!frontendHtmlUrl) {
+    throw new Error('controller bootstrap.landing.frontend.htmlUrl is required');
   }
   if (!frontendCommonCssUrl) {
     throw new Error('controller bootstrap.landing.frontend.commonCssUrl is required');
@@ -1306,6 +1310,7 @@ const resolveConfig = (env = {}, bootstrap = null) => {
     powdetDifficultyTableName,
     pageSecret,
     frontendGlueUrl,
+    frontendHtmlUrl,
     frontendCommonCssUrl,
     frontendThemeCssUrl,
     tlsFingerprintBindingEnabled,
@@ -4578,6 +4583,7 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
 
   return renderLandingPage(url.pathname, {
     glueUrl: config.frontendGlueUrl,
+    htmlUrl: config.frontendHtmlUrl,
     commonCss: config.frontendCommonCssUrl,
     themeCss: { minimal: config.frontendThemeCssUrl },
     underAttack: needTurnstile,

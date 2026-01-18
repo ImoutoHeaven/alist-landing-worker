@@ -316,6 +316,7 @@ type LandingAdditionalConfig struct {
 // LandingFrontendConfig describes landing page asset locations.
 type LandingFrontendConfig struct {
 	GlueUrl       string         `yaml:"glueUrl" json:"glueUrl"`
+	HtmlUrl       string         `yaml:"htmlUrl" json:"htmlUrl"`
 	CommonCssUrl  string         `yaml:"commonCssUrl" json:"commonCssUrl"`
 	ThemeCssUrl   string         `yaml:"themeCssUrl" json:"themeCssUrl"`
 	Extra         map[string]any `yaml:",inline" json:"-"`
@@ -809,6 +810,9 @@ func (l *LandingConfig) ensureDefaults(envName string) error {
 	}
 	if strings.TrimSpace(l.Frontend.GlueUrl) == "" {
 		return fmt.Errorf("landing.frontend.glueUrl is required for env %s", envName)
+	}
+	if strings.TrimSpace(l.Frontend.HtmlUrl) == "" {
+		return fmt.Errorf("landing.frontend.htmlUrl is required for env %s", envName)
 	}
 	if strings.TrimSpace(l.Frontend.CommonCssUrl) == "" {
 		return fmt.Errorf("landing.frontend.commonCssUrl is required for env %s", envName)

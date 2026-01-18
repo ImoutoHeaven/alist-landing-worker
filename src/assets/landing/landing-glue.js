@@ -1,5 +1,93 @@
-(() => {
+(async () => {
   'use strict';
+
+  const normalizeAssetEntry = (value) => {
+    if (!value) return null;
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (!trimmed) return null;
+      if (/[{}]/.test(trimmed)) {
+        return { type: 'inline', value: trimmed };
+      }
+      return { type: 'url', value: trimmed };
+    }
+    if (typeof value === 'object') {
+      const url = typeof value.url === 'string' ? value.url.trim() : '';
+      if (url) return { type: 'url', value: url };
+      const css = typeof value.css === 'string' ? value.css : '';
+      if (css.trim()) return { type: 'inline', value: css };
+    }
+    return null;
+  };
+
+  const ensureCommonStyleTag = () => {
+    let tag = document.getElementById('common-css');
+    if (!tag) {
+      tag = document.createElement('style');
+      tag.id = 'common-css';
+      (document.head || document.documentElement).appendChild(tag);
+    }
+    return tag;
+  };
+
+  const ensureCommonLinkTag = () => {
+    let tag = document.getElementById('common-css-link');
+    if (!tag) {
+      tag = document.createElement('link');
+      tag.id = 'common-css-link';
+      tag.rel = 'stylesheet';
+      (document.head || document.documentElement).appendChild(tag);
+    }
+    return tag;
+  };
+
+  const applyCommonCss = () => {
+    const entry = normalizeAssetEntry(window.__COMMON_CSS__);
+    if (!entry) {
+      throw new Error('Common CSS missing');
+    }
+    const styleTag = ensureCommonStyleTag();
+    const existingLink = document.getElementById('common-css-link');
+    if (entry.type === 'url') {
+      const linkTag = ensureCommonLinkTag();
+      linkTag.disabled = false;
+      linkTag.href = entry.value;
+      styleTag.textContent = '';
+    } else {
+      if (existingLink) {
+        existingLink.disabled = true;
+        existingLink.href = '';
+      }
+      styleTag.textContent = entry.value;
+    }
+  };
+
+  const loadLandingHtml = async () => {
+    const htmlUrl =
+      typeof window.__LANDING_HTML_URL__ === 'string'
+        ? window.__LANDING_HTML_URL__.trim()
+        : '';
+    if (!htmlUrl) {
+      throw new Error('Landing HTML URL missing');
+    }
+    const resp = await fetch(htmlUrl, { method: 'GET' });
+    if (!resp.ok) {
+      throw new Error('Landing HTML load failed');
+    }
+    const html = await resp.text();
+    if (document.body) {
+      document.body.innerHTML = html;
+    }
+    const title = typeof window.__PAGE_TITLE__ === 'string' ? window.__PAGE_TITLE__ : '';
+    if (title) {
+      document.title = title;
+      const nameEl = document.getElementById('fileName');
+      if (nameEl) nameEl.textContent = title;
+    }
+  };
+
+  applyCommonCss();
+  await loadLandingHtml();
 
   // ===== Theme Manager & Adapter =====
   class MinimalThemeAdapter {
@@ -481,24 +569,7 @@
     }
   }
 
-  const normalizeThemeEntry = (value) => {
-    if (!value) return null;
-    if (typeof value === 'string') {
-      const trimmed = value.trim();
-      if (!trimmed) return null;
-      if (/[{}]/.test(trimmed)) {
-        return { type: 'inline', value: trimmed };
-      }
-      return { type: 'url', value: trimmed };
-    }
-    if (typeof value === 'object') {
-      const url = typeof value.url === 'string' ? value.url.trim() : '';
-      if (url) return { type: 'url', value: url };
-      const css = typeof value.css === 'string' ? value.css : '';
-      if (css.trim()) return { type: 'inline', value: css };
-    }
-    return null;
-  };
+  const normalizeThemeEntry = normalizeAssetEntry;
 
   const ensureThemeStyleTag = () => {
     let tag = document.getElementById('theme-css');

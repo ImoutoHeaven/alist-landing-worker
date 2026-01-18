@@ -34,7 +34,7 @@ await build({
   minify: true,
 });
 
-const assetFiles = ['landing.common.css', 'landing.minimal.css'];
+const assetFiles = ['landing.common.css', 'landing.minimal.css', 'landing.html'];
 for (const file of assetFiles) {
   await copyFile(
     resolve(__dirname, 'src', 'assets', 'landing', file),

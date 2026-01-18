@@ -25,17 +25,6 @@ const normalizeCssEntry = (value) => {
   return { type: 'url', value: trimmed };
 };
 
-const buildCssTag = (entry, { id, linkId } = {}) => {
-  if (!entry || !entry.value) return '';
-  if (entry.type === 'url') {
-    const tagId = linkId || id;
-    const idAttr = tagId ? ` id="${tagId}"` : '';
-    return `<link${idAttr} rel="stylesheet" href="${escapeHtml(entry.value)}">`;
-  }
-  const idAttr = id ? ` id="${id}"` : '';
-  return `<style${idAttr}>${entry.value}</style>`;
-};
-
 const renderLandingPageHtml = (path, options = {}) => {
   const normalizedOptions =
     options && typeof options === 'object' && !Array.isArray(options) ? options : {};
@@ -51,15 +40,26 @@ const renderLandingPageHtml = (path, options = {}) => {
     }
   }
   const title = escapeHtml(display);
+  const pageTitleJson = JSON.stringify(display).replace(/</g, '\\u003c');
   const glueUrl =
     typeof normalizedOptions.glueUrl === 'string' ? normalizedOptions.glueUrl.trim() : '';
   if (!glueUrl) {
     throw new Error('glueUrl is required');
   }
+  const htmlUrl =
+    typeof normalizedOptions.htmlUrl === 'string' ? normalizedOptions.htmlUrl.trim() : '';
+  if (!htmlUrl) {
+    throw new Error('htmlUrl is required');
+  }
   const commonCssEntry = normalizeCssEntry(normalizedOptions.commonCss);
   if (!commonCssEntry) {
     throw new Error('commonCss is required');
   }
+  const commonCssPayload =
+    commonCssEntry.type === 'url'
+      ? { url: commonCssEntry.value }
+      : { css: commonCssEntry.value };
+  const commonCssJson = JSON.stringify(commonCssPayload).replace(/</g, '\\u003c');
   const themeCssInput =
     normalizedOptions.themeCss &&
     typeof normalizedOptions.themeCss === 'object' &&
@@ -70,12 +70,13 @@ const renderLandingPageHtml = (path, options = {}) => {
   if (!defaultThemeEntry) {
     throw new Error('themeCss.minimal is required');
   }
-  const commonCssTag = buildCssTag(commonCssEntry, { id: 'common-css' });
-  const themeCssTag = buildCssTag(defaultThemeEntry, {
-    id: 'theme-css',
-    linkId: 'theme-css-link',
-  });
-  const themeCssJson = JSON.stringify(themeCssInput).replace(/</g, '\\u003c');
+  const minimalThemePayload =
+    defaultThemeEntry.type === 'url'
+      ? { url: defaultThemeEntry.value }
+      : { css: defaultThemeEntry.value };
+  const themeCssPayload = { ...themeCssInput, minimal: minimalThemePayload };
+  const themeCssJson = JSON.stringify(themeCssPayload).replace(/</g, '\\u003c');
+  const htmlUrlJson = JSON.stringify(htmlUrl).replace(/</g, '\\u003c');
   const rawAltchaChallenge =
     normalizedOptions.altchaChallenge && typeof normalizedOptions.altchaChallenge === 'object'
       ? normalizedOptions.altchaChallenge
@@ -197,12 +198,13 @@ const renderLandingPageHtml = (path, options = {}) => {
   // Use template and replace placeholders
   return htmlTemplate
     .replace(/\{\{TITLE\}\}/g, title)
-    .replace(/\{\{COMMON_CSS_TAG\}\}/g, commonCssTag)
-    .replace(/\{\{THEME_CSS_TAG\}\}/g, themeCssTag)
     .replace(/\{\{SECURITY_JSON\}\}/g, securityJson)
     .replace(/\{\{AUTO_REDIRECT\}\}/g, autoRedirectLiteral)
     .replace(/\{\{WEB_DOWNLOADER_JSON\}\}/g, webDownloaderJson)
     .replace(/\{\{THEME_CSS_JSON\}\}/g, themeCssJson)
+    .replace(/\{\{COMMON_CSS_JSON\}\}/g, commonCssJson)
+    .replace(/\{\{HTML_URL_JSON\}\}/g, htmlUrlJson)
+    .replace(/\{\{PAGE_TITLE_JSON\}\}/g, pageTitleJson)
     .replace(/\{\{GLUE_URL\}\}/g, escapeHtml(glueUrl));
 };
 

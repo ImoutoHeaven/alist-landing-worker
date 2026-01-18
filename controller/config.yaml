@@ -22,9 +22,10 @@ envs:
     landing: # Landing-side configuration for staging
       pageSecret: "replace-with-page-secret" # Used to sign/validate landing page state/token (non-empty when signatures required)
       frontend:
-        glueUrl: "https://landing-staging.example.com/assets/landing-glue.js" # Frontend module URL (required)
-        commonCssUrl: "https://landing-staging.example.com/assets/landing.common.css" # Common layout CSS URL (required)
-        themeCssUrl: "https://landing-staging.example.com/assets/landing.minimal.css" # Default theme CSS URL (required)
+        glueUrl: "https://cdn.jsdelivr.net/gh/your-org/alist-landing-worker@<commit>/src/assets/landing/landing-glue.js" # Frontend module URL (required)
+        htmlUrl: "https://cdn.jsdelivr.net/gh/your-org/alist-landing-worker@<commit>/src/assets/landing/landing.html" # Landing HTML URL (required)
+        commonCssUrl: "https://cdn.jsdelivr.net/gh/your-org/alist-landing-worker@<commit>/src/assets/landing/landing.common.css" # Common layout CSS URL (required)
+        themeCssUrl: "https://cdn.jsdelivr.net/gh/your-org/alist-landing-worker@<commit>/src/assets/landing/landing.minimal.css" # Default theme CSS URL (required)
       tlsFingerprintBinding: false # Bind challenges to tlsClientExtensionsSha1+tlsClientCiphersSha1 when true
       captcha:
         defaultCombo: ["verify-altcha"] # Ordered challenge pipeline; allowed values: verify-altcha|verify-turn|verify-turnstile|verify-powdet|verify-none; empty array = no challenge
@@ -401,9 +402,10 @@ envs:
     landing: # Production landing config; field meanings match staging.landing
       pageSecret: "replace-with-page-secret"
       frontend:
-        glueUrl: "https://landing.example.com/assets/landing-glue.js" # Frontend module URL (required)
-        commonCssUrl: "https://landing.example.com/assets/landing.common.css" # Common layout CSS URL (required)
-        themeCssUrl: "https://landing.example.com/assets/landing.minimal.css" # Default theme CSS URL (required)
+        glueUrl: "https://cdn.jsdelivr.net/gh/your-org/alist-landing-worker@<commit>/src/assets/landing/landing-glue.js" # Frontend module URL (required)
+        htmlUrl: "https://cdn.jsdelivr.net/gh/your-org/alist-landing-worker@<commit>/src/assets/landing/landing.html" # Landing HTML URL (required)
+        commonCssUrl: "https://cdn.jsdelivr.net/gh/your-org/alist-landing-worker@<commit>/src/assets/landing/landing.common.css" # Common layout CSS URL (required)
+        themeCssUrl: "https://cdn.jsdelivr.net/gh/your-org/alist-landing-worker@<commit>/src/assets/landing/landing.minimal.css" # Default theme CSS URL (required)
       tlsFingerprintBinding: false # Bind challenges to tlsClientExtensionsSha1+tlsClientCiphersSha1 when true
       captcha:
         defaultCombo: ["verify-altcha"] # Same enum as staging: verify-altcha|verify-turnstile|verify-powdet|verify-none; order defines pipeline
