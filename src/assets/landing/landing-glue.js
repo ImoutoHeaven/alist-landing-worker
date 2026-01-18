@@ -663,7 +663,7 @@
     adapter: null,
     cssData: {},
 
-    init() {
+    async init() {
       const raw = window.__THEME_CSS__;
       if (typeof raw === 'string') {
         this.cssData = { minimal: raw };
@@ -672,10 +672,10 @@
       } else {
         this.cssData = {};
       }
-      this.switchTheme('minimal');
+      await this.switchTheme('minimal');
     },
 
-    switchTheme(name) {
+    async switchTheme(name) {
       if (this.adapter && typeof this.adapter.unmount === 'function') {
         try {
           this.adapter.unmount();
@@ -691,8 +691,8 @@
       if (entry && entry.type === 'url') {
         const linkTag = ensureThemeLinkTag();
         linkTag.disabled = false;
-        linkTag.href = entry.value;
         styleTag.textContent = '';
+        await waitForStylesheet(linkTag, entry.value);
       } else {
         if (existingLink) {
           existingLink.disabled = true;
@@ -6723,7 +6723,7 @@
   initClientDecryptDropzone();
 
   const initialise = async () => {
-    ThemeManager.init();
+    await ThemeManager.init();
 
     state.infoReady = false;
     updateButtonState();
