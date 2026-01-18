@@ -20,6 +20,42 @@
     return null;
   };
 
+  const normalizeThemeData = (raw) => {
+    if (typeof raw === 'string') {
+      const trimmed = raw.trim();
+      if (!trimmed) return {};
+      return { minimal: raw };
+    }
+    if (raw && typeof raw === 'object') {
+      return raw;
+    }
+    return {};
+  };
+
+  const waitForStylesheet = (linkTag, href) => {
+    if (!linkTag) return Promise.resolve();
+    if (linkTag.href === href) {
+      try {
+        if (linkTag.sheet) return Promise.resolve();
+      } catch {
+        // fall through to load listeners
+      }
+    }
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        linkTag.removeEventListener('load', finish);
+        linkTag.removeEventListener('error', finish);
+        resolve();
+      };
+      linkTag.addEventListener('load', finish);
+      linkTag.addEventListener('error', finish);
+      linkTag.href = href;
+    });
+  };
+
   const ensureCommonStyleTag = () => {
     let tag = document.getElementById('common-css');
     if (!tag) {
@@ -41,7 +77,7 @@
     return tag;
   };
 
-  const applyCommonCss = () => {
+  const applyCommonCss = async () => {
     const entry = normalizeAssetEntry(window.__COMMON_CSS__);
     if (!entry) {
       throw new Error('Common CSS missing');
@@ -51,8 +87,38 @@
     if (entry.type === 'url') {
       const linkTag = ensureCommonLinkTag();
       linkTag.disabled = false;
-      linkTag.href = entry.value;
       styleTag.textContent = '';
+      await waitForStylesheet(linkTag, entry.value);
+    } else {
+      if (existingLink) {
+        existingLink.disabled = true;
+        existingLink.href = '';
+      }
+      styleTag.textContent = entry.value;
+    }
+  };
+
+  const preloadThemeCss = async (themeData) => {
+    const entry = normalizeAssetEntry(themeData.minimal);
+    if (!entry) {
+      throw new Error('Theme CSS missing');
+    }
+    const styleTag = document.getElementById('theme-css') || document.createElement('style');
+    if (!styleTag.id) {
+      styleTag.id = 'theme-css';
+      (document.head || document.documentElement).appendChild(styleTag);
+    }
+    const existingLink = document.getElementById('theme-css-link');
+    if (entry.type === 'url') {
+      const linkTag = existingLink || document.createElement('link');
+      if (!linkTag.id) {
+        linkTag.id = 'theme-css-link';
+        linkTag.rel = 'stylesheet';
+        (document.head || document.documentElement).appendChild(linkTag);
+      }
+      linkTag.disabled = false;
+      styleTag.textContent = '';
+      await waitForStylesheet(linkTag, entry.value);
     } else {
       if (existingLink) {
         existingLink.disabled = true;
@@ -86,7 +152,8 @@
     }
   };
 
-  applyCommonCss();
+  const themeData = normalizeThemeData(window.__THEME_CSS__);
+  await Promise.all([applyCommonCss(), preloadThemeCss(themeData)]);
   await loadLandingHtml();
 
   // ===== Theme Manager & Adapter =====
