@@ -848,6 +848,21 @@ const resolveConfig = (env = {}, bootstrap = null) => {
   if (!pageSecret) {
     throw new Error('controller bootstrap.landing.pageSecret is required');
   }
+  const frontendConfig = landingBootstrap.frontend && typeof landingBootstrap.frontend === 'object'
+    ? landingBootstrap.frontend
+    : {};
+  const frontendGlueUrl = normalizeString(frontendConfig.glueUrl);
+  const frontendCommonCssUrl = normalizeString(frontendConfig.commonCssUrl);
+  const frontendThemeCssUrl = normalizeString(frontendConfig.themeCssUrl);
+  if (!frontendGlueUrl) {
+    throw new Error('controller bootstrap.landing.frontend.glueUrl is required');
+  }
+  if (!frontendCommonCssUrl) {
+    throw new Error('controller bootstrap.landing.frontend.commonCssUrl is required');
+  }
+  if (!frontendThemeCssUrl) {
+    throw new Error('controller bootstrap.landing.frontend.themeCssUrl is required');
+  }
   const tlsFingerprintBindingEnabled = Boolean(landingBootstrap.tlsFingerprintBinding);
   const altchaConfig = landingBootstrap.altcha && typeof landingBootstrap.altcha === 'object'
     ? landingBootstrap.altcha
@@ -1290,6 +1305,9 @@ const resolveConfig = (env = {}, bootstrap = null) => {
     powdetDynamic,
     powdetDifficultyTableName,
     pageSecret,
+    frontendGlueUrl,
+    frontendCommonCssUrl,
+    frontendThemeCssUrl,
     tlsFingerprintBindingEnabled,
     turnstileSiteKey,
     turnstileSecretKey,
@@ -4559,6 +4577,9 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
   }
 
   return renderLandingPage(url.pathname, {
+    glueUrl: config.frontendGlueUrl,
+    commonCss: config.frontendCommonCssUrl,
+    themeCss: { minimal: config.frontendThemeCssUrl },
     underAttack: needTurnstile,
     turnstileSiteKey: config.turnstileSiteKey,
     turnstileAction: config.turnstileExpectedAction,

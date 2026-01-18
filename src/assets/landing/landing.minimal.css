@@ -1,0 +1,477 @@
+/* ========== Minimal Theme - Visual Styles ========== */
+
+body {
+  background: #050607;
+  color: #f4f4f8;
+}
+
+body::before {
+  background:
+    radial-gradient(circle at var(--glow-x, 50%) var(--glow-y, 0%), rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), 0.35), transparent 55%),
+    radial-gradient(circle at calc(100% - var(--glow-x, 50%)) calc(100% - var(--glow-y, 0%)), rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), 0.2), transparent 55%);
+  opacity: var(--breathe-opacity, 1);
+}
+
+/* Edge reflections - localized glow with dynamic width and color */
+body::after {
+  background:
+    radial-gradient(ellipse var(--glow-h-width-top, 6.75%) var(--glow-v-height-top, 18px) at var(--glow-x, 50%) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), var(--reflect-top, 0)) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), calc(var(--reflect-top, 0) * 0.4)) 40%,
+      transparent 70%
+    ) top / 100% var(--glow-v-height-top, 18px) no-repeat,
+    radial-gradient(ellipse var(--glow-h-width-bottom, 6.75%) var(--glow-v-height-bottom, 18px) at var(--glow-x, 50%) 100%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), var(--reflect-bottom, 0)) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), calc(var(--reflect-bottom, 0) * 0.4)) 40%,
+      transparent 70%
+    ) bottom / 100% var(--glow-v-height-bottom, 18px) no-repeat,
+    radial-gradient(ellipse var(--glow-h-width-left, 18px) var(--glow-v-height-left, 6.75%) at 0% var(--glow-y, 0%),
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), var(--reflect-left, 0)) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), calc(var(--reflect-left, 0) * 0.4)) 40%,
+      transparent 70%
+    ) left / var(--glow-h-width-left, 18px) 100% no-repeat,
+    radial-gradient(ellipse var(--glow-h-width-right, 18px) var(--glow-v-height-right, 6.75%) at 100% var(--glow-y, 0%),
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), var(--reflect-right, 0)) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), calc(var(--reflect-right, 0) * 0.4)) 40%,
+      transparent 70%
+    ) right / var(--glow-h-width-right, 18px) 100% no-repeat;
+}
+
+/* ========== Spinner ========== */
+.spinner {
+  border: 2px solid #38bdf8;
+  border-top-color: transparent;
+}
+
+/* ========== Header ========== */
+header {
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+
+.status {
+  color: #9ca3af;
+}
+
+/* ========== Metrics ========== */
+.metric-label {
+  color: #9ca3af;
+}
+
+.metric-bar {
+  background: rgba(255,255,255,0.08);
+}
+
+.metric-bar > span {
+  background: linear-gradient(90deg, #38bdf8, #22d3ee);
+}
+
+.metric-value {
+  color: #f8fafc;
+}
+
+.label {
+  color: #9ca3af;
+}
+
+/* ========== Turnstile ========== */
+.turnstile-container {
+  background: rgba(56,189,248,0.08);
+}
+
+.turnstile-message {
+  color: #fbbf24;
+}
+
+/* ========== Buttons ========== */
+button {
+  border: 1px solid rgba(255,255,255,0.1);
+  background: rgba(56,189,248,0.12);
+  color: #e0f2fe;
+  -webkit-backdrop-filter: blur(8px) saturate(140%);
+  backdrop-filter: blur(8px) saturate(140%);
+}
+
+/* 按钮边缘辉光效果 - 只照亮边缘线条，不向外扩散 */
+button::after {
+  background:
+    /* 顶部边缘 - 扁平椭圆，紧贴边缘 */
+    radial-gradient(ellipse var(--elem-glow-h-width-top, 15%) 1px at var(--elem-glow-x, 50%) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), var(--elem-reflect-top, 0)) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), calc(var(--elem-reflect-top, 0) * 0.3)) 50%,
+      transparent 100%
+    ) top / 100% 1px no-repeat,
+    /* 底部边缘 */
+    radial-gradient(ellipse var(--elem-glow-h-width-bottom, 15%) 1px at var(--elem-glow-x, 50%) 100%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), var(--elem-reflect-bottom, 0)) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), calc(var(--elem-reflect-bottom, 0) * 0.3)) 50%,
+      transparent 100%
+    ) bottom / 100% 1px no-repeat,
+    /* 左边缘 */
+    radial-gradient(ellipse 1px var(--elem-glow-v-height-left, 15%) at 0% var(--elem-glow-y, 50%),
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), var(--elem-reflect-left, 0)) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), calc(var(--elem-reflect-left, 0) * 0.3)) 50%,
+      transparent 100%
+    ) left / 1px 100% no-repeat,
+    /* 右边缘 */
+    radial-gradient(ellipse 1px var(--elem-glow-v-height-right, 15%) at 100% var(--elem-glow-y, 50%),
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), var(--elem-reflect-right, 0)) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), calc(var(--elem-reflect-right, 0) * 0.3)) 50%,
+      transparent 100%
+    ) right / 1px 100% no-repeat;
+}
+
+button:hover:not(:disabled) {
+  background: rgba(56,189,248,0.22);
+  border-color: rgba(255,255,255,0.2);
+}
+
+.controls button.secondary {
+  background: rgba(148,163,184,0.10);
+  color: #e2e8f0;
+}
+
+.controls button.secondary:hover:not(:disabled) {
+  background: rgba(148,163,184,0.20);
+}
+
+/* ========== Client Decrypt ========== */
+.client-decrypt {
+  border: 1px solid rgba(56,189,248,0.2);
+  background: rgba(15,23,42,0.4);
+  -webkit-backdrop-filter: blur(10px) saturate(140%);
+  backdrop-filter: blur(10px) saturate(140%);
+}
+
+.client-decrypt.is-dropping {
+  border-color: rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), 0.7);
+  background: rgba(15,23,42,0.6);
+  box-shadow:
+    0 0 0 2px rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), 0.35),
+    0 8px 24px rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), 0.25);
+  transform: scale(1.01);
+}
+
+/* 离线解密容器边缘辉光效果 */
+.client-decrypt::after {
+  background:
+    radial-gradient(ellipse var(--elem-glow-h-width-top, 15%) 1px at var(--elem-glow-x, 50%) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), var(--elem-reflect-top, 0)) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), calc(var(--elem-reflect-top, 0) * 0.3)) 50%,
+      transparent 100%
+    ) top / 100% 1px no-repeat,
+    radial-gradient(ellipse var(--elem-glow-h-width-bottom, 15%) 1px at var(--elem-glow-x, 50%) 100%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), var(--elem-reflect-bottom, 0)) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), calc(var(--elem-reflect-bottom, 0) * 0.3)) 50%,
+      transparent 100%
+    ) bottom / 100% 1px no-repeat,
+    radial-gradient(ellipse 1px var(--elem-glow-v-height-left, 15%) at 0% var(--elem-glow-y, 50%),
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), var(--elem-reflect-left, 0)) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), calc(var(--elem-reflect-left, 0) * 0.3)) 50%,
+      transparent 100%
+    ) left / 1px 100% no-repeat,
+    radial-gradient(ellipse 1px var(--elem-glow-v-height-right, 15%) at 100% var(--elem-glow-y, 50%),
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), var(--elem-reflect-right, 0)) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), calc(var(--elem-reflect-right, 0) * 0.3)) 50%,
+      transparent 100%
+    ) right / 1px 100% no-repeat;
+}
+
+.client-decrypt-title {
+  color: #f8fafc;
+}
+
+.client-decrypt-desc {
+  color: #cbd5f5;
+}
+
+.client-decrypt-hint {
+  -webkit-backdrop-filter: blur(8px) saturate(140%);
+  backdrop-filter: blur(8px) saturate(140%);
+}
+
+.client-decrypt-hint.hint-success {
+  color: #38bdf8;
+  background: rgba(56,189,248,0.12);
+  border-color: rgba(56,189,248,0.3);
+}
+
+.client-decrypt-hint.hint-warning {
+  color: #fbbf24;
+  background: rgba(251,191,36,0.12);
+  border-color: rgba(251,191,36,0.3);
+  animation: warning-breathe 2.5s ease-in-out infinite;
+}
+
+.client-decrypt-hint.hint-success-complete {
+  color: #34d399;
+  background: rgba(52,211,153,0.12);
+  border-color: rgba(52,211,153,0.3);
+  animation: success-breathe 2.5s ease-in-out infinite;
+}
+
+.client-decrypt-hint.hint-error {
+  color: #f87171;
+  background: rgba(248,113,113,0.12);
+  border-color: rgba(248,113,113,0.3);
+  animation: error-breathe 2.5s ease-in-out infinite;
+}
+
+@keyframes warning-breathe {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(251,191,36,0);
+    border-color: rgba(251,191,36,0.3);
+  }
+  50% {
+    box-shadow: 0 0 12px 2px rgba(251,191,36,0.4);
+    border-color: rgba(251,191,36,0.6);
+  }
+}
+
+@keyframes success-breathe {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(52,211,153,0);
+    border-color: rgba(52,211,153,0.3);
+  }
+  50% {
+    box-shadow: 0 0 12px 2px rgba(52,211,153,0.4);
+    border-color: rgba(52,211,153,0.6);
+  }
+}
+
+@keyframes error-breathe {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(248,113,113,0);
+    border-color: rgba(248,113,113,0.3);
+  }
+  50% {
+    box-shadow: 0 0 12px 2px rgba(248,113,113,0.4);
+    border-color: rgba(248,113,113,0.6);
+  }
+}
+
+.client-decrypt-file {
+  background: rgba(15,23,42,0.7);
+  border: 1px solid rgba(148,163,184,0.25);
+  -webkit-backdrop-filter: blur(12px) saturate(130%);
+  backdrop-filter: blur(12px) saturate(130%);
+}
+
+/* 解密进度条 - 透明毛玻璃效果，光斑透过且颜色同步 */
+.client-decrypt-file::before {
+  background: rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), 0.12);
+  -webkit-backdrop-filter: blur(8px) saturate(150%);
+  backdrop-filter: blur(8px) saturate(150%);
+}
+
+/* 文件信息块边缘辉光效果 */
+.client-decrypt-file::after {
+  background:
+    radial-gradient(ellipse var(--elem-glow-h-width-top, 15%) 1px at var(--elem-glow-x, 50%) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), var(--elem-reflect-top, 0)) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), calc(var(--elem-reflect-top, 0) * 0.3)) 50%,
+      transparent 100%
+    ) top / 100% 1px no-repeat,
+    radial-gradient(ellipse var(--elem-glow-h-width-bottom, 15%) 1px at var(--elem-glow-x, 50%) 100%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), var(--elem-reflect-bottom, 0)) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), calc(var(--elem-reflect-bottom, 0) * 0.3)) 50%,
+      transparent 100%
+    ) bottom / 100% 1px no-repeat,
+    radial-gradient(ellipse 1px var(--elem-glow-v-height-left, 15%) at 0% var(--elem-glow-y, 50%),
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), var(--elem-reflect-left, 0)) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), calc(var(--elem-reflect-left, 0) * 0.3)) 50%,
+      transparent 100%
+    ) left / 1px 100% no-repeat,
+    radial-gradient(ellipse 1px var(--elem-glow-v-height-right, 15%) at 100% var(--elem-glow-y, 50%),
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), var(--elem-reflect-right, 0)) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), calc(var(--elem-reflect-right, 0) * 0.3)) 50%,
+      transparent 100%
+    ) right / 1px 100% no-repeat;
+}
+
+.client-file-name {
+  color: #e2e8f0;
+}
+
+.client-file-size {
+  color: #94a3b8;
+}
+
+.client-save-path {
+  color: #94a3b8;
+}
+
+/* ========== Advanced Panel ========== */
+.advanced-backdrop {
+  background:
+    linear-gradient(rgba(0, 0, 0, 0.75), rgba(0, 0, 0, 0.75)),
+    rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), 0.15);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+
+.advanced-panel {
+  background: rgba(15,23,42,0.75);
+  border-left: 1px solid rgba(148,163,184,0.3);
+  box-shadow: -16px 0 32px rgba(15,23,42,0.5);
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  backdrop-filter: blur(16px) saturate(150%);
+}
+
+.advanced-header h2 {
+  color: #f8fafc;
+}
+
+.advanced-close {
+  color: #94a3b8;
+}
+
+.advanced-close:hover {
+  color: #f8fafc;
+  background: rgba(148,163,184,0.14);
+}
+
+.config-section {
+  border-top: 1px solid rgba(255,255,255,0.06);
+}
+
+.config-section-title {
+  color: #e0f2fe;
+}
+
+.retry-label {
+  color: #e0f2fe;
+}
+
+.retry-hint {
+  color: #94a3b8;
+}
+
+.retry-input {
+  background: rgba(15,23,42,0.85);
+  border: 1px solid rgba(148,163,184,0.3);
+  color: #f1f5f9;
+}
+
+.retry-input:focus {
+  border-color: rgba(56,189,248,0.6);
+  box-shadow: 0 0 0 2px rgba(56,189,248,0.2);
+}
+
+.keygen-panel {
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.02);
+}
+
+.keygen-panel h3 {
+  color: #f8fafc;
+}
+
+.keygen-hint {
+  color: #94a3b8;
+}
+
+.keygen-panel label {
+  color: #9ca3af;
+}
+
+.keygen-panel input {
+  border: 1px solid rgba(148,163,184,0.3);
+  background: rgba(15,23,42,0.85);
+  color: #f1f5f9;
+}
+
+.keygen-panel input:focus {
+  border-color: rgba(56,189,248,0.6);
+  box-shadow: 0 0 0 2px rgba(56,189,248,0.2);
+}
+
+.keygen-loading {
+  color: #38bdf8;
+}
+
+.keygen-status {
+  color: #94a3b8;
+}
+
+.keygen-panel pre {
+  background: rgba(0,0,0,0.3);
+  border: 1px solid rgba(255,255,255,0.06);
+  color: #e0f2fe;
+}
+
+/* ========== Log Section ========== */
+.log {
+  background: rgba(15,23,42,0.4);
+  border: 1px solid rgba(148,163,184,0.2);
+  -webkit-backdrop-filter: blur(12px) saturate(130%);
+  backdrop-filter: blur(12px) saturate(130%);
+}
+
+/* 事件日志边缘辉光效果 - 只照亮边缘线条，不向外扩散 */
+.log::after {
+  background:
+    radial-gradient(ellipse var(--elem-glow-h-width-top, 15%) 1px at var(--elem-glow-x, 50%) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), var(--elem-reflect-top, 0)) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), calc(var(--elem-reflect-top, 0) * 0.3)) 50%,
+      transparent 100%
+    ) top / 100% 1px no-repeat,
+    radial-gradient(ellipse var(--elem-glow-h-width-bottom, 15%) 1px at var(--elem-glow-x, 50%) 100%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), var(--elem-reflect-bottom, 0)) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), calc(var(--elem-reflect-bottom, 0) * 0.3)) 50%,
+      transparent 100%
+    ) bottom / 100% 1px no-repeat,
+    radial-gradient(ellipse 1px var(--elem-glow-v-height-left, 15%) at 0% var(--elem-glow-y, 50%),
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), var(--elem-reflect-left, 0)) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), calc(var(--elem-reflect-left, 0) * 0.3)) 50%,
+      transparent 100%
+    ) left / 1px 100% no-repeat,
+    radial-gradient(ellipse 1px var(--elem-glow-v-height-right, 15%) at 100% var(--elem-glow-y, 50%),
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), var(--elem-reflect-right, 0)) 0%,
+      rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), calc(var(--elem-reflect-right, 0) * 0.3)) 50%,
+      transparent 100%
+    ) right / 1px 100% no-repeat;
+}
+
+/* ========== Fallback for browsers without backdrop-filter ========== */
+@supports not (backdrop-filter: blur(8px)) {
+  button {
+    background: rgba(56,189,248,0.25);
+  }
+
+  button:hover:not(:disabled) {
+    background: rgba(56,189,248,0.35);
+  }
+
+  .controls button.secondary {
+    background: rgba(148,163,184,0.22);
+  }
+
+  .controls button.secondary:hover:not(:disabled) {
+    background: rgba(148,163,184,0.32);
+  }
+
+  .advanced-panel {
+    background: rgba(15,23,42,0.92);
+  }
+
+  .log {
+    background: rgba(15,23,42,0.75);
+  }
+
+  .client-decrypt {
+    background: rgba(15,23,42,0.7);
+  }
+
+  .client-decrypt-file {
+    background: rgba(15,23,42,0.85);
+  }
+
+  .client-decrypt-hint {
+    background: rgba(56,189,248,0.25);
+  }
+
+  .client-decrypt-file::before {
+    background: rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), 0.3);
+  }
+}
+

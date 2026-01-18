@@ -2,13 +2,13 @@
  * Landing page HTML template
  * This template uses placeholder variables that will be replaced during rendering:
  * - {{TITLE}} - Page title (escaped filename)
- * - {{COMMON_CSS}} - Common layout CSS (structure)
- * - {{DEFAULT_THEME_CSS}} - Default theme visual CSS
+ * - {{COMMON_CSS_TAG}} - Common layout CSS tag
+ * - {{THEME_CSS_TAG}} - Default theme CSS tag
  * - {{THEME_CSS_JSON}} - Theme CSS data (JSON)
  * - {{SECURITY_JSON}} - Security configuration JSON
  * - {{AUTO_REDIRECT}} - Auto redirect boolean
  * - {{WEB_DOWNLOADER_JSON}} - Web downloader configuration JSON
- * - {{SCRIPT}} - Page JavaScript code
+ * - {{GLUE_URL}} - Frontend module URL
  */
 
 export const htmlTemplate = `<!DOCTYPE html>
@@ -17,8 +17,8 @@ export const htmlTemplate = `<!DOCTYPE html>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1,shrink-to-fit=no">
     <title>{{TITLE}}</title>
-    <style>{{COMMON_CSS}}</style>
-    <style id="theme-css">{{DEFAULT_THEME_CSS}}</style>
+    {{COMMON_CSS_TAG}}
+    {{THEME_CSS_TAG}}
     <script src="https://cdn.jsdelivr.net/npm/dexie@3.2.4/dist/dexie.min.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/streamsaver@2.0.6/StreamSaver.min.js" crossorigin="anonymous"></script>
     <script>
@@ -176,8 +176,6 @@ export const htmlTemplate = `<!DOCTYPE html>
       window.__WEB_DOWNLOADER_PROPS__ = {{WEB_DOWNLOADER_JSON}};
       window.__THEME_CSS__ = {{THEME_CSS_JSON}};
     </script>
-    <script type="module">
-      {{SCRIPT}}
-    </script>
+    <script type="module" src="{{GLUE_URL}}"></script>
   </body>
 </html>`;

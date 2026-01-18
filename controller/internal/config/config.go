@@ -313,9 +313,18 @@ type LandingAdditionalConfig struct {
 	MaxDurationSeconds int  `yaml:"maxDurationSeconds" json:"maxDurationSeconds"`
 }
 
+// LandingFrontendConfig describes landing page asset locations.
+type LandingFrontendConfig struct {
+	GlueUrl       string         `yaml:"glueUrl" json:"glueUrl"`
+	CommonCssUrl  string         `yaml:"commonCssUrl" json:"commonCssUrl"`
+	ThemeCssUrl   string         `yaml:"themeCssUrl" json:"themeCssUrl"`
+	Extra         map[string]any `yaml:",inline" json:"-"`
+}
+
 // LandingConfig describes landing-side static configuration.
 type LandingConfig struct {
 	PageSecret            string                     `yaml:"pageSecret" json:"pageSecret"`
+	Frontend              LandingFrontendConfig      `yaml:"frontend" json:"frontend"`
 	TlsFingerprintBinding bool                       `yaml:"tlsFingerprintBinding" json:"tlsFingerprintBinding"`
 	Captcha               LandingCaptchaConfig       `yaml:"captcha" json:"captcha"`
 	Turnstile             LandingTurnstileConfig     `yaml:"turnstile" json:"turnstile"`
@@ -797,6 +806,15 @@ func (c *LandingPowdetConfig) ensureDefaults() error {
 func (l *LandingConfig) ensureDefaults(envName string) error {
 	if l.PageSecret == "" {
 		return fmt.Errorf("landing.pageSecret is required for env %s", envName)
+	}
+	if strings.TrimSpace(l.Frontend.GlueUrl) == "" {
+		return fmt.Errorf("landing.frontend.glueUrl is required for env %s", envName)
+	}
+	if strings.TrimSpace(l.Frontend.CommonCssUrl) == "" {
+		return fmt.Errorf("landing.frontend.commonCssUrl is required for env %s", envName)
+	}
+	if strings.TrimSpace(l.Frontend.ThemeCssUrl) == "" {
+		return fmt.Errorf("landing.frontend.themeCssUrl is required for env %s", envName)
 	}
 
 	if len(l.Paths.Profiles) == 0 {
