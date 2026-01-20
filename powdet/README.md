@@ -7,7 +7,6 @@
 - `main.go`：Argon2id HTTP 服务，提供 `/GetChallenges` 与 `/Verify`。
 - `static/`：浏览器端资源（`pow-bot-deterrent.js`、workers、`hash-wasm-argon2.umd.min.js`）。
 - `config.json`：运行配置与 controller 接入信息。
-- `proofOfWorkerStub.js`：worker 源码（静态资源已包含构建产物）。
 - `readme/`：历史资料/图片。
 
 ## 关键接口
