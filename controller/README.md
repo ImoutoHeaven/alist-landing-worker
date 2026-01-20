@@ -1,20 +1,44 @@
-# Controller (Go)
+# Controller（Go）
 
-简要说明当前 controller 骨架与使用方式，便于后续 codex 接手。
+本目录是 alist-landing-worker 的控制面，用于向各角色下发配置、执行路径决策并收集指标。
 
-- **入口**：`cmd/controller/main.go`。默认读取 `CONTROLLER_CONFIG_PATH`，未设置时使用 `config.yaml`。
-- **HTTP 路由**：`/api/v0/bootstrap`、`/api/v0/decision`、`/api/v0/metrics`、`/api/v0/admin/reload`、`/api/v0/debug/decision`，均由 `AuthMiddleware` 使用 `apiToken` 保护。
-- **配置**：示例位于 `config.yaml`（每个字段已标注用途、枚举/默认值/取值范围，动作与 originBinding token 与 wrangler 注释保持一致），顶层包含 `apiToken/bootstrapVersion/rulesVersion`，`envs.<env>` 下依次是 `common/landing/download/powdet/slotHandler`。controller-overhaul 仅消费 `paths.*`（global/pathProfiles/pathRules）；legacy `pathRules.*` 字段仅作占位，会被忽略。staging/prod 结构一致，实际部署需按环境替换 token、上游地址等敏感字段。
-- **决策逻辑**：`internal/policy/engine.go` v0 仅做 PATH 规则匹配，后续可扩展 FQ/Throttle/验证链。
-- **运行**：
-  - `cd alist-landing-worker/controller`
-  - `CONTROLLER_CONFIG_PATH=config.yaml go run ./cmd/controller` 或 `go build ./cmd/controller`
-- **测试**：`go test ./...`
+## 主要职责
 
-## 配置修改提示
+- `POST /api/v0/bootstrap`：按 role/env 返回完整配置（含 paths 规则与 landing/download/powdet/slot-handler 配置）。
+- `POST /api/v0/decision`：基于请求上下文输出路径决策结果。
+- `POST /api/v0/metrics`：接收组件指标批次。
+- `POST /api/v0/admin/reload`：重新加载 `config.yaml` 并刷新规则。
+- `POST /api/v0/debug/decision`：与 decision 相同，用于调试。
 
-- 依据 `config.yaml` 内联注释更新各字段；staging 样例已解释每个键的含义与合法值（含 `paths` 动作枚举、originBinding token 列表、-except 改写方案），prod 保持同结构并替换真实值。
-- `common` 覆盖 AList/签名密钥，`landing` 管理验证链与 paths，`download` 管理 auth/db/fairQueue/throttle/paths，`powdet`/`slotHandler` 部分用于被控服务。
-- 变更后可通过 `POST /api/v0/admin/reload` 重新加载配置；返回的 `bootstrapVersion/rulesVersion` 应与文件保持一致，方便 Worker/slot-handler 缓存刷新。
+所有接口使用 `Authorization: Bearer <apiToken>` 认证，未授权会直接返回 404。
 
-更多细节见根目录文档：`controller-overall-plan.md`、`controller-playbook.md`、`envs-migrate-and-cleanup-tutorial.md`、`usr-requirement.txt`。
+## 配置说明
+
+默认读取 `config.yaml`，可用 `-c` / `-config` 指定路径。顶层字段：
+
+- `apiToken`、`bootstrapVersion`、`rulesVersion`、`listenAddr`
+- `envs.<env>`：包含 `common/landing/download/powdet/slotHandler`
+
+路径规则以 `paths.*` 为准（`paths.global`、`paths.pathProfiles`、`paths.pathRules`）。
+`landing.pathRules` 与 `download.pathRules` 仍保留在结构里，但当前决策只读取 `paths.*`，避免混用。
+
+## 决策逻辑（v0）
+
+- `role=landing`：产出 `captchaCombo/fastRedirect/autoRedirect` 等。
+- `role=download`：产出 `pathAction/checkOriginMode/fairQueueProfile/throttleProfile` 等。
+- 规则版本取自 `rulesVersion`，默认 TTL 为 60 秒。
+
+## 运行
+
+```bash
+cd controller
+go run ./cmd/controller
+# 指定配置文件
+go run ./cmd/controller -c config.yaml
+```
+
+## 测试
+
+```bash
+go test ./...
+```
