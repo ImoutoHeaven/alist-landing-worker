@@ -28,6 +28,8 @@ npm run build
 ```
 
 构建完成后会生成 `dist/worker.js`，即 Worker 入口。
+前端静态资源不再随构建输出，需要将 `src/assets/landing/` 发布到 CDN（例如 jsdelivr），
+并在 controller 的 `landing.frontend.glueUrl/htmlUrl/commonCssUrl/themeCssUrl` 指向对应 URL。
 
 ### 1.3 Minimal `.dev.vars`（controller-overhaul 模式）
 

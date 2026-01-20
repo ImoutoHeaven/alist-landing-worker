@@ -154,6 +154,9 @@ npm run build
 npm run deploy
 ```
 
+前端静态资源需单独托管：将 `src/assets/landing/` 发布到 CDN（例如 jsdelivr），
+并在 controller 的 `landing.frontend.glueUrl/htmlUrl/commonCssUrl/themeCssUrl` 配置对应地址。
+
 更详细的部署步骤与 PostgREST 配置，请参阅 `DEPLOYMENT.md`。
 
 ## Related Projects
