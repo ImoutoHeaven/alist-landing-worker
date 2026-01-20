@@ -358,7 +358,7 @@ Landing worker 对「验证码」类验证（Turnstile、ALTCHA）做了上下�
 
 ### 4. 前端：landing 页面、webDownloader 与 client-decrypt
 
-文件：`src/frontend.js` + `src/templates/landing.html.js` + `landing.css.js`
+文件：`src/frontend.js` + `src/templates/landing.html.js`
 
 前端职责：
 
