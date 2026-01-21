@@ -357,7 +357,6 @@ envs:
           keyLength: 16 # Argon2 key length; >0
         randomx:
           enabled: false
-          v2: false
           jit: true
           hardAes: true
           largePages: false
@@ -711,7 +710,6 @@ envs:
           keyLength: 16
         randomx:
           enabled: false
-          v2: false
           jit: true
           hardAes: true
           largePages: false

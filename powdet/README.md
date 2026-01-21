@@ -81,7 +81,6 @@
     },
     "randomx": {
       "enabled": false,
-      "v2": false,
       "jit": true,
       "hardAes": true,
       "largePages": false,

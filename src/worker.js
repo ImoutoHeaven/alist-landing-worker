@@ -68,6 +68,8 @@ const POWDET_DEFAULT_TABLE = 'POW_CHALLENGE_TICKET';
 const POWDET_DEFAULT_ALGO = 'argon2id';
 const POWDET_ALGO_ARGON2ID = 'argon2id';
 const POWDET_ALGO_RANDOMX = 'randomx';
+const normalizePowdetAlgorithm = (value) =>
+  typeof value === 'string' ? value.trim().toLowerCase() : '';
 
 // Unified slow-fail delay for fail-fast paths
 const SLOW_FAIL_DELAY_MS = 5000;
@@ -285,7 +287,13 @@ function parseVerificationNeeds(action, config) {
     powdetAlgorithms = [];
   }
 
-  const normalizedPowdetAlgorithms = Array.from(new Set(powdetAlgorithms.filter((alg) => typeof alg === 'string' && alg)));
+  const normalizedPowdetAlgorithms = Array.from(
+    new Set(
+      powdetAlgorithms
+        .map((alg) => normalizePowdetAlgorithm(alg))
+        .filter((alg) => alg)
+    )
+  );
   return {
     blocked: false,
     needAltcha,
@@ -991,6 +999,7 @@ const resolveConfig = (env = {}, bootstrap = null) => {
     ? powdetConfig.algorithms
     : {};
   const normalizePowdetAlgorithmConfig = (alg, rawConfig) => {
+    const normalizedAlg = normalizePowdetAlgorithm(alg);
     const source = rawConfig && typeof rawConfig === 'object' ? rawConfig : {};
     let staticLevel = Number.isFinite(source.staticLevel)
       ? Number(source.staticLevel)
@@ -1011,7 +1020,7 @@ const resolveConfig = (env = {}, bootstrap = null) => {
       };
     }
     return {
-      alg,
+      alg: normalizedAlg,
       enabled: source.enabled !== false,
       staticLevel,
       dynamic,
@@ -1021,7 +1030,7 @@ const resolveConfig = (env = {}, bootstrap = null) => {
   };
   const powdetAlgorithms = {};
   for (const [rawAlg, rawCfg] of Object.entries(powdetAlgorithmsRaw)) {
-    const alg = typeof rawAlg === 'string' ? rawAlg.trim() : '';
+    const alg = normalizePowdetAlgorithm(rawAlg);
     if (!alg) {
       continue;
     }
@@ -1501,7 +1510,7 @@ const verifyTurnstileToken = async (secretKey, token, remoteIP) => {
 const fetchPowdetChallenge = async (config, alg, difficultyLevel) => {
   const base = String(config.powdetBaseUrl || '').trim();
   const token = String(config.powdetApiToken || '').trim();
-  const algo = typeof alg === 'string' ? alg.trim() : '';
+  const algo = normalizePowdetAlgorithm(alg);
   if (!base || !token) {
     throw new Error('powdet baseUrl and token are required when POWDET is enabled');
   }
@@ -1532,7 +1541,7 @@ const fetchPowdetChallenge = async (config, alg, difficultyLevel) => {
 const verifyPowdet = async (config, alg, challenge, nonce) => {
   const base = String(config.powdetBaseUrl || '').trim();
   const token = String(config.powdetApiToken || '').trim();
-  const algo = typeof alg === 'string' ? alg.trim() : '';
+  const algo = normalizePowdetAlgorithm(alg);
   if (!base || !token) {
     throw new Error('powdet baseUrl and token are required when POWDET is enabled');
   }
@@ -1826,12 +1835,17 @@ const getPowdetAlgorithmConfig = (config, alg) => {
   if (!config?.powdetAlgorithms || typeof config.powdetAlgorithms !== 'object') {
     return null;
   }
-  return config.powdetAlgorithms[alg] || null;
+  const normalizedAlg = normalizePowdetAlgorithm(alg);
+  if (!normalizedAlg) {
+    return null;
+  }
+  return config.powdetAlgorithms[normalizedAlg] || null;
 };
 
 const fetchPowdetDifficultyState = async (config, env, ipHash, alg) => {
-  const algoCfg = getPowdetAlgorithmConfig(config, alg);
-  if (!algoCfg?.dynamic || !ipHash) {
+  const normalizedAlg = normalizePowdetAlgorithm(alg);
+  const algoCfg = getPowdetAlgorithmConfig(config, normalizedAlg);
+  if (!algoCfg?.dynamic || !ipHash || !normalizedAlg) {
     return null;
   }
   const dbMode = getNormalizedDbMode(config);
@@ -1851,7 +1865,7 @@ const fetchPowdetDifficultyState = async (config, env, ipHash, alg) => {
       method: 'POST',
       headers,
       body: JSON.stringify({
-        p_alg: alg,
+        p_alg: normalizedAlg,
         p_ip_hash: ipHash,
         p_table_name: tableName,
       }),
@@ -1873,8 +1887,9 @@ const fetchPowdetDifficultyState = async (config, env, ipHash, alg) => {
 };
 
 const updatePowdetDifficultyState = async (config, env, scope, nowSeconds, alg) => {
-  const algoCfg = getPowdetAlgorithmConfig(config, alg);
-  if (!algoCfg?.dynamic || !scope?.ipHash || !scope?.ipRange) {
+  const normalizedAlg = normalizePowdetAlgorithm(alg);
+  const algoCfg = getPowdetAlgorithmConfig(config, normalizedAlg);
+  if (!algoCfg?.dynamic || !scope?.ipHash || !scope?.ipRange || !normalizedAlg) {
     return;
   }
   const dbMode = getNormalizedDbMode(config);
@@ -1892,7 +1907,7 @@ const updatePowdetDifficultyState = async (config, env, scope, nowSeconds, alg) 
       const headers = { 'Content-Type': 'application/json' };
       applyVerifyHeaders(headers, config.verifyHeader, config.verifySecret);
       const body = {
-        p_alg: alg,
+        p_alg: normalizedAlg,
         p_ip_hash: scope.ipHash,
         p_ip_range: scope.ipRange,
         p_now: nowSeconds,
@@ -2759,6 +2774,8 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
   let needTurnstile = parsedNeeds.needTurnstile;
   const powdetRequiredAlgorithms = Array.isArray(parsedNeeds.powdetAlgorithms)
     ? parsedNeeds.powdetAlgorithms
+        .map((alg) => normalizePowdetAlgorithm(alg))
+        .filter((alg) => alg)
     : [];
   let needPowdet = powdetRequiredAlgorithms.length > 0;
   if (needPowdet) {
@@ -3146,7 +3163,7 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
       if (!item || typeof item !== 'object') {
         return respondJson(origin, { code: 403, message: 'powdet solutions invalid' }, 403);
       }
-      const alg = typeof item.alg === 'string' ? item.alg.trim() : '';
+      const alg = normalizePowdetAlgorithm(item.alg);
       if (!alg || !requiredSet.has(alg)) {
         return respondJson(origin, { code: 403, message: 'powdet algorithm not allowed' }, 403);
       }

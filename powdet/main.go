@@ -23,7 +23,7 @@ import (
 	"sync"
 	"time"
 
-	randomx "git.gammaspectra.live/P2Pool/go-randomx/v5"
+	randomx "git.gammaspectra.live/P2Pool/go-randomx/v4"
 	errors "git.sequentialread.com/forest/pkg-errors"
 	"golang.org/x/crypto/argon2"
 )
@@ -55,7 +55,6 @@ type PowdetAlgorithmConfig struct {
 	Parallelism int `json:"parallelism"`
 	KeyLength   int `json:"keyLength"`
 	// randomx
-	V2           bool `json:"v2"`
 	JIT          bool `json:"jit"`
 	HardAes      bool `json:"hardAes"`
 	LargePages   bool `json:"largePages"`
@@ -83,7 +82,6 @@ type Argon2Parameters struct {
 
 type RandomxParameters struct {
 	SeedKey string `json:"k"`
-	V2      bool   `json:"v2"`
 }
 
 type Challenge struct {
@@ -440,7 +438,6 @@ func main() {
 				}
 				challenge.RandomxParameters = &RandomxParameters{
 					SeedKey: base64.StdEncoding.EncodeToString(seedKey),
-					V2:      algoCfg.V2,
 				}
 			default:
 				metricsAdd("challenges_generate_error")
@@ -617,7 +614,7 @@ func main() {
 				return true
 			}
 
-			flags := buildRandomxFlags(algoCfg, challenge.RandomxParameters.V2)
+			flags := buildRandomxFlags(algoCfg)
 			cacheKey := fmt.Sprintf("%x|%d", seedKeyBytes, flags)
 			store := getRandomxStore(algo)
 			cache, release, err := store.getOrCreate(cacheKey, time.Now(), func() (*randomx.Cache, error) {
@@ -873,7 +870,7 @@ func decodeBase64Fixed(value string, size int) ([]byte, error) {
 	return raw, nil
 }
 
-func buildRandomxFlags(cfg PowdetAlgorithmConfig, v2 bool) randomx.Flags {
+func buildRandomxFlags(cfg PowdetAlgorithmConfig) randomx.Flags {
 	flags := randomx.RANDOMX_FLAG_DEFAULT
 	if cfg.JIT {
 		flags |= randomx.RANDOMX_FLAG_JIT
@@ -883,9 +880,6 @@ func buildRandomxFlags(cfg PowdetAlgorithmConfig, v2 bool) randomx.Flags {
 	}
 	if cfg.LargePages {
 		flags |= randomx.RANDOMX_FLAG_LARGE_PAGES
-	}
-	if v2 {
-		flags |= randomx.RANDOMX_FLAG_V2
 	}
 	return flags
 }

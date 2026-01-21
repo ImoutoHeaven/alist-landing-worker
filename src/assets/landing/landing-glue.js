@@ -5485,6 +5485,7 @@
           resolve(payload);
           return;
         }
+        cancelPowdetWorkers('timeout');
         reject(new Error('POW 计算超时'));
         state.verification.powdetResolvers = Array.isArray(state.verification.powdetResolvers)
           ? state.verification.powdetResolvers.filter((fn) => fn !== resolver)
@@ -5650,6 +5651,29 @@
     refreshPowdetReadyState();
     updateButtonState();
     maybeAnnouncePowReady();
+  };
+
+  const cancelPowdetWorkers = (reason) => {
+    const workers = state?.verification?.powdetWorkers;
+    if (!workers || typeof workers !== 'object') {
+      return;
+    }
+    for (const [alg, worker] of Object.entries(workers)) {
+      if (!worker) {
+        continue;
+      }
+      try {
+        worker.postMessage({ type: 'cancel', reason: reason || 'cancelled' });
+      } catch (error) {
+        console.warn('powdet worker cancel post failed', alg, error);
+      }
+      try {
+        worker.terminate();
+      } catch (error) {
+        console.warn('powdet worker terminate failed', alg, error);
+      }
+      delete workers[alg];
+    }
   };
 
   let randomxWorkerUrl = '';
