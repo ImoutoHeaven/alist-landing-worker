@@ -22,6 +22,8 @@
 路径规则以 `paths.*` 为准（`paths.global`、`paths.pathProfiles`、`paths.pathRules`）。
 `landing.pathRules` 与 `download.pathRules` 仍保留在结构里，但当前决策只读取 `paths.*`，避免混用。
 
+Powdet 相关：`landing.powdet.algorithms` 控制可用算法（argon2id/randomx），`captchaCombo` 可用 `verify-powdet`/`verify-powdet-randomx` 指定实际启用算法。
+
 ## 决策逻辑（v0）
 
 - `role=landing`：产出 `captchaCombo/fastRedirect/autoRedirect` 等。

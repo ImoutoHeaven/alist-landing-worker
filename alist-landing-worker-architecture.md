@@ -11,7 +11,7 @@
 - **Download Worker**  
   执行真实文件下载并校验 landing 票据（例如 `simple-alist-cf-proxy`）。
 - **Powdet 服务（`powdet/`）**  
-  提供 PoW challenge / verify API 与前端静态资源。
+  提供 PoW challenge / verify API 与前端静态资源，支持 argon2id/randomx 多算法。
 - **PostgREST + PostgreSQL**  
   提供统一检查（限流 + 缓存 + token 状态），仅支持 `custom-pg-rest` 模式。
 - **Cloudflare Rate Limiter**  
@@ -62,7 +62,7 @@ Worker 入口逻辑（`fetch`）顺序：
 1. 解析并解码 `path` / `sign`，检查 IPv4-only（`landing.ipv4Only`）。
 2. 可选 CF Rate Limiter（fail-open）。
 3. 从 controller 决策中提取 `captchaCombo`，解析成动作集合：  
-   `verify-altcha` / `verify-turn` / `verify-powdet` / `pass-web` / `pass-server` / `pass-asis` / `pass-web-download` / `pass-decrypt` / `verify-web-download` / `verify-decrypt`。  
+   `verify-altcha` / `verify-turn` / `verify-powdet` / `verify-powdet-randomx` / `pass-web` / `pass-server` / `pass-asis` / `pass-web-download` / `pass-decrypt` / `verify-web-download` / `verify-decrypt`。  
    这些动作决定是否强制验证、强制落地页/跳转、以及是否启用 webDownloader / client-decrypt。
 4. 若启用 TLS 指纹绑定（`landing.tlsFingerprintBinding`），要求 `request.cf` 中包含 `tlsClientExtensionsSha1` 与 `tlsClientCiphersSha1`，否则直接拒绝。
 5. **ALTCHA 校验**：  
@@ -74,8 +74,10 @@ Worker 入口逻辑（`fetch`）顺序：
    - 调用 Cloudflare siteverify，并按配置校验 action/hostname。  
    - 如启用 token binding，则要求 DB 可用并在 unified check 中验证/消费。
 7. **Powdet 校验**：  
+   - `powdetSolutions` 为数组，元素包含 `alg/challenge/nonce/expireAt/randomStr/hmac/link`。  
+   - 需要的算法集合由 `captchaCombo` 决定（`verify-powdet`/`verify-powdet-randomx`），缺任意算法直接 403。  
    - 验证 payload 时窗（expireAt + skew + maxWindow）。  
-   - 按 `ipRangeHash + pathHash + expireAt + randomStr + challenge + link (+ TLS fingerprint)` 计算 HMAC；  
+   - 按 `alg + ipRangeHash + pathHash + expireAt + randomStr + challenge + link (+ TLS fingerprint)` 计算 HMAC；  
      HMAC 密钥使用 `common.tokenHmacKey`。  
    - 调用 Powdet `/Verify`；失败会落入短期 LRU 拒绝。  
    - 若同时启用多项验证（Turnstile/ALTCHA/Powdet ≥2），则要求 link 全部存在且一致，否则 463。
@@ -102,7 +104,7 @@ Worker 入口逻辑（`fetch`）顺序：
 4. 非 302 时渲染落地页：  
    - 生成 Turnstile binding  
    - 生成 ALTCHA challenge（含动态难度、算法升级）  
-   - 生成 Powdet challenge（调用 `/GetChallenges` + HMAC 绑定）  
+   - 生成 Powdet challenge（按算法逐个调用 `/GetChallenges` + HMAC 绑定，并下发 `powdetChallenges` 数组）  
    - 生成 link（随机串）并注入到 Turnstile/ALTCHA/Powdet 的绑定与 payload  
    - `renderLandingPage` 注入前端资源与验证 payload。
 
@@ -124,9 +126,9 @@ Worker 入口逻辑（`fetch`）顺序：
 
 ### 6.3 Powdet Binding
 
-- HMAC 绑定：`ipRangeHash + pathHash + expireAt + randomStr + challenge + link (+ TLS fingerprint)`。
+- HMAC 绑定：`alg + ipRangeHash + pathHash + expireAt + randomStr + challenge + link (+ TLS fingerprint)`。
 - 校验时序窗口：`expireAt` + `clockSkewSeconds` + `maxWindowSeconds`。
-- 动态难度采用同一组 RPC，但传入 `POWDET_DIFFICULTY_STATE` 表名。
+- 动态难度按算法分别记录，使用 `POWDET_DIFFICULTY_STATE`（主键为 `ALGO + IP_HASH`）。
 
 ### 6.4 Link 一致性
 
@@ -143,10 +145,12 @@ Worker 入口逻辑（`fetch`）顺序：
 ### 7.2 PostgREST（`custom-pg-rest`）
 
 - **统一检查**：`landing_unified_check`  
-  同时返回 IP/文件限流、token 状态、Powdet 消费与文件大小缓存。
+  同时返回 IP/文件限流、token 状态、Powdet 消费（`pow_results` 按算法返回）与文件大小缓存。
 - **文件大小缓存**：`landing_upsert_filesize_cache` + `FILESIZE_CACHE_TABLE`
 - **ALTCHA token**：`landing_record_altcha_token` + `ALTCHA_TOKEN_LIST`
 - **动态难度**：`landing_get_altcha_difficulty` / `landing_update_altcha_difficulty`
+- **Powdet 动态难度**：`landing_get_powdet_difficulty` / `landing_update_powdet_difficulty` + `POWDET_DIFFICULTY_STATE`
+- **Powdet 挑战消费**：`landing_consume_pow_challenge` + `POW_CHALLENGE_TICKET`
 
 ### 7.3 本地 LRU 与慢失败
 
@@ -169,7 +173,7 @@ Worker 内部维护 LRU 缓存用于：
 - `landing_cleanup_expired_altcha_tokens`
 - `landing_cleanup_altcha_difficulty_state`
 - `landing_cleanup_expired_pow_challenges`
-- `landing_cleanup_altcha_difficulty_state`（传入 `POWDET_DIFFICULTY_STATE` 表名）
+- `landing_cleanup_powdet_difficulty_state`
 
 ## 8. 下载票据与 Origin 绑定
 
@@ -200,7 +204,7 @@ Worker 内部维护 LRU 缓存用于：
 
 - `renderLandingPage` 通过 `frontend.glueUrl/htmlUrl/commonCssUrl/themeCssUrl` 渲染页面。
 - `webDownloader` 与 `clientDecrypt` 由 `landing.webDownloader` / `landing.clientDecryptEnabled` 决定，并依赖 `landing.crypt`。
-- Powdet 静态资源优先使用 `powdet.staticBaseUrl`，否则回退到 `{powdet.baseUrl}/powdet/static` 或 `/powdet/static`。
+- Powdet 静态资源优先使用 `powdet.algorithms.<alg>.staticBaseUrl`，其次 `powdet.staticBaseUrl`，否则回退到 `{powdet.baseUrl}/powdet/static` 或 `/powdet/static`。
 
 ## 10. 关键文件
 

@@ -4,7 +4,7 @@
 
 ## 目录内容
 
-- `main.go`：多算法 HTTP 服务，提供 `/GetChallenges` 与 `/Verify`。
+- `main.go`：多算法 HTTP 服务，提供 `/GetChallenges` 与 `/Verify`（仅启用的算法可用）。
 - `static/`：浏览器端资源（`pow-bot-deterrent.js`、`randomx.esm.js` 等）。
 - `config.json`：运行配置与 controller 接入信息。
 - `readme/`：历史资料/图片。
@@ -17,6 +17,7 @@
   校验并消费挑战，需要 `Authorization: Bearer <token>`。
 
 `token` 必须是 32 位十六进制字符串，并存在于 `PoW_Bot_Deterrent_API_Tokens` 目录。
+仅当 `config.json` 中对应算法 `enabled=true` 时才会接受该 `algo`。
 
 ## 静态资源路径
 
@@ -24,6 +25,7 @@
 
 - `/powdet/static/pow-bot-deterrent.js`
 - `/powdet/static/pow-bot-deterrent.css`
+- `/powdet/static/randomx.esm.js`
 - `/powdet/static/*`
 
 

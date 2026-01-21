@@ -28,7 +28,7 @@ envs:
         themeCssUrl: "https://cdn.jsdelivr.net/gh/your-org/alist-landing-worker@<commit>/src/assets/landing/landing.minimal.css" # Default theme CSS URL (required)
       tlsFingerprintBinding: false # Bind challenges to tlsClientExtensionsSha1+tlsClientCiphersSha1 when true
       captcha:
-        defaultCombo: ["verify-altcha"] # Ordered challenge pipeline; allowed values: verify-altcha|verify-turn|verify-turnstile|verify-powdet|verify-powdet-randomx|verify-none; empty array = no challenge
+        defaultCombo: ["verify-altcha"] # Ordered challenge pipeline; allowed: verify-altcha|verify-turn|verify-turnstile|verify-powdet|verify-powdet-randomx|verify-none; empty array = no challenge
       turnstile:
         enabled: false # Enable Cloudflare Turnstile challenge (default=false)
         siteKey: "" # Turnstile site key used by frontend (required if enabled)
@@ -76,13 +76,14 @@ envs:
               # - verify-turn
               # - verify-turnstile
               # - verify-powdet
+              # - verify-powdet-randomx
               # - verify-none            （显式跳过验证码）
               # 以及以下「路径动作为伪验证码值」：
               # - block                  （直接阻断访问）
               # - pass-web               （走 web downloader）
               # - pass-server            （走纯后端下载）
               # - pass-asis              （保持默认行为，由前端/后端根据配置决定）
-              # 可以按顺序组合，例如 ["verify-altcha","verify-powdet"]；block/pass-* 一般单独使用。
+              # 可以按顺序组合，例如 ["verify-altcha","verify-powdet"] 或 ["verify-altcha","verify-powdet-randomx"]；block/pass-* 一般单独使用。
               captchaCombo: ["verify-altcha"]
               # fastRedirect/autoRedirect：覆盖 landing.fastRedirect/autoRedirect 的布尔值（可选）
               fastRedirect: false
@@ -123,7 +124,7 @@ envs:
       powdet:
         enabled: false # Whether landing delegates PoW to external powdet service (default=false)
         baseUrl: "" # powdet API base URL; required if enabled
-        staticBaseUrl: "" # Static assets base for powdet challenge; optional
+        staticBaseUrl: "" # Powdet static base (global); optional, algo.staticBaseUrl has higher priority
         token: "" # powdet API token; required if enabled
         table: "POW_CHALLENGE_TICKET" # Table for powdet tickets
         difficultyTable: "POWDET_DIFFICULTY_STATE" # Default table for powdet difficulty state
@@ -132,7 +133,7 @@ envs:
         maxWindowSeconds: 600 # Max rolling window considered for difficulty; seconds >=0
         algorithms:
           argon2id:
-            enabled: true
+            enabled: true # Allowed when enabled; actual enforcement depends on captchaCombo tokens
             staticLevel: 12 # Base difficulty when dynamic is disabled; >=0
             difficultyTable: "POWDET_DIFFICULTY_STATE"
             dynamic: # Adaptive difficulty parameters (argon2id)
@@ -144,10 +145,10 @@ envs:
               levelStep: 1 # Difficulty increment per level; >0
               maxLevel: 4 # Maximum dynamic level; >=0
           randomx:
-            enabled: false
+            enabled: false # Allowed when enabled; actual enforcement depends on captchaCombo tokens
             staticLevel: 12
             difficultyTable: "POWDET_DIFFICULTY_STATE"
-            staticBaseUrl: "" # Optional override for randomx static assets
+            staticBaseUrl: "" # Optional override for randomx static assets (highest priority)
             dynamic:
               windowSeconds: 60
               resetSeconds: 300
@@ -435,7 +436,7 @@ envs:
         themeCssUrl: "https://cdn.jsdelivr.net/gh/your-org/alist-landing-worker@<commit>/src/assets/landing/landing.minimal.css" # Default theme CSS URL (required)
       tlsFingerprintBinding: false # Bind challenges to tlsClientExtensionsSha1+tlsClientCiphersSha1 when true
       captcha:
-        defaultCombo: ["verify-altcha"] # Same enum as staging: verify-altcha|verify-turnstile|verify-powdet|verify-powdet-randomx|verify-none; order defines pipeline
+        defaultCombo: ["verify-altcha"] # Same enum as staging: verify-altcha|verify-turn|verify-turnstile|verify-powdet|verify-powdet-randomx|verify-none; order defines pipeline
       turnstile:
         enabled: false
         siteKey: ""
@@ -507,7 +508,7 @@ envs:
       powdet:
         enabled: true
         baseUrl: "https://powdet.example.com"
-        staticBaseUrl: ""
+        staticBaseUrl: "" # Powdet static base (global); optional, algo.staticBaseUrl has higher priority
         token: "replace-with-powdet-token"
         table: "POW_CHALLENGE_TICKET"
         difficultyTable: "POWDET_DIFFICULTY_STATE"
@@ -516,7 +517,7 @@ envs:
         maxWindowSeconds: 600
         algorithms:
           argon2id:
-            enabled: true
+            enabled: true # Allowed when enabled; actual enforcement depends on captchaCombo tokens
             staticLevel: 12
             difficultyTable: "POWDET_DIFFICULTY_STATE"
             dynamic:
@@ -528,10 +529,10 @@ envs:
               levelStep: 1
               maxLevel: 4
           randomx:
-            enabled: false
+            enabled: false # Allowed when enabled; actual enforcement depends on captchaCombo tokens
             staticLevel: 12
             difficultyTable: "POWDET_DIFFICULTY_STATE"
-            staticBaseUrl: ""
+            staticBaseUrl: "" # Optional override for randomx static assets (highest priority)
             dynamic:
               windowSeconds: 60
               resetSeconds: 300
