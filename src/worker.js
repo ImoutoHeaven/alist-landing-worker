@@ -37,6 +37,7 @@ const VALID_ACTIONS = [
   'verify-altcha',
   'verify-turn',
   'verify-powdet',
+  'verify-powdet-randomx',
   'verify-web-download',
   'verify-decrypt',
   'pass-web-download',
@@ -64,6 +65,9 @@ const ALTCHA_DEFAULT_ALGORITHM = 'SHA-256';
 const ALTCHA_ALGORITHM_POOL = ['SHA-256', 'SHA-384', 'SHA-512'];
 const POWDET_DIFFICULTY_TABLE = 'POWDET_DIFFICULTY_STATE';
 const POWDET_DEFAULT_TABLE = 'POW_CHALLENGE_TICKET';
+const POWDET_DEFAULT_ALGO = 'argon2id';
+const POWDET_ALGO_ARGON2ID = 'argon2id';
+const POWDET_ALGO_RANDOMX = 'randomx';
 
 // Unified slow-fail delay for fail-fast paths
 const SLOW_FAIL_DELAY_MS = 5000;
@@ -148,10 +152,10 @@ function lruPut(cache, key, value) {
 
 const RL_IP_FILE_LRU = createLruCache(512); // `${ipSubnet}|${filepathHash}`
 const ALTCHA_BLOCK_LRU = createLruCache(256); // ipRange
-const POWDET_BLOCK_LRU = createLruCache(256); // ipRange
+const POWDET_BLOCK_LRU = createLruCache(256); // `${alg}|${ipRange}`
 const ALTCHA_TOKEN_REPLAY_LRU = createLruCache(512); // altchaTokenHash
-const POWDET_REPLAY_LRU = createLruCache(512); // powdetChallengeHash
-const POWDET_VERIFY_FAIL_LRU = createLruCache(512); // `${ipRange}|${challengeHash}` or challengeHash
+const POWDET_REPLAY_LRU = createLruCache(512); // `${alg}|${challengeHash}`
+const POWDET_VERIFY_FAIL_LRU = createLruCache(512); // `${alg}|${ipRange}|${challengeHash}` or `${alg}|${challengeHash}`
 
 const getNormalizedDbMode = (config) => {
   if (!config || typeof config.dbMode !== 'string') {
@@ -194,22 +198,36 @@ const hexToUint8Array = (hexString) => {
  * 解析 ACTION 值为验证需求对象
  * @param {string} action - ACTION 值
  * @param {object} config - 配置对象（包含 ALTCHA_ENABLED / UNDER_ATTACK / POWDET_ENABLED）
- * @returns {{blocked: boolean, needAltcha: boolean, needTurnstile: boolean, needPowdet: boolean}}
+ * @returns {{blocked: boolean, needAltcha: boolean, needTurnstile: boolean, needPowdet: boolean, powdetAlgorithms: string[]}}
  */
 function parseVerificationNeeds(action, config) {
   const defaults = {
     needAltcha: !!(config && config.altchaEnabled),
     needTurnstile: !!(config && config.underAttack),
-    needPowdet: !!(config && config.powdetEnabled),
+    powdetAlgorithms: Array.isArray(config?.powdetEnabledAlgorithms)
+      ? config.powdetEnabledAlgorithms.slice()
+      : [],
   };
 
   if (!action) {
-    return { blocked: false, ...defaults };
+    return {
+      blocked: false,
+      needAltcha: defaults.needAltcha,
+      needTurnstile: defaults.needTurnstile,
+      needPowdet: defaults.powdetAlgorithms.length > 0,
+      powdetAlgorithms: defaults.powdetAlgorithms,
+    };
   }
 
   const normalized = String(action).trim().toLowerCase();
   if (!normalized) {
-    return { blocked: false, ...defaults };
+    return {
+      blocked: false,
+      needAltcha: defaults.needAltcha,
+      needTurnstile: defaults.needTurnstile,
+      needPowdet: defaults.powdetAlgorithms.length > 0,
+      powdetAlgorithms: defaults.powdetAlgorithms,
+    };
   }
 
   const tokens = new Set(
@@ -220,20 +238,26 @@ function parseVerificationNeeds(action, config) {
   );
 
   if (tokens.has('block')) {
-    return { blocked: true, needAltcha: false, needTurnstile: false, needPowdet: false };
+    return {
+      blocked: true,
+      needAltcha: false,
+      needTurnstile: false,
+      needPowdet: false,
+      powdetAlgorithms: [],
+    };
   }
 
   let needAltcha = defaults.needAltcha;
   let needTurnstile = defaults.needTurnstile;
-  let needPowdet = defaults.needPowdet;
+  let powdetAlgorithms = defaults.powdetAlgorithms.slice();
 
-  const verifyTokens = ['verify-altcha', 'verify-turn', 'verify-powdet'];
+  const verifyTokens = ['verify-altcha', 'verify-turn', 'verify-powdet', 'verify-powdet-randomx'];
   const hasVerifyToken = verifyTokens.some((t) => tokens.has(t));
 
   if (hasVerifyToken) {
     needAltcha = false;
     needTurnstile = false;
-    needPowdet = false;
+    powdetAlgorithms = [];
   }
 
   if (tokens.has('verify-altcha')) {
@@ -243,7 +267,10 @@ function parseVerificationNeeds(action, config) {
     needTurnstile = true;
   }
   if (tokens.has('verify-powdet')) {
-    needPowdet = true;
+    powdetAlgorithms.push(POWDET_ALGO_ARGON2ID);
+  }
+  if (tokens.has('verify-powdet-randomx')) {
+    powdetAlgorithms.push(POWDET_ALGO_RANDOMX);
   }
 
   if (
@@ -255,10 +282,17 @@ function parseVerificationNeeds(action, config) {
   ) {
     needAltcha = false;
     needTurnstile = false;
-    needPowdet = false;
+    powdetAlgorithms = [];
   }
 
-  return { blocked: false, needAltcha, needTurnstile, needPowdet };
+  const normalizedPowdetAlgorithms = Array.from(new Set(powdetAlgorithms.filter((alg) => typeof alg === 'string' && alg)));
+  return {
+    blocked: false,
+    needAltcha,
+    needTurnstile,
+    needPowdet: normalizedPowdetAlgorithms.length > 0,
+    powdetAlgorithms: normalizedPowdetAlgorithms,
+  };
 }
 
 /**
@@ -289,10 +323,14 @@ function ensureValidActionValue(action, contextLabel = 'ACTION') {
 
   for (const token of tokens) {
     if (token === 'verify') {
-      throw new Error(`Invalid ${contextLabel} value: "verify". Please use verify-altcha, verify-turn, or verify-powdet.`);
+      throw new Error(
+        `Invalid ${contextLabel} value: "verify". Please use verify-altcha, verify-turn, verify-powdet, or verify-powdet-randomx.`
+      );
     }
     if (token === 'verify-pow' || token === 'verify-both') {
-      throw new Error(`Invalid ${contextLabel} value: "${token}". Please use verify-altcha, verify-turn, or verify-powdet.`);
+      throw new Error(
+        `Invalid ${contextLabel} value: "${token}". Please use verify-altcha, verify-turn, verify-powdet, or verify-powdet-randomx.`
+      );
     }
     if (token === 'web-download') {
       throw new Error(`Invalid ${contextLabel} value: "web-download". Please use verify-web-download or pass-web-download.`);
@@ -945,30 +983,58 @@ const resolveConfig = (env = {}, bootstrap = null) => {
   const powdetStaticBaseUrl = normalizeString(powdetConfig.staticBaseUrl);
   const powdetApiToken = normalizeString(powdetConfig.token);
   const powdetTableName = normalizeString(powdetConfig.table, 'POW_CHALLENGE_TICKET');
-  const powdetDifficultyTableName = normalizeString(powdetConfig.difficultyTable, POWDET_DIFFICULTY_TABLE);
   const powdetExpireSeconds = parseDurationToSeconds(powdetConfig.expireSeconds, 180);
   const powdetClockSkewSeconds = parseDurationToSeconds(powdetConfig.clockSkewSeconds, 60);
   const powdetMaxWindowSeconds = parseDurationToSeconds(powdetConfig.maxWindowSeconds, 600);
-  let powdetStaticLevel = Number.isFinite(powdetConfig.staticLevel)
-    ? Number(powdetConfig.staticLevel)
-    : parseInteger(powdetConfig.staticLevel, NaN);
-  if (!Number.isFinite(powdetStaticLevel)) {
-    powdetStaticLevel = NaN;
-  }
-  let powdetDynamic = null;
-  if (powdetConfig.dynamic && typeof powdetConfig.dynamic === 'object') {
-    powdetDynamic = {
-      windowSeconds: parseDurationToSeconds(powdetConfig.dynamic.windowSeconds, 60),
-      resetSeconds: parseDurationToSeconds(powdetConfig.dynamic.resetSeconds, 300),
-      blockSeconds: parseDurationToSeconds(powdetConfig.dynamic.blockSeconds, 300),
-      baseLevelMin: parseInteger(powdetConfig.dynamic.baseLevelMin, 12),
-      baseLevelMax: parseInteger(powdetConfig.dynamic.baseLevelMax, 20),
-      levelStep: Math.max(1, parseInteger(powdetConfig.dynamic.levelStep, 1)),
-      maxLevel: Math.max(0, parseInteger(powdetConfig.dynamic.maxLevel, 4)),
+  const powdetDifficultyTableDefault = normalizeString(powdetConfig.difficultyTable, POWDET_DIFFICULTY_TABLE);
+  const powdetAlgorithmsRaw = powdetConfig.algorithms && typeof powdetConfig.algorithms === 'object'
+    ? powdetConfig.algorithms
+    : {};
+  const normalizePowdetAlgorithmConfig = (alg, rawConfig) => {
+    const source = rawConfig && typeof rawConfig === 'object' ? rawConfig : {};
+    let staticLevel = Number.isFinite(source.staticLevel)
+      ? Number(source.staticLevel)
+      : parseInteger(source.staticLevel, NaN);
+    if (!Number.isFinite(staticLevel)) {
+      staticLevel = NaN;
+    }
+    let dynamic = null;
+    if (source.dynamic && typeof source.dynamic === 'object') {
+      dynamic = {
+        windowSeconds: parseDurationToSeconds(source.dynamic.windowSeconds, 60),
+        resetSeconds: parseDurationToSeconds(source.dynamic.resetSeconds, 300),
+        blockSeconds: parseDurationToSeconds(source.dynamic.blockSeconds, 300),
+        baseLevelMin: parseInteger(source.dynamic.baseLevelMin, 12),
+        baseLevelMax: parseInteger(source.dynamic.baseLevelMax, 20),
+        levelStep: Math.max(1, parseInteger(source.dynamic.levelStep, 1)),
+        maxLevel: Math.max(0, parseInteger(source.dynamic.maxLevel, 4)),
+      };
+    }
+    return {
+      alg,
+      enabled: source.enabled !== false,
+      staticLevel,
+      dynamic,
+      difficultyTableName: normalizeString(source.difficultyTable, powdetDifficultyTableDefault),
+      staticBaseUrl: normalizeString(source.staticBaseUrl),
     };
+  };
+  const powdetAlgorithms = {};
+  for (const [rawAlg, rawCfg] of Object.entries(powdetAlgorithmsRaw)) {
+    const alg = typeof rawAlg === 'string' ? rawAlg.trim() : '';
+    if (!alg) {
+      continue;
+    }
+    powdetAlgorithms[alg] = normalizePowdetAlgorithmConfig(alg, rawCfg);
   }
+  const powdetEnabledAlgorithms = powdetEnabled
+    ? Object.values(powdetAlgorithms).filter((entry) => entry.enabled).map((entry) => entry.alg)
+    : [];
   if (powdetEnabled && (!powdetBaseUrl || !powdetApiToken)) {
     throw new Error('controller bootstrap.landing.powdet.baseUrl and token are required when powdet.enabled is true');
+  }
+  if (powdetEnabled && powdetEnabledAlgorithms.length === 0) {
+    throw new Error('controller bootstrap.landing.powdet.algorithms must enable at least one algorithm');
   }
 
   const ipv4Only = landingBootstrap.ipv4Only === true;
@@ -1305,9 +1371,8 @@ const resolveConfig = (env = {}, bootstrap = null) => {
     powdetExpireSeconds,
     powdetClockSkewSeconds,
     powdetMaxWindowSeconds,
-    powdetStaticLevel,
-    powdetDynamic,
-    powdetDifficultyTableName,
+    powdetAlgorithms,
+    powdetEnabledAlgorithms,
     pageSecret,
     frontendGlueUrl,
     frontendHtmlUrl,
@@ -1433,13 +1498,18 @@ const verifyTurnstileToken = async (secretKey, token, remoteIP) => {
   };
 };
 
-const fetchPowdetChallenge = async (config, difficultyLevel) => {
+const fetchPowdetChallenge = async (config, alg, difficultyLevel) => {
   const base = String(config.powdetBaseUrl || '').trim();
   const token = String(config.powdetApiToken || '').trim();
+  const algo = typeof alg === 'string' ? alg.trim() : '';
   if (!base || !token) {
     throw new Error('powdet baseUrl and token are required when POWDET is enabled');
   }
+  if (!algo) {
+    throw new Error('powdet algo is required');
+  }
   const url = new URL('/GetChallenges', base);
+  url.searchParams.set('algo', algo);
   url.searchParams.set('difficultyLevel', String(Number.isFinite(difficultyLevel) ? difficultyLevel : 1));
 
   const resp = await fetch(url.toString(), {
@@ -1459,13 +1529,18 @@ const fetchPowdetChallenge = async (config, difficultyLevel) => {
   return arr[0];
 };
 
-const verifyPowdet = async (config, challenge, nonce) => {
+const verifyPowdet = async (config, alg, challenge, nonce) => {
   const base = String(config.powdetBaseUrl || '').trim();
   const token = String(config.powdetApiToken || '').trim();
+  const algo = typeof alg === 'string' ? alg.trim() : '';
   if (!base || !token) {
     throw new Error('powdet baseUrl and token are required when POWDET is enabled');
   }
+  if (!algo) {
+    throw new Error('powdet algo is required');
+  }
   const url = new URL('/Verify', base);
+  url.searchParams.set('algo', algo);
   url.searchParams.set('challenge', String(challenge || ''));
   url.searchParams.set('nonce', String(nonce || ''));
 
@@ -1747,27 +1822,36 @@ const updateAltchaDifficultyState = async (config, env, scope, nowSeconds) => {
 
 const normalizePowdetStateRow = normalizeAltchaStateRow;
 
-const fetchPowdetDifficultyState = async (config, env, ipHash) => {
-  if (!config?.powdetDynamic || !ipHash) {
+const getPowdetAlgorithmConfig = (config, alg) => {
+  if (!config?.powdetAlgorithms || typeof config.powdetAlgorithms !== 'object') {
+    return null;
+  }
+  return config.powdetAlgorithms[alg] || null;
+};
+
+const fetchPowdetDifficultyState = async (config, env, ipHash, alg) => {
+  const algoCfg = getPowdetAlgorithmConfig(config, alg);
+  if (!algoCfg?.dynamic || !ipHash) {
     return null;
   }
   const dbMode = getNormalizedDbMode(config);
   if (dbMode !== 'custom-pg-rest') {
     return null;
   }
-  const tableName = config.powdetDifficultyTableName || POWDET_DIFFICULTY_TABLE;
+  const tableName = algoCfg.difficultyTableName || POWDET_DIFFICULTY_TABLE;
   try {
     const postgrestUrl = config.rateLimitConfig?.postgrestUrl;
     if (!postgrestUrl) {
       return null;
     }
-    const rpcUrl = `${postgrestUrl}/rpc/landing_get_altcha_difficulty`;
+    const rpcUrl = `${postgrestUrl}/rpc/landing_get_powdet_difficulty`;
     const headers = { 'Content-Type': 'application/json' };
     applyVerifyHeaders(headers, config.verifyHeader, config.verifySecret);
     const response = await fetch(rpcUrl, {
       method: 'POST',
       headers,
       body: JSON.stringify({
+        p_alg: alg,
         p_ip_hash: ipHash,
         p_table_name: tableName,
       }),
@@ -1788,32 +1872,34 @@ const fetchPowdetDifficultyState = async (config, env, ipHash) => {
   return null;
 };
 
-const updatePowdetDifficultyState = async (config, env, scope, nowSeconds) => {
-  if (!config?.powdetDynamic || !scope?.ipHash || !scope?.ipRange) {
+const updatePowdetDifficultyState = async (config, env, scope, nowSeconds, alg) => {
+  const algoCfg = getPowdetAlgorithmConfig(config, alg);
+  if (!algoCfg?.dynamic || !scope?.ipHash || !scope?.ipRange) {
     return;
   }
   const dbMode = getNormalizedDbMode(config);
   if (!dbMode) {
     return;
   }
-  const tableName = config.powdetDifficultyTableName || POWDET_DIFFICULTY_TABLE;
+  const tableName = algoCfg.difficultyTableName || POWDET_DIFFICULTY_TABLE;
   try {
     if (dbMode === 'custom-pg-rest') {
       const postgrestUrl = config.rateLimitConfig?.postgrestUrl;
       if (!postgrestUrl) {
         return;
       }
-      const rpcUrl = `${postgrestUrl}/rpc/landing_update_altcha_difficulty`;
+      const rpcUrl = `${postgrestUrl}/rpc/landing_update_powdet_difficulty`;
       const headers = { 'Content-Type': 'application/json' };
       applyVerifyHeaders(headers, config.verifyHeader, config.verifySecret);
       const body = {
+        p_alg: alg,
         p_ip_hash: scope.ipHash,
         p_ip_range: scope.ipRange,
         p_now: nowSeconds,
-        p_window_seconds: config.powdetDynamic.windowSeconds,
-        p_reset_seconds: config.powdetDynamic.resetSeconds,
-        p_max_exponent: config.powdetDynamic.maxLevel,
-        p_block_seconds: config.powdetDynamic.blockSeconds,
+        p_window_seconds: algoCfg.dynamic.windowSeconds,
+        p_reset_seconds: algoCfg.dynamic.resetSeconds,
+        p_max_exponent: algoCfg.dynamic.maxLevel,
+        p_block_seconds: algoCfg.dynamic.blockSeconds,
         p_table_name: tableName,
       };
       const response = await fetch(rpcUrl, {
@@ -2627,15 +2713,19 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
       return new Response('Invalid altChallengeResult format', { status: 400 });
     }
   }
-  const powdetSolutionParam = url.searchParams.get('powdetSolution') || '';
-  let powdetSolution = null;
-  if (powdetSolutionParam) {
+  const powdetSolutionsParam = url.searchParams.get('powdetSolutions') || '';
+  let powdetSolutions = null;
+  if (powdetSolutionsParam) {
     try {
-      const decoded = base64urlDecode(powdetSolutionParam);
-      powdetSolution = JSON.parse(decoded);
+      const decoded = base64urlDecode(powdetSolutionsParam);
+      const parsed = JSON.parse(decoded);
+      if (!Array.isArray(parsed)) {
+        throw new Error('powdetSolutions must be an array');
+      }
+      powdetSolutions = parsed;
     } catch (error) {
-      console.error('[Powdet] Failed to decode powdetSolution:', error instanceof Error ? error.message : String(error));
-      return respondJson(origin, { code: 400, message: 'invalid powdetSolution format' }, 400);
+      console.error('[Powdet] Failed to decode powdetSolutions:', error instanceof Error ? error.message : String(error));
+      return respondJson(origin, { code: 400, message: 'invalid powdetSolutions format' }, 400);
     }
   }
 
@@ -2667,7 +2757,19 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
 
   let needAltcha = parsedNeeds.needAltcha;
   let needTurnstile = parsedNeeds.needTurnstile;
-  let needPowdet = parsedNeeds.needPowdet;
+  const powdetRequiredAlgorithms = Array.isArray(parsedNeeds.powdetAlgorithms)
+    ? parsedNeeds.powdetAlgorithms
+    : [];
+  let needPowdet = powdetRequiredAlgorithms.length > 0;
+  if (needPowdet) {
+    const invalidPowdet = powdetRequiredAlgorithms.filter((alg) => {
+      const algoCfg = getPowdetAlgorithmConfig(config, alg);
+      return !algoCfg || !algoCfg.enabled;
+    });
+    if (invalidPowdet.length > 0) {
+      return respondJson(origin, { code: 500, message: 'powdet algorithm unavailable' }, 500);
+    }
+  }
   let tlsFingerprintHash = '';
   if (config.tlsFingerprintBindingEnabled && (needAltcha || needTurnstile || needPowdet)) {
     tlsFingerprintHash = await computeTlsFingerprintHash(request);
@@ -2709,29 +2811,37 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
   if (needPowdet && clientIP) {
     powdetScope = altchaScope || (await computeAltchaIpScope(clientIP, config.ipv4Suffix, config.ipv6Suffix));
   }
-  if (needPowdet && config.powdetDynamic && powdetScope?.ipHash) {
-    if (powdetScope.ipRange) {
-      const now = nowMs();
-      const cachedBlock = lruGet(POWDET_BLOCK_LRU, powdetScope.ipRange, now);
-      if (cachedBlock && cachedBlock.untilMs && cachedBlock.untilMs > now) {
-        const remaining = Math.ceil((cachedBlock.untilMs - now) / 1000);
-        await slowFailDelay();
-        return respondJson(origin, { code: 429, message: 'powdet blocked', retryAfter: remaining }, 429);
-      }
-    }
+  if (needPowdet && powdetScope?.ipHash) {
     const nowSeconds = Math.floor(Date.now() / 1000);
-    const powState = await fetchPowdetDifficultyState(config, env, powdetScope.ipHash);
-    const powDifficulty = getPowdetDifficultyForClient(powState, nowSeconds, config.powdetDynamic);
-    if (powDifficulty.blocked) {
-      const retry = normalizePositiveSeconds(powDifficulty.retryAfterSeconds, 0);
-      if (retry > 0 && powdetScope.ipRange) {
-        const now = nowMs();
-        lruPut(POWDET_BLOCK_LRU, powdetScope.ipRange, {
-          untilMs: now + retry * 1000,
-        });
+    for (const alg of powdetRequiredAlgorithms) {
+      const algoCfg = getPowdetAlgorithmConfig(config, alg);
+      if (!algoCfg?.dynamic) {
+        continue;
       }
-      await slowFailDelay();
-      return respondJson(origin, { code: 429, message: 'powdet blocked', retryAfter: powDifficulty.retryAfterSeconds }, 429);
+      if (powdetScope.ipRange) {
+        const now = nowMs();
+        const blockKey = `${alg}|${powdetScope.ipRange}`;
+        const cachedBlock = lruGet(POWDET_BLOCK_LRU, blockKey, now);
+        if (cachedBlock && cachedBlock.untilMs && cachedBlock.untilMs > now) {
+          const remaining = Math.ceil((cachedBlock.untilMs - now) / 1000);
+          await slowFailDelay();
+          return respondJson(origin, { code: 429, message: 'powdet blocked', retryAfter: remaining }, 429);
+        }
+      }
+      const powState = await fetchPowdetDifficultyState(config, env, powdetScope.ipHash, alg);
+      const powDifficulty = getPowdetDifficultyForClient(powState, nowSeconds, algoCfg.dynamic);
+      if (powDifficulty.blocked) {
+        const retry = normalizePositiveSeconds(powDifficulty.retryAfterSeconds, 0);
+        if (retry > 0 && powdetScope.ipRange) {
+          const now = nowMs();
+          const blockKey = `${alg}|${powdetScope.ipRange}`;
+          lruPut(POWDET_BLOCK_LRU, blockKey, {
+            untilMs: now + retry * 1000,
+          });
+        }
+        await slowFailDelay();
+        return respondJson(origin, { code: 429, message: 'powdet blocked', retryAfter: powDifficulty.retryAfterSeconds }, 429);
+      }
     }
   }
 
@@ -2876,8 +2986,8 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
   let altchaTokenHash = null;
   let expectedTurnstileCData = '';
   let payloadTurnstileNonce = '';
-  let powdetChallengeHash = null;
-  let powdetExpireAt = null;
+  const powdetChallengeStates = new Map();
+  const powdetChallengesForDb = [];
   if (needTurnstile && config.turnstileCookieExpireSeconds > 0) {
     if (!turnstileBindingPayload) {
       return respondJson(origin, { code: 463, message: 'turnstile binding required' }, 403);
@@ -3027,109 +3137,158 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
   }
 
   if (needPowdet) {
+    if (!Array.isArray(powdetSolutions)) {
+      return respondJson(origin, { code: 403, message: 'powdet solutions required' }, 403);
+    }
+    const requiredSet = new Set(powdetRequiredAlgorithms);
+    const solutionsMap = new Map();
+    for (const item of powdetSolutions) {
+      if (!item || typeof item !== 'object') {
+        return respondJson(origin, { code: 403, message: 'powdet solutions invalid' }, 403);
+      }
+      const alg = typeof item.alg === 'string' ? item.alg.trim() : '';
+      if (!alg || !requiredSet.has(alg)) {
+        return respondJson(origin, { code: 403, message: 'powdet algorithm not allowed' }, 403);
+      }
+      if (solutionsMap.has(alg)) {
+        return respondJson(origin, { code: 403, message: 'powdet algorithm duplicated' }, 403);
+      }
+      solutionsMap.set(alg, item);
+    }
+    for (const alg of requiredSet) {
+      if (!solutionsMap.has(alg)) {
+        return respondJson(origin, { code: 403, message: 'powdet solution missing' }, 403);
+      }
+    }
+
     const nowSeconds = Math.floor(Date.now() / 1000);
     const clockSkew = Number.isFinite(config.powdetClockSkewSeconds) ? config.powdetClockSkewSeconds : 60;
     const maxWindow = Number.isFinite(config.powdetMaxWindowSeconds) ? config.powdetMaxWindowSeconds : 600;
-
-    const payloadChallenge = typeof powdetSolution?.challenge === 'string' ? powdetSolution.challenge : '';
-    const payloadNonce = typeof powdetSolution?.nonce === 'string' ? powdetSolution.nonce : '';
-    const payloadRandom = typeof powdetSolution?.randomStr === 'string' ? powdetSolution.randomStr : '';
-    const payloadHmac = typeof powdetSolution?.hmac === 'string' ? powdetSolution.hmac : '';
-    const payloadLink = normalizeLinkValue(powdetSolution?.link);
-    const rawExpire = powdetSolution?.expireAt ?? powdetSolution?.expiresAt;
-    const payloadExpireAt = Number.isFinite(rawExpire) ? Math.floor(rawExpire) : Number.parseInt(rawExpire, 10);
-
-    if (!payloadChallenge || !payloadNonce || !payloadRandom || !payloadHmac || !Number.isFinite(payloadExpireAt)) {
-      return respondJson(origin, { code: 403, message: 'powdet payload missing' }, 403);
-    }
-    if (payloadExpireAt + clockSkew < nowSeconds) {
-      return respondJson(origin, { code: 463, message: 'powdet challenge expired' }, 403);
-    }
-    if (payloadExpireAt - nowSeconds > maxWindow) {
-      return respondJson(origin, { code: 463, message: 'powdet expire window invalid' }, 403);
-    }
-
     const expectedPathHash = typeof filepathHash === 'string' ? filepathHash : '';
     const expectedIpRangeHash = powdetScope?.ipRange ? await sha256Hash(powdetScope.ipRange) : '';
     if (!expectedPathHash || !expectedIpRangeHash) {
       return respondJson(origin, { code: 403, message: 'powdet binding context missing' }, 403);
     }
 
-    let expectedHmac = '';
-    try {
-      const bindingPayload = {
-        ipRangeHash: expectedIpRangeHash,
-        pathHash: expectedPathHash,
-        expireAt: payloadExpireAt,
-        randomStr: payloadRandom,
-        challenge: payloadChallenge,
-      };
-      if (payloadLink) {
-        bindingPayload.link = payloadLink;
-      }
-      if (config.tlsFingerprintBindingEnabled) {
-        bindingPayload.tlsFingerprint = tlsFingerprintHash;
-      }
-      expectedHmac = await computePowdetHmac(config, bindingPayload);
-    } catch (error) {
-      console.error('[Powdet] Failed to compute HMAC:', error instanceof Error ? error.message : String(error));
-      return respondJson(origin, { code: 500, message: 'powdet verification unavailable' }, 500);
-    }
+    let powdetLinkValue = null;
+    for (const alg of powdetRequiredAlgorithms) {
+      const solution = solutionsMap.get(alg);
+      const payloadChallenge = typeof solution?.challenge === 'string' ? solution.challenge : '';
+      const payloadNonce = typeof solution?.nonce === 'string' ? solution.nonce : '';
+      const payloadRandom = typeof solution?.randomStr === 'string' ? solution.randomStr : '';
+      const payloadHmac = typeof solution?.hmac === 'string' ? solution.hmac : '';
+      const payloadLink = normalizeLinkValue(solution?.link);
+      const rawExpire = solution?.expireAt ?? solution?.expiresAt;
+      const payloadExpireAt = Number.isFinite(rawExpire) ? Math.floor(rawExpire) : Number.parseInt(rawExpire, 10);
 
-    if (!timingSafeEqualHex(payloadHmac, expectedHmac)) {
-      return respondJson(origin, { code: 463, message: 'powdet binding mismatch' }, 403);
-    }
-    powdetLink = payloadLink;
-
-    powdetExpireAt = payloadExpireAt;
-    try {
-      powdetChallengeHash = await sha256Hash(payloadChallenge);
-    } catch (error) {
-      console.error('[Powdet] Failed to hash challenge:', error instanceof Error ? error.message : String(error));
-      if (hasDbMode) {
-        return respondJson(origin, { code: 500, message: 'powdet hashing failed' }, 500);
+      if (!payloadChallenge || !payloadNonce || !payloadRandom || !payloadHmac || !Number.isFinite(payloadExpireAt)) {
+        return respondJson(origin, { code: 403, message: 'powdet payload missing' }, 403);
       }
-    }
-
-    if (powdetChallengeHash) {
-      const now = nowMs();
-      const cachedReplay = lruGet(POWDET_REPLAY_LRU, powdetChallengeHash, now);
-      if (cachedReplay && cachedReplay.untilMs && cachedReplay.untilMs > now) {
-        await slowFailDelay();
-        return respondJson(origin, { code: 463, message: 'powdet challenge reused' }, 403);
+      if (payloadExpireAt + clockSkew < nowSeconds) {
+        return respondJson(origin, { code: 463, message: 'powdet challenge expired' }, 403);
       }
-    }
-
-    let powdetVerifyFailKey = null;
-    if (powdetChallengeHash) {
-      powdetVerifyFailKey = powdetScope?.ipRange
-        ? `${powdetScope.ipRange}|${powdetChallengeHash}`
-        : powdetChallengeHash;
-      const now = nowMs();
-      const cachedVerifyFail = lruGet(POWDET_VERIFY_FAIL_LRU, powdetVerifyFailKey, now);
-      if (cachedVerifyFail && cachedVerifyFail.untilMs && cachedVerifyFail.untilMs > now) {
-        await slowFailDelay();
-        return respondJson(origin, { code: 463, message: 'powdet verification failed' }, 403);
+      if (payloadExpireAt - nowSeconds > maxWindow) {
+        return respondJson(origin, { code: 463, message: 'powdet expire window invalid' }, 403);
       }
-    }
 
-    const powVerify = await verifyPowdet(config, payloadChallenge, payloadNonce);
-    if (!powVerify.ok) {
-      const message = powVerify.message || 'powdet verification failed';
-      const status = Number(powVerify.status);
-      const isBusinessFailure = Number.isFinite(status) && status >= 400 && status < 500;
-      if (isBusinessFailure && powdetVerifyFailKey) {
-        const ttlSeconds = 60;
+      if (powdetLinkValue === null) {
+        powdetLinkValue = payloadLink;
+      } else if (payloadLink !== powdetLinkValue) {
+        return respondJson(origin, { code: 463, message: 'powdet link mismatch' }, 403);
+      }
+
+      let expectedHmac = '';
+      try {
+        const bindingPayload = {
+          alg,
+          ipRangeHash: expectedIpRangeHash,
+          pathHash: expectedPathHash,
+          expireAt: payloadExpireAt,
+          randomStr: payloadRandom,
+          challenge: payloadChallenge,
+        };
+        if (payloadLink) {
+          bindingPayload.link = payloadLink;
+        }
+        if (config.tlsFingerprintBindingEnabled) {
+          bindingPayload.tlsFingerprint = tlsFingerprintHash;
+        }
+        expectedHmac = await computePowdetHmac(config, bindingPayload);
+      } catch (error) {
+        console.error('[Powdet] Failed to compute HMAC:', error instanceof Error ? error.message : String(error));
+        return respondJson(origin, { code: 500, message: 'powdet verification unavailable' }, 500);
+      }
+
+      if (!timingSafeEqualHex(payloadHmac, expectedHmac)) {
+        return respondJson(origin, { code: 463, message: 'powdet binding mismatch' }, 403);
+      }
+
+      let challengeHash = '';
+      try {
+        challengeHash = await sha256Hash(payloadChallenge);
+      } catch (error) {
+        console.error('[Powdet] Failed to hash challenge:', error instanceof Error ? error.message : String(error));
+        if (hasDbMode) {
+          return respondJson(origin, { code: 500, message: 'powdet hashing failed' }, 500);
+        }
+      }
+
+      if (challengeHash) {
         const now = nowMs();
-        lruPut(POWDET_VERIFY_FAIL_LRU, powdetVerifyFailKey, {
-          untilMs: now + ttlSeconds * 1000,
+        const replayKey = `${alg}|${challengeHash}`;
+        const cachedReplay = lruGet(POWDET_REPLAY_LRU, replayKey, now);
+        if (cachedReplay && cachedReplay.untilMs && cachedReplay.untilMs > now) {
+          await slowFailDelay();
+          return respondJson(origin, { code: 463, message: 'powdet challenge reused' }, 403);
+        }
+      }
+
+      let powdetVerifyFailKey = null;
+      if (challengeHash) {
+        powdetVerifyFailKey = powdetScope?.ipRange
+          ? `${alg}|${powdetScope.ipRange}|${challengeHash}`
+          : `${alg}|${challengeHash}`;
+        const now = nowMs();
+        const cachedVerifyFail = lruGet(POWDET_VERIFY_FAIL_LRU, powdetVerifyFailKey, now);
+        if (cachedVerifyFail && cachedVerifyFail.untilMs && cachedVerifyFail.untilMs > now) {
+          await slowFailDelay();
+          return respondJson(origin, { code: 463, message: 'powdet verification failed' }, 403);
+        }
+      }
+
+      const powVerify = await verifyPowdet(config, alg, payloadChallenge, payloadNonce);
+      if (!powVerify.ok) {
+        const message = powVerify.message || 'powdet verification failed';
+        const status = Number(powVerify.status);
+        const isBusinessFailure = Number.isFinite(status) && status >= 400 && status < 500;
+        if (isBusinessFailure && powdetVerifyFailKey) {
+          const ttlSeconds = 60;
+          const now = nowMs();
+          lruPut(POWDET_VERIFY_FAIL_LRU, powdetVerifyFailKey, {
+            untilMs: now + ttlSeconds * 1000,
+          });
+        }
+        if (isBusinessFailure) {
+          await slowFailDelay();
+        }
+        return respondJson(origin, { code: 463, message }, 403);
+      }
+
+      if (challengeHash) {
+        powdetChallengeStates.set(alg, {
+          challengeHash,
+          expireAt: payloadExpireAt,
+        });
+        powdetChallengesForDb.push({
+          alg,
+          hash: challengeHash,
+          expireAt: payloadExpireAt,
         });
       }
-      if (isBusinessFailure) {
-        await slowFailDelay();
-      }
-      return respondJson(origin, { code: 463, message }, 403);
     }
+    powdetLink = powdetLinkValue || '';
+  } else if (Array.isArray(powdetSolutions) && powdetSolutions.length > 0) {
+    return respondJson(origin, { code: 403, message: 'powdet not required' }, 403);
   }
 
   if (needAltcha && altchaPayload) {
@@ -3228,7 +3387,7 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
 
   const hasCacheSupport = Boolean(cacheManager && config.cacheEnabled);
   const requiresAltchaStateful = Boolean(needAltcha && altchaTokenHash && hasDbMode);
-  const requiresPowdetStateful = Boolean(needPowdet && powdetChallengeHash && hasDbMode);
+  const requiresPowdetStateful = Boolean(needPowdet && powdetChallengesForDb.length > 0 && hasDbMode);
   const unifiedEligible = Boolean(
     (config.rateLimitEnabled && hasDbMode) ||
     shouldBindToken ||
@@ -3291,9 +3450,8 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
           altchaTokenHash,
           altchaTokenIP: clientIP,
           altchaTableName,
-          powdetChallengeHash,
+          powdetChallenges: powdetChallengesForDb,
           powdetTableName: powTableName,
-          powdetExpireAt,
         };
         unifiedResult = await unifiedCheck(decodedPath, clientIP, config.altchaTableName, unifiedConfig);
       } else {
@@ -3379,19 +3537,32 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
         }
 
         if (needPowdet) {
-          const powResult = unifiedResult.powdet;
-          if (!powResult || powResult.consumed === false) {
-            if (powdetChallengeHash) {
-              const now = nowMs();
-              const nowSeconds = Math.floor(now / 1000);
+          const powResults = unifiedResult.powdet?.results || {};
+          let powdetFailed = false;
+          for (const alg of powdetRequiredAlgorithms) {
+            const result = powResults && typeof powResults === 'object' ? powResults[alg] : null;
+            if (!result || result.consumed === false) {
+              powdetFailed = true;
+              break;
+            }
+          }
+          if (powdetFailed) {
+            const now = nowMs();
+            const nowSeconds = Math.floor(now / 1000);
+            for (const alg of powdetRequiredAlgorithms) {
+              const state = powdetChallengeStates.get(alg);
+              if (!state?.challengeHash) {
+                continue;
+              }
               let ttlSeconds = 0;
-              if (Number.isFinite(powdetExpireAt) && powdetExpireAt > nowSeconds) {
-                ttlSeconds = powdetExpireAt - nowSeconds;
+              if (Number.isFinite(state.expireAt) && state.expireAt > nowSeconds) {
+                ttlSeconds = state.expireAt - nowSeconds;
               } else {
                 ttlSeconds = normalizePositiveSeconds(config.powdetExpireSeconds, 180);
               }
               if (ttlSeconds > 0) {
-                lruPut(POWDET_REPLAY_LRU, powdetChallengeHash, {
+                const replayKey = `${alg}|${state.challengeHash}`;
+                lruPut(POWDET_REPLAY_LRU, replayKey, {
                   untilMs: now + ttlSeconds * 1000,
                 });
               }
@@ -3800,14 +3971,16 @@ async function cleanupExpiredPowdetTickets(config, env) {
 }
 
 async function cleanupPowdetDifficultyState(config, env) {
-  if (!config?.powdetDynamic) {
+  const powdetAlgorithms = Array.isArray(config?.powdetEnabledAlgorithms)
+    ? config.powdetEnabledAlgorithms
+    : [];
+  if (powdetAlgorithms.length === 0) {
     return;
   }
   const dbMode = getNormalizedDbMode(config);
   if (!dbMode) {
     return;
   }
-  const tableName = config.powdetDifficultyTableName || POWDET_DIFFICULTY_TABLE;
   const nowSeconds = Math.floor(Date.now() / 1000);
   const cutoffTime = nowSeconds - ALTCHA_DIFFICULTY_CLEANUP_MAX_AGE;
   try {
@@ -3816,20 +3989,28 @@ async function cleanupPowdetDifficultyState(config, env) {
       if (!postgrestUrl) {
         return;
       }
-      const rpcUrl = `${postgrestUrl}/rpc/landing_cleanup_altcha_difficulty_state`;
+      const rpcUrl = `${postgrestUrl}/rpc/landing_cleanup_powdet_difficulty_state`;
       const headers = { 'Content-Type': 'application/json' };
       applyVerifyHeaders(headers, config.verifyHeader, config.verifySecret);
-      const response = await fetch(rpcUrl, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          p_before: cutoffTime,
-          p_table_name: tableName,
-        }),
-      });
-      if (!response.ok) {
-        const text = await response.text().catch(() => '');
-        console.error('[Powdet Dynamic] Cleanup RPC failed:', response.status, text);
+      for (const alg of powdetAlgorithms) {
+        const algoCfg = getPowdetAlgorithmConfig(config, alg);
+        if (!algoCfg?.dynamic) {
+          continue;
+        }
+        const tableName = algoCfg.difficultyTableName || POWDET_DIFFICULTY_TABLE;
+        const response = await fetch(rpcUrl, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            p_alg: alg,
+            p_before: cutoffTime,
+            p_table_name: tableName,
+          }),
+        });
+        if (!response.ok) {
+          const text = await response.text().catch(() => '');
+          console.error('[Powdet Dynamic] Cleanup RPC failed:', response.status, text);
+        }
       }
       return;
     }
@@ -4384,8 +4565,7 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
   // Default: render landing page
   let altchaChallengePayload = null;
   let turnstileBindingPayload = null;
-  let powdetChallengePayload = null;
-  let powdetStaticBase = '/powdet/static';
+  let powdetChallenges = [];
   const needsAltchaChallenge = needAltcha;
   const needsTurnstileBinding = needTurnstile && config.turnstileCookieExpireSeconds > 0;
   const needsPowdetChallenge = needPowdet;
@@ -4461,43 +4641,6 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
   let altchaChallengeAlgorithm = ALTCHA_DEFAULT_ALGORITHM;
   if (!shouldRedirect && needsAltchaChallenge) {
     altchaChallengeAlgorithm = pickAltchaAlgorithm(altchaEffectiveExponent, config.altchaDynamic);
-  }
-
-  let powdetDifficultyLevel = Number.isFinite(config.powdetStaticLevel) ? config.powdetStaticLevel : 12;
-  if (!shouldRedirect && needsPowdetChallenge) {
-    if (config.powdetDynamic && config.dbMode && powdetScopeForChallenge?.ipHash) {
-      if (powdetScopeForChallenge.ipRange) {
-        const now = nowMs();
-        const cachedBlock = lruGet(POWDET_BLOCK_LRU, powdetScopeForChallenge.ipRange, now);
-        if (cachedBlock && cachedBlock.untilMs && cachedBlock.untilMs > now) {
-          const remaining = Math.ceil((cachedBlock.untilMs - now) / 1000);
-          await slowFailDelay();
-          return respondJson(origin, { code: 429, message: 'powdet blocked', retryAfter: remaining }, 429);
-        }
-      }
-      const nowSeconds = Math.floor(Date.now() / 1000);
-      const powState = await fetchPowdetDifficultyState(config, env, powdetScopeForChallenge.ipHash);
-      const powDifficulty = getPowdetDifficultyForClient(powState, nowSeconds, config.powdetDynamic);
-      if (powDifficulty.blocked) {
-        const retry = normalizePositiveSeconds(powDifficulty.retryAfterSeconds, 0);
-        if (retry > 0 && powdetScopeForChallenge.ipRange) {
-          const now = nowMs();
-          lruPut(POWDET_BLOCK_LRU, powdetScopeForChallenge.ipRange, {
-            untilMs: now + retry * 1000,
-          });
-        }
-        await slowFailDelay();
-        return respondJson(origin, { code: 429, message: 'powdet blocked', retryAfter: powDifficulty.retryAfterSeconds }, 429);
-      }
-      powdetDifficultyLevel = powDifficulty.difficultyLevel;
-      if (powdetScopeForChallenge.ipRange) {
-        try {
-          await updatePowdetDifficultyState(config, env, powdetScopeForChallenge, nowSeconds);
-        } catch (error) {
-          console.error('[Powdet Dynamic] Difficulty update failed in handleFileRequest:', error instanceof Error ? error.message : String(error));
-        }
-      }
-    }
   }
 
   if (!shouldRedirect && needsTurnstileBinding) {
@@ -4595,42 +4738,95 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
   }
 
   if (!shouldRedirect && needsPowdetChallenge) {
-    if (config.powdetStaticBaseUrl) {
-      powdetStaticBase = config.powdetStaticBaseUrl.replace(/\/+$/, '');
-    } else if (config.powdetBaseUrl) {
-      powdetStaticBase = `${config.powdetBaseUrl.replace(/\/+$/, '')}/powdet/static`;
-    } else {
-      powdetStaticBase = '/powdet/static';
-    }
     try {
       const baseNowSeconds = Math.floor(Date.now() / 1000);
       const expireSeconds = Number.isFinite(config.powdetExpireSeconds) ? config.powdetExpireSeconds : 180;
       const expireAt = baseNowSeconds + expireSeconds;
       const pathHash = decodedChallengePath ? await sha256Hash(decodedChallengePath) : '';
       const ipRangeHash = powdetScopeForChallenge?.ipRange ? await sha256Hash(powdetScopeForChallenge.ipRange) : '';
-      const randomStr = generateNonce(32);
-      const challenge = await fetchPowdetChallenge(config, powdetDifficultyLevel);
-      const bindingPayload = {
-        ipRangeHash,
-        pathHash,
-        expireAt,
-        randomStr,
-        challenge,
-      };
-      if (challengeLink) {
-        bindingPayload.link = challengeLink;
+      if (!pathHash || !ipRangeHash) {
+        throw new Error('powdet binding context missing');
       }
-      if (config.tlsFingerprintBindingEnabled) {
-        bindingPayload.tlsFingerprint = tlsFingerprintHash;
+
+      for (const alg of powdetRequiredAlgorithms) {
+        const algoCfg = getPowdetAlgorithmConfig(config, alg);
+        if (!algoCfg?.enabled) {
+          throw new Error('powdet algorithm unavailable');
+        }
+        let difficultyLevel = Number.isFinite(algoCfg.staticLevel) ? algoCfg.staticLevel : 12;
+        if (algoCfg.dynamic && config.dbMode && powdetScopeForChallenge?.ipHash) {
+          if (powdetScopeForChallenge.ipRange) {
+            const now = nowMs();
+            const blockKey = `${alg}|${powdetScopeForChallenge.ipRange}`;
+            const cachedBlock = lruGet(POWDET_BLOCK_LRU, blockKey, now);
+            if (cachedBlock && cachedBlock.untilMs && cachedBlock.untilMs > now) {
+              const remaining = Math.ceil((cachedBlock.untilMs - now) / 1000);
+              await slowFailDelay();
+              return respondJson(origin, { code: 429, message: 'powdet blocked', retryAfter: remaining }, 429);
+            }
+          }
+          const nowSeconds = Math.floor(Date.now() / 1000);
+          const powState = await fetchPowdetDifficultyState(config, env, powdetScopeForChallenge.ipHash, alg);
+          const powDifficulty = getPowdetDifficultyForClient(powState, nowSeconds, algoCfg.dynamic);
+          if (powDifficulty.blocked) {
+            const retry = normalizePositiveSeconds(powDifficulty.retryAfterSeconds, 0);
+            if (retry > 0 && powdetScopeForChallenge.ipRange) {
+              const now = nowMs();
+              const blockKey = `${alg}|${powdetScopeForChallenge.ipRange}`;
+              lruPut(POWDET_BLOCK_LRU, blockKey, {
+                untilMs: now + retry * 1000,
+              });
+            }
+            await slowFailDelay();
+            return respondJson(origin, { code: 429, message: 'powdet blocked', retryAfter: powDifficulty.retryAfterSeconds }, 429);
+          }
+          difficultyLevel = powDifficulty.difficultyLevel;
+          if (powdetScopeForChallenge.ipRange) {
+            try {
+              await updatePowdetDifficultyState(config, env, powdetScopeForChallenge, nowSeconds, alg);
+            } catch (error) {
+              console.error('[Powdet Dynamic] Difficulty update failed in handleFileRequest:', error instanceof Error ? error.message : String(error));
+            }
+          }
+        }
+
+        const randomStr = generateNonce(32);
+        const challenge = await fetchPowdetChallenge(config, alg, difficultyLevel);
+        const bindingPayload = {
+          alg,
+          ipRangeHash,
+          pathHash,
+          expireAt,
+          randomStr,
+          challenge,
+        };
+        if (challengeLink) {
+          bindingPayload.link = challengeLink;
+        }
+        if (config.tlsFingerprintBindingEnabled) {
+          bindingPayload.tlsFingerprint = tlsFingerprintHash;
+        }
+        const hmac = await computePowdetHmac(config, bindingPayload);
+        let staticBase = algoCfg.staticBaseUrl;
+        if (!staticBase) {
+          if (config.powdetStaticBaseUrl) {
+            staticBase = config.powdetStaticBaseUrl.replace(/\/+$/, '');
+          } else if (config.powdetBaseUrl) {
+            staticBase = `${config.powdetBaseUrl.replace(/\/+$/, '')}/powdet/static`;
+          } else {
+            staticBase = '/powdet/static';
+          }
+        }
+        powdetChallenges.push({
+          alg,
+          challenge,
+          expireAt,
+          randomStr,
+          hmac,
+          link: challengeLink,
+          staticBase,
+        });
       }
-      const hmac = await computePowdetHmac(config, bindingPayload);
-      powdetChallengePayload = {
-        challenge,
-        expireAt,
-        randomStr,
-        hmac,
-        link: challengeLink,
-      };
     } catch (error) {
       console.error('[Powdet] Failed to create challenge:', error instanceof Error ? error.message : String(error));
       return respondJson(origin, { code: 500, message: 'powdet challenge unavailable' }, 500);
@@ -4647,8 +4843,7 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
     turnstileAction: config.turnstileExpectedAction,
     altchaChallenge: altchaChallengePayload,
     turnstileBinding: turnstileBindingPayload,
-    powdetChallenge: powdetChallengePayload,
-    powdetStaticBase,
+    powdetChallenges,
     autoRedirect: landingCtx.autoRedirect,
     webDownloader: needWebDownloader,
     isCryptPath: isCrypt,

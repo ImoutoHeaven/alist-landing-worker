@@ -2005,8 +2005,7 @@
       turnstileAction: 'download',
       altchaChallenge: null,
       turnstileBinding: null,
-      powdetStaticBase: '',
-      powdetChallenge: null,
+      powdetChallenges: [],
       scriptLoaded: false,
       scriptLoading: null,
       widgetId: null,
@@ -2020,7 +2019,9 @@
       powdetReady: false,
       altchaSolution: null,
       turnstileToken: null,
-      powdetNonce: '',
+      powdetNonceByAlg: {},
+      powdetActiveAlg: '',
+      powdetWorkers: {},
       altchaIssuedAt: 0,
       turnstileIssuedAt: 0,
       tokenResolvers: [],
@@ -5369,33 +5370,119 @@
     });
   };
 
+  const POWDET_ALGO_ARGON2ID = 'argon2id';
+  const POWDET_ALGO_RANDOMX = 'randomx';
+
+  const getPowdetChallenges = () =>
+    Array.isArray(state.security.powdetChallenges) ? state.security.powdetChallenges : [];
+
+  const getPowdetRequiredAlgorithms = () => {
+    const algs = [];
+    for (const item of getPowdetChallenges()) {
+      const alg = typeof item?.alg === 'string' ? item.alg.trim() : '';
+      if (alg) {
+        algs.push(alg);
+      }
+    }
+    return Array.from(new Set(algs));
+  };
+
+  const buildPowdetSolutionsPayload = () => {
+    const challenges = getPowdetChallenges();
+    if (challenges.length === 0) {
+      return [];
+    }
+    const nonceMap = state.verification.powdetNonceByAlg || {};
+    const solutions = [];
+    for (const challenge of challenges) {
+      const alg = typeof challenge?.alg === 'string' ? challenge.alg.trim() : '';
+      const nonce = typeof nonceMap[alg] === 'string' ? nonceMap[alg] : '';
+      if (!alg || !nonce) {
+        return null;
+      }
+      solutions.push({
+        alg,
+        challenge: challenge.challenge,
+        expireAt: challenge.expireAt,
+        randomStr: challenge.randomStr,
+        hmac: challenge.hmac,
+        nonce,
+        link: typeof challenge.link === 'string' ? challenge.link : '',
+      });
+    }
+    return solutions;
+  };
+
+  const fulfilPowdetResolvers = (solutions) => {
+    if (!Array.isArray(state.verification.powdetResolvers) || state.verification.powdetResolvers.length === 0) {
+      return;
+    }
+    const resolvers = state.verification.powdetResolvers.slice();
+    state.verification.powdetResolvers = [];
+    resolvers.forEach((fn) => {
+      try {
+        fn(solutions);
+      } catch (err) {
+        console.error('powdet resolver error', err);
+      }
+    });
+  };
+
+  const refreshPowdetReadyState = () => {
+    const requiredAlgs = getPowdetRequiredAlgorithms();
+    state.verification.needPowdet = requiredAlgs.length > 0;
+    if (!state.verification.needPowdet) {
+      state.verification.powdetReady = true;
+      return;
+    }
+    const nonceMap = state.verification.powdetNonceByAlg || {};
+    const ready = requiredAlgs.every((alg) => typeof nonceMap[alg] === 'string' && nonceMap[alg]);
+    state.verification.powdetReady = ready;
+    if (ready) {
+      const payload = buildPowdetSolutionsPayload();
+      if (payload) {
+        fulfilPowdetResolvers(payload);
+      }
+    }
+  };
+
   const getPowdetMaxWaitMs = () => {
-    const expireAtRaw = state?.security?.powdetChallenge?.expireAt;
-    const expireAt = typeof expireAtRaw === 'string' ? Number.parseInt(expireAtRaw, 10) : Number(expireAtRaw);
-    if (Number.isFinite(expireAt) && expireAt > 0) {
-      return Math.max(1000, (expireAt * 1000) - Date.now());
+    const challenges = getPowdetChallenges();
+    const expiries = [];
+    for (const item of challenges) {
+      const raw = item?.expireAt;
+      const expireAt = typeof raw === 'string' ? Number.parseInt(raw, 10) : Number(raw);
+      if (Number.isFinite(expireAt) && expireAt > 0) {
+        expiries.push(expireAt);
+      }
+    }
+    if (expiries.length > 0) {
+      const earliest = Math.min(...expiries);
+      return Math.max(1000, (earliest * 1000) - Date.now());
     }
     return 180000;
   };
-  const waitForPowdetNonce = async () => {
+
+  const waitForPowdetSolutions = async () => {
     if (!state.verification.needPowdet) {
-      return '';
+      return [];
     }
-    if (state.verification.powdetNonce) {
-      return state.verification.powdetNonce;
+    const existing = buildPowdetSolutionsPayload();
+    if (existing) {
+      return existing;
     }
     return new Promise((resolve, reject) => {
-      const resolver = (nonce) => {
+      const resolver = (solutions) => {
         window.clearTimeout(timeoutId);
         if (Array.isArray(state.verification.powdetResolvers)) {
           state.verification.powdetResolvers = state.verification.powdetResolvers.filter((fn) => fn !== resolver);
         }
-        resolve(nonce || '');
+        resolve(Array.isArray(solutions) ? solutions : []);
       };
       const timeoutId = window.setTimeout(() => {
-        const nonce = state.verification.powdetNonce;
-        if (nonce) {
-          resolve(nonce);
+        const payload = buildPowdetSolutionsPayload();
+        if (payload) {
+          resolve(payload);
           return;
         }
         reject(new Error('POW 计算超时'));
@@ -5430,13 +5517,15 @@
       }
     }
     if (state.verification.needPowdet) {
-      const powdetExpiresRaw = state?.security?.powdetChallenge?.expireAt;
-      const powdetExpires =
-        typeof powdetExpiresRaw === 'string'
-          ? Number.parseInt(powdetExpiresRaw, 10)
-          : Number(powdetExpiresRaw);
-      if (Number.isFinite(powdetExpires)) {
-        expiries.push(powdetExpires - nowSeconds);
+      for (const item of getPowdetChallenges()) {
+        const powdetExpiresRaw = item?.expireAt;
+        const powdetExpires =
+          typeof powdetExpiresRaw === 'string'
+            ? Number.parseInt(powdetExpiresRaw, 10)
+            : Number(powdetExpiresRaw);
+        if (Number.isFinite(powdetExpires)) {
+          expiries.push(powdetExpires - nowSeconds);
+        }
       }
     }
     if (expiries.length === 0) {
@@ -5484,25 +5573,26 @@
     return input;
   };
 
-  const getPowdetStaticBase = () => {
-    const rawBase =
-      typeof state.security.powdetStaticBase === 'string' ? state.security.powdetStaticBase : '';
+  const getPowdetStaticBase = (challenge) => {
+    const rawBase = typeof challenge?.staticBase === 'string' ? challenge.staticBase : '';
     const normalizedBase = rawBase ? rawBase.replace(/\/+$/u, '') : '';
-    if (normalizedBase) {
-      return normalizedBase;
-    }
-    return '/powdet/static';
+    return normalizedBase || '/powdet/static';
   };
 
   let powdetScriptPromise = null;
-  const ensurePowdetScriptLoaded = () => {
+  let powdetScriptBase = '';
+  const ensurePowdetScriptLoaded = (staticBase) => {
     if (typeof window.powBotDeterrentInit === 'function') {
       return Promise.resolve(true);
     }
     if (powdetScriptPromise) {
       return powdetScriptPromise;
     }
-    const staticBase = getPowdetStaticBase();
+    const normalizedBase = staticBase ? staticBase.replace(/\/+$/u, '') : '';
+    if (powdetScriptBase && powdetScriptBase !== normalizedBase) {
+      console.warn('powdet static base changed after script load, using previous base:', powdetScriptBase);
+    }
+    powdetScriptBase = normalizedBase;
     powdetScriptPromise = new Promise((resolve) => {
       const existing = document.getElementById('powbot-script');
       if (existing) {
@@ -5519,7 +5609,7 @@
       }
       const script = document.createElement('script');
       script.id = 'powbot-script';
-      script.src = (staticBase || '/powdet/static') + '/pow-bot-deterrent.js';
+      script.src = (normalizedBase || '/powdet/static') + '/pow-bot-deterrent.js';
       script.defer = true;
       script.onload = () => resolve(true);
       script.onerror = () => {
@@ -5531,18 +5621,199 @@
     return powdetScriptPromise;
   };
 
-  const initPowdetIfNeeded = () => {
-    if (!state.verification.needPowdet || !state.security.powdetChallenge) {
-      state.verification.powdetReady = true;
-      updateButtonState();
+  const decodePowdetChallengePayload = (value) => {
+    if (typeof value !== 'string' || !value) {
+      return null;
+    }
+    try {
+      let base64 = value.replace(/-/g, '+').replace(/_/g, '/');
+      while (base64.length % 4 !== 0) {
+        base64 += '=';
+      }
+      const decoded = atob(base64);
+      return JSON.parse(decoded);
+    } catch (error) {
+      console.error('powdet challenge decode failed', error);
+      return null;
+    }
+  };
+
+  const markPowdetSolved = (alg, nonce) => {
+    const normalizedAlg = typeof alg === 'string' ? alg.trim() : '';
+    if (!normalizedAlg) {
       return;
     }
+    if (!state.verification.powdetNonceByAlg || typeof state.verification.powdetNonceByAlg !== 'object') {
+      state.verification.powdetNonceByAlg = {};
+    }
+    state.verification.powdetNonceByAlg[normalizedAlg] = String(nonce || '');
+    refreshPowdetReadyState();
+    updateButtonState();
+    maybeAnnouncePowReady();
+  };
 
-    const { challenge, expireAt, randomStr, hmac } = state.security.powdetChallenge;
+  let randomxWorkerUrl = '';
+  const getRandomxWorkerUrl = () => {
+    if (randomxWorkerUrl) {
+      return randomxWorkerUrl;
+    }
+    const workerScript = `
+      const decodeBase64 = (value) => {
+        if (!value) return new Uint8Array(0);
+        let base64 = value.replace(/-/g, '+').replace(/_/g, '/');
+        while (base64.length % 4 !== 0) {
+          base64 += '=';
+        }
+        const raw = atob(base64);
+        const bytes = new Uint8Array(raw.length);
+        for (let i = 0; i < raw.length; i += 1) {
+          bytes[i] = raw.charCodeAt(i);
+        }
+        return bytes;
+      };
+      const bytesToHex = (bytes) => {
+        let hex = '';
+        for (let i = 0; i < bytes.length; i += 1) {
+          hex += bytes[i].toString(16).padStart(2, '0');
+        }
+        return hex;
+      };
+      const incrementNonce = (bytes) => {
+        for (let i = 0; i < bytes.length; i += 1) {
+          const next = (bytes[i] + 1) & 0xff;
+          bytes[i] = next;
+          if (next !== 0) {
+            break;
+          }
+        }
+      };
+      self.onmessage = async (event) => {
+        const data = event.data || {};
+        if (data.type === 'cancel') {
+          self.close();
+          return;
+        }
+        const moduleUrl = data.moduleUrl;
+        const preimageB64 = data.preimageB64;
+        const seedKeyB64 = data.seedKeyB64;
+        const difficulty = typeof data.difficulty === 'string' ? data.difficulty.toLowerCase() : '';
+        const nonceLength = Number.isFinite(data.nonceLength) ? data.nonceLength : 8;
+        if (!moduleUrl || !difficulty) {
+          self.postMessage({ error: 'randomx config missing' });
+          return;
+        }
+        let mod;
+        try {
+          mod = await import(moduleUrl);
+        } catch (err) {
+          self.postMessage({ error: 'randomx module load failed' });
+          return;
+        }
+        const initCache = mod.randomx_init_cache;
+        const createVm = mod.randomx_create_vm;
+        if (typeof initCache !== 'function' || typeof createVm !== 'function') {
+          self.postMessage({ error: 'randomx module invalid' });
+          return;
+        }
+        const seedKey = decodeBase64(seedKeyB64 || '');
+        const cache = initCache(seedKey);
+        const vm = createVm(cache);
+        const preimage = decodeBase64(preimageB64 || '');
+        if (!preimage || preimage.length === 0) {
+          self.postMessage({ error: 'randomx preimage missing' });
+          return;
+        }
+        const nonceBytes = new Uint8Array(Math.max(1, nonceLength));
+        if (self.crypto && typeof self.crypto.getRandomValues === 'function') {
+          self.crypto.getRandomValues(nonceBytes);
+        }
+        while (true) {
+          const input = new Uint8Array(preimage.length + nonceBytes.length);
+          input.set(preimage, 0);
+          input.set(nonceBytes, preimage.length);
+          const hashHex = vm.calculate_hex_hash(input);
+          const normalized = String(hashHex || '').toLowerCase();
+          const suffix = normalized.slice(-difficulty.length);
+          if (suffix <= difficulty) {
+            self.postMessage({ nonce: bytesToHex(nonceBytes) });
+            return;
+          }
+          incrementNonce(nonceBytes);
+        }
+      };
+    `;
+    const blob = new Blob([workerScript], { type: 'text/javascript' });
+    randomxWorkerUrl = URL.createObjectURL(blob);
+    return randomxWorkerUrl;
+  };
+
+  const startPowdetRandomxSolver = async (powdetChallenge) => {
+    if (!powdetChallenge || typeof powdetChallenge.challenge !== 'string') {
+      return;
+    }
+    const alg = typeof powdetChallenge.alg === 'string' ? powdetChallenge.alg.trim() : '';
+    if (!alg || alg !== POWDET_ALGO_RANDOMX) {
+      return;
+    }
+    if (state.verification.powdetNonceByAlg?.[alg]) {
+      return;
+    }
+    const payload = decodePowdetChallengePayload(powdetChallenge.challenge);
+    if (!payload || payload.alg !== POWDET_ALGO_RANDOMX) {
+      console.error('randomx challenge payload invalid');
+      return;
+    }
+    if (!payload.i || !payload.k || !payload.d) {
+      console.error('randomx challenge payload incomplete');
+      return;
+    }
+    const moduleUrl = (() => {
+      const base = getPowdetStaticBase(powdetChallenge);
+      try {
+        return new URL(base.replace(/\/+$/u, '') + '/randomx.esm.js', window.location.href).toString();
+      } catch {
+        return base.replace(/\/+$/u, '') + '/randomx.esm.js';
+      }
+    })();
+
+    const worker = new Worker(getRandomxWorkerUrl(), { type: 'module' });
+    state.verification.powdetWorkers = state.verification.powdetWorkers || {};
+    state.verification.powdetWorkers[alg] = worker;
+    worker.onmessage = (event) => {
+      const data = event.data || {};
+      if (data && typeof data.nonce === 'string' && data.nonce) {
+        worker.terminate();
+        delete state.verification.powdetWorkers[alg];
+        markPowdetSolved(alg, data.nonce);
+        return;
+      }
+      if (data && data.error) {
+        console.error('randomx worker failed:', data.error);
+      }
+    };
+    worker.onerror = (event) => {
+      console.error('randomx worker error', event);
+    };
+    worker.postMessage({
+      moduleUrl,
+      preimageB64: payload.i,
+      seedKeyB64: payload.k,
+      difficulty: payload.d,
+      nonceLength: 8,
+    });
+  };
+
+  const startPowdetArgonSolver = (powdetChallenge) => {
+    if (!powdetChallenge || typeof powdetChallenge.challenge !== 'string') {
+      return;
+    }
+    const alg = typeof powdetChallenge.alg === 'string' ? powdetChallenge.alg.trim() : POWDET_ALGO_ARGON2ID;
+    if (state.verification.powdetNonceByAlg?.[alg]) {
+      return;
+    }
+    const { challenge, expireAt, randomStr, hmac } = powdetChallenge;
     if (!challenge || !expireAt || !randomStr || !hmac) {
       console.warn('powdet challenge payload incomplete');
-      state.verification.powdetReady = true;
-      updateButtonState();
       return;
     }
 
@@ -5566,7 +5837,7 @@
       container.innerHTML = '';
     }
 
-    const staticBase = getPowdetStaticBase();
+    const staticBase = getPowdetStaticBase(powdetChallenge);
     const widget = document.createElement('div');
     widget.dataset.powBotDeterrentStaticAssetsCrossOriginUrl = staticBase;
     widget.dataset.powBotDeterrentChallenge = challenge;
@@ -5588,6 +5859,8 @@
     ensureInput('pow-random', 'pow_random', randomStr);
     ensureInput('pow-hmac', 'pow_hmac', hmac);
     ensureInput('pow-nonce', 'pow_nonce', '');
+
+    state.verification.powdetActiveAlg = alg;
 
     const maxWaitMs = 10000;
     const start = Date.now();
@@ -5613,7 +5886,6 @@
                   window.setTimeout(triggerWhenReady, 50);
                 } else {
                   console.warn('powdet widget markup not ready, skip trigger');
-                  // 尝试手动创建基本结构，方便 callback 绑定
                   try {
                     const fallback = document.createElement('div');
                     fallback.className = 'pow-bot-deterrent';
@@ -5663,7 +5935,7 @@
       })();
     };
 
-    ensurePowdetScriptLoaded()
+    ensurePowdetScriptLoaded(staticBase)
       .then((loaded) => {
         if (!loaded) {
           console.warn('powdet script load failed, skip powdet verification');
@@ -5675,28 +5947,45 @@
         console.error('powdet script load error', err);
       });
   };
- 
+
+  const initPowdetIfNeeded = () => {
+    refreshPowdetReadyState();
+    if (!state.verification.needPowdet) {
+      updateButtonState();
+      return;
+    }
+    const challenges = getPowdetChallenges();
+    if (challenges.length === 0) {
+      state.verification.powdetReady = true;
+      updateButtonState();
+      return;
+    }
+    for (const challenge of challenges) {
+      const alg = typeof challenge?.alg === 'string' ? challenge.alg.trim() : '';
+      if (!alg) {
+        continue;
+      }
+      if (state.verification.powdetNonceByAlg?.[alg]) {
+        continue;
+      }
+      if (alg === POWDET_ALGO_ARGON2ID) {
+        startPowdetArgonSolver(challenge);
+      } else if (alg === POWDET_ALGO_RANDOMX) {
+        startPowdetRandomxSolver(challenge);
+      } else {
+        console.warn('unsupported powdet algorithm', alg);
+      }
+    }
+  };
+
   window.powdetDoneCallback = function powdetDoneCallback(nonce) {
     try {
       const input = document.getElementById('pow-nonce');
       if (input) {
         input.value = String(nonce || '');
       }
-      state.verification.powdetNonce = String(nonce || '');
-      state.verification.powdetReady = true;
-      updateButtonState();
-      if (Array.isArray(state.verification.powdetResolvers)) {
-        const resolvers = state.verification.powdetResolvers.slice();
-        state.verification.powdetResolvers = [];
-        resolvers.forEach((fn) => {
-          try {
-            fn(state.verification.powdetNonce);
-          } catch (err) {
-            console.error('powdet resolver error', err);
-          }
-        });
-      }
-      maybeAnnouncePowReady();
+      const alg = state.verification.powdetActiveAlg || POWDET_ALGO_ARGON2ID;
+      markPowdetSolved(alg, nonce);
     } catch (error) {
       console.error('powdet callback failed', error);
     }
@@ -5764,44 +6053,40 @@
     } else {
       state.security.turnstileBinding = null;
     }
-    const rawPowdetStaticBase =
-      typeof security.powdetStaticBase === 'string' ? security.powdetStaticBase.trim() : '';
-    state.security.powdetStaticBase = rawPowdetStaticBase;
-    const rawPowdetChallenge =
-      security.powdetChallenge && typeof security.powdetChallenge === 'object'
-        ? security.powdetChallenge
-        : null;
-    if (rawPowdetChallenge) {
-      const expireAt =
-        typeof rawPowdetChallenge.expireAt === 'number'
-          ? rawPowdetChallenge.expireAt
-          : typeof rawPowdetChallenge.expireAt === 'string'
-            ? Number.parseInt(rawPowdetChallenge.expireAt, 10)
-            : 0;
-      const challengeValue =
-        typeof rawPowdetChallenge.challenge === 'string' ? rawPowdetChallenge.challenge : '';
-      const randomStr =
-        typeof rawPowdetChallenge.randomStr === 'string' ? rawPowdetChallenge.randomStr : '';
-      const hmac = typeof rawPowdetChallenge.hmac === 'string' ? rawPowdetChallenge.hmac : '';
-      const link = typeof rawPowdetChallenge.link === 'string' ? rawPowdetChallenge.link : '';
-      if (challengeValue && expireAt > 0 && randomStr && hmac) {
-        state.security.powdetChallenge = {
+    const rawPowdetChallenges = Array.isArray(security.powdetChallenges)
+      ? security.powdetChallenges
+      : [];
+    state.security.powdetChallenges = rawPowdetChallenges
+      .map((entry) => {
+        if (!entry || typeof entry !== 'object') {
+          return null;
+        }
+        const alg = typeof entry.alg === 'string' ? entry.alg.trim() : '';
+        const challengeValue = typeof entry.challenge === 'string' ? entry.challenge : '';
+        const expireRaw = entry.expireAt ?? entry.expiresAt;
+        const expireAt = Number.isFinite(expireRaw) ? Number(expireRaw) : Number.parseInt(expireRaw, 10);
+        const randomStr = typeof entry.randomStr === 'string' ? entry.randomStr : '';
+        const hmac = typeof entry.hmac === 'string' ? entry.hmac : '';
+        const link = typeof entry.link === 'string' ? entry.link : '';
+        const staticBase = typeof entry.staticBase === 'string' ? entry.staticBase.trim() : '';
+        if (!alg || !challengeValue || !randomStr || !hmac || !Number.isFinite(expireAt) || expireAt <= 0) {
+          return null;
+        }
+        return {
+          alg,
           challenge: challengeValue,
           expireAt,
           randomStr,
           hmac,
           link,
+          staticBase,
         };
-      } else {
-        state.security.powdetChallenge = null;
-      }
-    } else {
-      state.security.powdetChallenge = null;
-    }
+      })
+      .filter((entry) => entry);
     state.verification.needAltcha = !!state.security.altchaChallenge;
     state.verification.needTurnstile =
       state.security.underAttack && typeof state.security.siteKey === 'string' && state.security.siteKey.length > 0;
-    state.verification.needPowdet = !!state.security.powdetChallenge;
+    state.verification.needPowdet = state.security.powdetChallenges.length > 0;
     if (!state.verification.needTurnstile) {
       state.security.underAttack = false;
     }
@@ -5812,7 +6097,20 @@
     state.verification.turnstileIssuedAt = 0;
     state.verification.turnstileReady = !state.verification.needTurnstile;
     state.verification.powdetReady = !state.verification.needPowdet;
-    state.verification.powdetNonce = '';
+    state.verification.powdetNonceByAlg = {};
+    state.verification.powdetActiveAlg = '';
+    if (state.verification.powdetWorkers && typeof state.verification.powdetWorkers === 'object') {
+      Object.values(state.verification.powdetWorkers).forEach((worker) => {
+        try {
+          if (worker && typeof worker.terminate === 'function') {
+            worker.terminate();
+          }
+        } catch (error) {
+          console.warn('randomx worker terminate failed', error);
+        }
+      });
+    }
+    state.verification.powdetWorkers = {};
     state.verification.tokenResolvers = [];
     state.verification.powdetResolvers = [];
     state.verification.powReadyAnnounced = false;
@@ -6035,21 +6333,13 @@
       }
     }
 
-    let powdetSolution = null;
+    let powdetSolutions = null;
     if (state.verification.needPowdet) {
-      const powChallenge = state.security.powdetChallenge;
-      const powNonce = state.verification.powdetNonce || (await waitForPowdetNonce());
-      if (!powChallenge || !powChallenge.challenge || !powNonce) {
+      const solutions = await waitForPowdetSolutions();
+      if (!Array.isArray(solutions) || solutions.length === 0) {
         throw new Error('POW 验证未完成');
       }
-      powdetSolution = {
-        challenge: powChallenge.challenge,
-        expireAt: powChallenge.expireAt,
-        randomStr: powChallenge.randomStr,
-        hmac: powChallenge.hmac,
-        nonce: powNonce,
-        link: typeof powChallenge.link === 'string' ? powChallenge.link : '',
-      };
+      powdetSolutions = solutions;
     }
 
     // 验证完成后，设置 fetchingInfo 标记，表示开始获取 /info 接口数据
@@ -6064,10 +6354,10 @@
       const base64urlToken = base64urlEncode(solutionJson);
       infoURL.searchParams.set('altChallengeResult', base64urlToken);
     }
-    if (powdetSolution) {
-      const powJson = JSON.stringify(powdetSolution);
+    if (powdetSolutions) {
+      const powJson = JSON.stringify(powdetSolutions);
       const powEncoded = base64urlEncode(powJson);
-      infoURL.searchParams.set('powdetSolution', powEncoded);
+      infoURL.searchParams.set('powdetSolutions', powEncoded);
     }
 
     const headers = new Headers();

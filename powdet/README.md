@@ -1,19 +1,19 @@
-# Pow Bot Deterrent（Argon2id）后端
+# Pow Bot Deterrent（多算法）后端
 
-本目录提供 Argon2id 版 pow-bot-deterrent 后端及前端静态资源，用于 alist-landing-worker 的 PoW 验证。
+本目录提供多算法 pow-bot-deterrent 后端及前端静态资源，用于 alist-landing-worker 的 PoW 验证（argon2id + randomx）。
 
 ## 目录内容
 
-- `main.go`：Argon2id HTTP 服务，提供 `/GetChallenges` 与 `/Verify`。
-- `static/`：浏览器端资源（`pow-bot-deterrent.js`、workers、`hash-wasm-argon2.umd.min.js`）。
+- `main.go`：多算法 HTTP 服务，提供 `/GetChallenges` 与 `/Verify`。
+- `static/`：浏览器端资源（`pow-bot-deterrent.js`、`randomx.esm.js` 等）。
 - `config.json`：运行配置与 controller 接入信息。
 - `readme/`：历史资料/图片。
 
 ## 关键接口
 
-- `POST /GetChallenges?difficultyLevel=...`  
+- `POST /GetChallenges?algo=argon2id|randomx&difficultyLevel=...`  
   生成挑战批次，需要 `Authorization: Bearer <token>`。
-- `POST /Verify?challenge=...&nonce=...`  
+- `POST /Verify?algo=argon2id|randomx&challenge=...&nonce=...`  
   校验并消费挑战，需要 `Authorization: Bearer <token>`。
 
 `token` 必须是 32 位十六进制字符串，并存在于 `PoW_Bot_Deterrent_API_Tokens` 目录。
@@ -26,11 +26,10 @@
 - `/powdet/static/pow-bot-deterrent.css`
 - `/powdet/static/*`
 
-兼容旧路径：`/pow-bot-deterrent-static/`。
 
 ## 管理与内部接口
 
-管理员 token 使用 `admin_api_token`：
+管理员 token 使用 `adminApiToken`：
 
 - `GET /Tokens`：列出 token 文件
 - `POST /Tokens/Create?name=...`：创建 token
@@ -68,14 +67,30 @@
     "app_version": ""
   },
   "internal_api_token": "REPLACE_WITH_INTERNAL_TOKEN",
-  "listen_port": 2370,
-  "batch_size": 1000,
-  "deprecate_after_batches": 10,
-  "argon2_memory_kib": 16384,
-  "argon2_iterations": 2,
-  "argon2_parallelism": 1,
-  "argon2_key_length": 16,
-  "admin_api_token": "REPLACE_WITH_ADMIN_TOKEN"
+  "enabled": true,
+  "listenPort": 2370,
+  "batchSize": 1000,
+  "deprecateAfterBatches": 10,
+  "algorithms": {
+    "argon2id": {
+      "enabled": true,
+      "memoryKiB": 16384,
+      "iterations": 2,
+      "parallelism": 1,
+      "keyLength": 16
+    },
+    "randomx": {
+      "enabled": false,
+      "v2": false,
+      "jit": true,
+      "hardAes": true,
+      "largePages": false,
+      "seedLen": 32,
+      "cacheLRUSize": 128,
+      "cacheTTL": 600
+    }
+  },
+  "adminApiToken": "REPLACE_WITH_ADMIN_TOKEN"
 }
 ```
 

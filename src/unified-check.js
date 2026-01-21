@@ -26,8 +26,7 @@ export const unifiedCheck = async (path, clientIP, altchaTableName, config) => {
   const altchaTokenHash = config.altchaTokenHash || null;
   const altchaTokenIP = config.altchaTokenIP || clientIP || null;
   const normalizedAltchaTableName = altchaTableName || 'ALTCHA_TOKEN_LIST';
-  const powdetChallengeHash = config.powdetChallengeHash || null;
-  const powdetExpireAt = Number.isFinite(config.powdetExpireAt) ? Number(config.powdetExpireAt) : null;
+  const powdetChallenges = Array.isArray(config.powdetChallenges) ? config.powdetChallenges : [];
   const powdetTableName = config.powdetTableName || 'POW_CHALLENGE_TICKET';
 
   if (cacheTTL <= 0) {
@@ -59,6 +58,22 @@ export const unifiedCheck = async (path, clientIP, altchaTableName, config) => {
   }
 
   const rpcUrl = `${config.postgrestUrl}/rpc/landing_unified_check`;
+  const powdetChallengesPayload = powdetChallenges
+    .map((entry) => {
+      if (!entry || typeof entry !== 'object') return null;
+      const alg = typeof entry.alg === 'string' ? entry.alg.trim() : '';
+      const hash = typeof entry.hash === 'string' ? entry.hash.trim() : '';
+      const expireRaw = entry.expireAt ?? entry.expire_at;
+      const expireAt = Number.isFinite(expireRaw) ? Number(expireRaw) : Number.parseInt(expireRaw, 10);
+      if (!alg || !hash) return null;
+      return {
+        alg,
+        hash,
+        expire_at: Number.isFinite(expireAt) ? expireAt : null,
+      };
+    })
+    .filter((entry) => entry && entry.alg && entry.hash);
+
   const rpcBody = {
     p_path_hash: pathHash,
     p_cache_ttl: cacheTTL,
@@ -83,8 +98,7 @@ export const unifiedCheck = async (path, clientIP, altchaTableName, config) => {
     p_altcha_token_ip: altchaTokenIP,
     p_altcha_filepath_hash: filepathHash,
     p_altcha_table_name: normalizedAltchaTableName,
-    p_pow_challenge_hash: powdetChallengeHash,
-    p_pow_expire_at: powdetExpireAt,
+    p_pow_challenges: powdetChallengesPayload.length > 0 ? powdetChallengesPayload : null,
     p_pow_table_name: powdetTableName,
   };
 
@@ -146,10 +160,20 @@ export const unifiedCheck = async (path, clientIP, altchaTableName, config) => {
     ? 0
     : Number.parseInt(row.altcha_access_count, 10);
   const altchaAllowedRaw = row.altcha_allowed;
-  const powConsumedRaw = row.pow_consumed;
-  const powErrorRaw = row.pow_error_code === null || typeof row.pow_error_code === 'undefined'
-    ? 0
-    : Number.parseInt(row.pow_error_code, 10);
+  const powResultsRaw = row.pow_results;
+  let powResults = {};
+  if (powResultsRaw && typeof powResultsRaw === 'object' && !Array.isArray(powResultsRaw)) {
+    powResults = powResultsRaw;
+  } else if (typeof powResultsRaw === 'string') {
+    try {
+      const parsed = JSON.parse(powResultsRaw);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        powResults = parsed;
+      }
+    } catch (error) {
+      console.warn('[Unified Check] Failed to parse pow_results:', error instanceof Error ? error.message : String(error));
+    }
+  }
 
   const safeAccess = Number.isFinite(accessCount) ? accessCount : 0;
   const safeLastWindow = Number.isFinite(lastWindowTime) ? lastWindowTime : now;
@@ -223,8 +247,7 @@ export const unifiedCheck = async (path, clientIP, altchaTableName, config) => {
       expiresAt: row.altcha_expires_at !== null ? Number.parseInt(row.altcha_expires_at, 10) : null,
     },
     powdet: {
-      consumed: powConsumedRaw !== false,
-      errorCode: Number.isFinite(powErrorRaw) ? powErrorRaw : 0,
+      results: powResults,
     },
   };
 };

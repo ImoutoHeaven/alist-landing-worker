@@ -35,6 +35,9 @@ const (
 	defaultPowdetArgonIterations    = 2
 	defaultPowdetArgonParallelism   = 1
 	defaultPowdetArgonKeyLength     = 16
+	defaultPowdetRandomxSeedLen     = 32
+	defaultPowdetRandomxCacheLRU    = 128
+	defaultPowdetRandomxCacheTTL    = 600
 	defaultAltchaTokenBindingTable  = "ALTCHA_TOKEN_LIST"
 	defaultDownloadLinkTTLSeconds   = 1800
 	defaultDownloadCleanupPercent   = 1.0
@@ -200,19 +203,27 @@ type LandingPowdetDynamicConfig struct {
 	MaxLevel      int `yaml:"maxLevel" json:"maxLevel"`
 }
 
+// LandingPowdetAlgorithmConfig describes a single powdet algorithm config.
+type LandingPowdetAlgorithmConfig struct {
+	Enabled         bool                      `yaml:"enabled" json:"enabled"`
+	StaticLevel     *int                      `yaml:"staticLevel" json:"staticLevel"`
+	Dynamic         *LandingPowdetDynamicConfig `yaml:"dynamic" json:"dynamic"`
+	DifficultyTable string                    `yaml:"difficultyTable" json:"difficultyTable"`
+	StaticBaseURL   string                    `yaml:"staticBaseUrl" json:"staticBaseUrl"`
+}
+
 // LandingPowdetConfig holds powdet integration config.
 type LandingPowdetConfig struct {
-	Enabled          bool                        `yaml:"enabled" json:"enabled"`
-	BaseURL          string                      `yaml:"baseUrl" json:"baseUrl"`
-	StaticBaseURL    string                      `yaml:"staticBaseUrl" json:"staticBaseUrl"`
-	Token            string                      `yaml:"token" json:"token"`
-	Table            string                      `yaml:"table" json:"table"`
-	DifficultyTable  string                      `yaml:"difficultyTable" json:"difficultyTable"`
-	ExpireSeconds    int                         `yaml:"expireSeconds" json:"expireSeconds"`
-	ClockSkewSeconds int                         `yaml:"clockSkewSeconds" json:"clockSkewSeconds"`
-	MaxWindowSeconds int                         `yaml:"maxWindowSeconds" json:"maxWindowSeconds"`
-	StaticLevel      *int                        `yaml:"staticLevel" json:"staticLevel"`
-	Dynamic          *LandingPowdetDynamicConfig `yaml:"dynamic" json:"dynamic"`
+	Enabled          bool                             `yaml:"enabled" json:"enabled"`
+	BaseURL          string                           `yaml:"baseUrl" json:"baseUrl"`
+	StaticBaseURL    string                           `yaml:"staticBaseUrl" json:"staticBaseUrl"`
+	Token            string                           `yaml:"token" json:"token"`
+	Table            string                           `yaml:"table" json:"table"`
+	DifficultyTable  string                           `yaml:"difficultyTable" json:"difficultyTable"`
+	Algorithms       map[string]LandingPowdetAlgorithmConfig `yaml:"algorithms" json:"algorithms"`
+	ExpireSeconds    int                              `yaml:"expireSeconds" json:"expireSeconds"`
+	ClockSkewSeconds int                              `yaml:"clockSkewSeconds" json:"clockSkewSeconds"`
+	MaxWindowSeconds int                              `yaml:"maxWindowSeconds" json:"maxWindowSeconds"`
 }
 
 // LandingCacheConfig controls filesize cache settings.
@@ -346,23 +357,33 @@ type LandingConfig struct {
 	Extra                 map[string]any             `yaml:",inline" json:"-"`
 }
 
-// PowdetServiceArgonConfig describes argon2 parameters for powdet service.
-type PowdetServiceArgonConfig struct {
+// PowdetServiceAlgorithmConfig describes a powdet algorithm config.
+type PowdetServiceAlgorithmConfig struct {
+	Enabled      bool `yaml:"enabled" json:"enabled"`
+	// argon2id
 	MemoryKiB   int `yaml:"memoryKiB" json:"memoryKiB"`
 	Iterations  int `yaml:"iterations" json:"iterations"`
 	Parallelism int `yaml:"parallelism" json:"parallelism"`
 	KeyLength   int `yaml:"keyLength" json:"keyLength"`
+	// randomx
+	V2           bool `yaml:"v2" json:"v2"`
+	JIT          bool `yaml:"jit" json:"jit"`
+	HardAes      bool `yaml:"hardAes" json:"hardAes"`
+	LargePages   bool `yaml:"largePages" json:"largePages"`
+	SeedLen      int  `yaml:"seedLen" json:"seedLen"`
+	CacheLRUSize int  `yaml:"cacheLRUSize" json:"cacheLRUSize"`
+	CacheTTL     int  `yaml:"cacheTTL" json:"cacheTTL"`
 }
 
 // PowdetServiceConfig holds controller-managed powdet settings.
 type PowdetServiceConfig struct {
-	Enabled               bool                     `yaml:"enabled" json:"enabled"`
-	ListenPort            int                      `yaml:"listenPort" json:"listenPort"`
-	BatchSize             int                      `yaml:"batchSize" json:"batchSize"`
-	DeprecateAfterBatches int                      `yaml:"deprecateAfterBatches" json:"deprecateAfterBatches"`
-	Argon2                PowdetServiceArgonConfig `yaml:"argon2" json:"argon2"`
-	AdminAPIToken         string                   `yaml:"adminApiToken" json:"adminApiToken"`
-	Extra                 map[string]any           `yaml:",inline" json:"-"`
+	Enabled               bool                               `yaml:"enabled" json:"enabled"`
+	ListenPort            int                                `yaml:"listenPort" json:"listenPort"`
+	BatchSize             int                                `yaml:"batchSize" json:"batchSize"`
+	DeprecateAfterBatches int                                `yaml:"deprecateAfterBatches" json:"deprecateAfterBatches"`
+	Algorithms            map[string]PowdetServiceAlgorithmConfig `yaml:"algorithms" json:"algorithms"`
+	AdminAPIToken         string                             `yaml:"adminApiToken" json:"adminApiToken"`
+	Extra                 map[string]any                     `yaml:",inline" json:"-"`
 }
 
 // DownloadPathRule describes a single path rule.
@@ -772,35 +793,49 @@ func (c *LandingPowdetConfig) ensureDefaults() error {
 	if c.MaxWindowSeconds <= 0 {
 		c.MaxWindowSeconds = defaultPowdetMaxWindowSeconds
 	}
-	if c.Dynamic != nil {
-		if c.Dynamic.WindowSeconds <= 0 {
-			c.Dynamic.WindowSeconds = defaultPowdetClockSkewSeconds
+	if c.Enabled && len(c.Algorithms) == 0 {
+		return fmt.Errorf("landing.powdet.algorithms must not be empty when powdet.enabled is true")
+	}
+	for name, algo := range c.Algorithms {
+		if err := algo.ensureDefaults(c.DifficultyTable); err != nil {
+			return fmt.Errorf("landing.powdet.algorithms.%s invalid: %w", name, err)
 		}
-		if c.Dynamic.ResetSeconds <= 0 {
-			c.Dynamic.ResetSeconds = defaultPowdetClockSkewSeconds * 5
+		c.Algorithms[name] = algo
+	}
+	return nil
+}
+
+func (a *LandingPowdetAlgorithmConfig) ensureDefaults(defaultTable string) error {
+	if a.DifficultyTable == "" {
+		a.DifficultyTable = defaultTable
+	}
+	if a.Dynamic != nil {
+		if a.Dynamic.WindowSeconds <= 0 {
+			a.Dynamic.WindowSeconds = defaultPowdetClockSkewSeconds
 		}
-		if c.Dynamic.BlockSeconds < 0 {
-			c.Dynamic.BlockSeconds = defaultPowdetClockSkewSeconds * 5
+		if a.Dynamic.ResetSeconds <= 0 {
+			a.Dynamic.ResetSeconds = defaultPowdetClockSkewSeconds * 5
 		}
-		if c.Dynamic.BaseLevelMin <= 0 {
-			c.Dynamic.BaseLevelMin = defaultPowdetBaseLevelMin
+		if a.Dynamic.BlockSeconds < 0 {
+			a.Dynamic.BlockSeconds = defaultPowdetClockSkewSeconds * 5
 		}
-		if c.Dynamic.BaseLevelMax < c.Dynamic.BaseLevelMin {
-			c.Dynamic.BaseLevelMax = c.Dynamic.BaseLevelMin
+		if a.Dynamic.BaseLevelMin <= 0 {
+			a.Dynamic.BaseLevelMin = defaultPowdetBaseLevelMin
 		}
-		if c.Dynamic.LevelStep <= 0 {
-			c.Dynamic.LevelStep = defaultPowdetLevelStep
+		if a.Dynamic.BaseLevelMax < a.Dynamic.BaseLevelMin {
+			a.Dynamic.BaseLevelMax = a.Dynamic.BaseLevelMin
 		}
-		if c.Dynamic.MaxLevel < 0 {
-			c.Dynamic.MaxLevel = defaultPowdetMaxLevel
+		if a.Dynamic.LevelStep <= 0 {
+			a.Dynamic.LevelStep = defaultPowdetLevelStep
+		}
+		if a.Dynamic.MaxLevel < 0 {
+			a.Dynamic.MaxLevel = defaultPowdetMaxLevel
 		}
 	}
-
-	if c.StaticLevel != nil && *c.StaticLevel < 0 {
+	if a.StaticLevel != nil && *a.StaticLevel < 0 {
 		value := defaultPowdetBaseLevelMin
-		c.StaticLevel = &value
+		a.StaticLevel = &value
 	}
-
 	return nil
 }
 
@@ -855,6 +890,19 @@ func (l *LandingConfig) ensureDefaults(envName string) error {
 	}
 
 	if l.Powdet.Enabled {
+		if len(l.Powdet.Algorithms) == 0 {
+			return fmt.Errorf("landing.powdet.algorithms is required for env %s when powdet.enabled is true", envName)
+		}
+		hasEnabledAlgo := false
+		for _, algo := range l.Powdet.Algorithms {
+			if algo.Enabled {
+				hasEnabledAlgo = true
+				break
+			}
+		}
+		if !hasEnabledAlgo {
+			return fmt.Errorf("landing.powdet.algorithms must enable at least one algorithm for env %s", envName)
+		}
 		if l.Powdet.BaseURL == "" {
 			return fmt.Errorf("landing.powdet.baseUrl is required for env %s when powdet.enabled is true", envName)
 		}
@@ -1387,17 +1435,46 @@ func (p *PowdetServiceConfig) ensureDefaults(envName string) error {
 	if p.DeprecateAfterBatches <= 0 {
 		p.DeprecateAfterBatches = defaultPowdetDeprecateBatches
 	}
-	if p.Argon2.MemoryKiB <= 0 {
-		p.Argon2.MemoryKiB = defaultPowdetArgonMemoryKiB
+	if p.Enabled && len(p.Algorithms) == 0 {
+		return fmt.Errorf("powdet.algorithms is required for env %s when powdet.enabled is true", envName)
 	}
-	if p.Argon2.Iterations <= 0 {
-		p.Argon2.Iterations = defaultPowdetArgonIterations
+	hasEnabledAlgo := false
+	for name, algo := range p.Algorithms {
+		switch strings.ToLower(strings.TrimSpace(name)) {
+		case "argon2id":
+			if algo.MemoryKiB <= 0 {
+				algo.MemoryKiB = defaultPowdetArgonMemoryKiB
+			}
+			if algo.Iterations <= 0 {
+				algo.Iterations = defaultPowdetArgonIterations
+			}
+			if algo.Parallelism <= 0 {
+				algo.Parallelism = defaultPowdetArgonParallelism
+			}
+			if algo.KeyLength <= 0 {
+				algo.KeyLength = defaultPowdetArgonKeyLength
+			}
+		case "randomx":
+			if algo.SeedLen <= 0 {
+				algo.SeedLen = defaultPowdetRandomxSeedLen
+			}
+			if algo.SeedLen > 60 {
+				return fmt.Errorf("powdet.algorithms.%s.seedLen must be <= 60 for env %s", name, envName)
+			}
+			if algo.CacheLRUSize <= 0 {
+				algo.CacheLRUSize = defaultPowdetRandomxCacheLRU
+			}
+			if algo.CacheTTL <= 0 {
+				algo.CacheTTL = defaultPowdetRandomxCacheTTL
+			}
+		}
+		if algo.Enabled {
+			hasEnabledAlgo = true
+		}
+		p.Algorithms[name] = algo
 	}
-	if p.Argon2.Parallelism <= 0 {
-		p.Argon2.Parallelism = defaultPowdetArgonParallelism
-	}
-	if p.Argon2.KeyLength <= 0 {
-		p.Argon2.KeyLength = defaultPowdetArgonKeyLength
+	if p.Enabled && !hasEnabledAlgo {
+		return fmt.Errorf("powdet.algorithms must enable at least one algorithm for env %s", envName)
 	}
 	if p.Enabled && strings.TrimSpace(p.AdminAPIToken) == "" {
 		return fmt.Errorf("powdet.adminApiToken is required for env %s when powdet.enabled is true", envName)

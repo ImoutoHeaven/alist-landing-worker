@@ -18,7 +18,7 @@
     const challenges = Array.from(document.querySelectorAll("[data-pow-bot-deterrent-challenge]"));
     const challengesMap = {};
     let staticAssetsCrossOriginURL = "";
-    let staticAssetsPath = trimSlashes("/pow-bot-deterrent-static/")
+    let staticAssetsPath = trimSlashes("/powdet/static/")
     let proofOfWorker = { postMessage: () => console.error("error: proofOfWorker was never loaded. ") };
 
     challenges.forEach(element => {

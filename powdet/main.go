@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"container/list"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -11,7 +12,6 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
-	"math"
 	"net/http"
 	"os"
 	"os/exec"
@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	randomx "git.gammaspectra.live/P2Pool/go-randomx/v5"
 	errors "git.sequentialread.com/forest/pkg-errors"
 	"golang.org/x/crypto/argon2"
 )
@@ -35,19 +36,41 @@ const (
 	defaultArgonIterations       = 2
 	defaultArgonParallelism      = 1
 	defaultArgonKeyLength        = 16
+	defaultRandomxSeedLen        = 32
+	defaultRandomxCacheLRU       = 128
+	defaultRandomxCacheTTL       = 600
+	randomxSeedMaxLen            = 60
 )
 
+const (
+	algoArgon2id = "argon2id"
+	algoRandomx  = "randomx"
+)
+
+type PowdetAlgorithmConfig struct {
+	Enabled bool `json:"enabled"`
+	// argon2id
+	MemoryKiB   int `json:"memoryKiB"`
+	Iterations  int `json:"iterations"`
+	Parallelism int `json:"parallelism"`
+	KeyLength   int `json:"keyLength"`
+	// randomx
+	V2           bool `json:"v2"`
+	JIT          bool `json:"jit"`
+	HardAes      bool `json:"hardAes"`
+	LargePages   bool `json:"largePages"`
+	SeedLen      int  `json:"seedLen"`
+	CacheLRUSize int  `json:"cacheLRUSize"`
+	CacheTTL     int  `json:"cacheTTL"`
+}
+
 type Config struct {
-	ListenPort            int `json:"listen_port"`
-	BatchSize             int `json:"batch_size"`
-	DeprecateAfterBatches int `json:"deprecate_after_batches"`
-
-	Argon2MemoryKiB   int `json:"argon2_memory_kib"`
-	Argon2Iterations  int `json:"argon2_iterations"`
-	Argon2Parallelism int `json:"argon2_parallelism"`
-	Argon2KeyLength   int `json:"argon2_key_length"`
-
-	AdminAPIToken string `json:"admin_api_token"`
+	Enabled               bool                             `json:"enabled"`
+	ListenPort            int                              `json:"listenPort"`
+	BatchSize             int                              `json:"batchSize"`
+	DeprecateAfterBatches int                              `json:"deprecateAfterBatches"`
+	Algorithms            map[string]PowdetAlgorithmConfig `json:"algorithms"`
+	AdminAPIToken         string                           `json:"adminApiToken"`
 }
 
 // Argon2id parameters embedded in the challenge JSON
@@ -58,11 +81,18 @@ type Argon2Parameters struct {
 	KeyLength   int `json:"klen"` // Output length (bytes)
 }
 
+type RandomxParameters struct {
+	SeedKey string `json:"k"`
+	V2      bool   `json:"v2"`
+}
+
 type Challenge struct {
-	Argon2Parameters
-	Preimage        string `json:"i"`
-	Difficulty      string `json:"d"`
-	DifficultyLevel int    `json:"dl"`
+	Alg                string `json:"alg"`
+	*Argon2Parameters  `json:",omitempty"`
+	*RandomxParameters `json:",omitempty"`
+	Preimage           string `json:"i"`
+	Difficulty         string `json:"d"`
+	DifficultyLevel    int    `json:"dl"`
 }
 
 type controllerEnv struct {
@@ -115,7 +145,6 @@ type metricsCounters struct {
 
 var config Config
 var configMu sync.RWMutex
-var argon2Parameters Argon2Parameters
 var configVersion string
 var appDirectory string
 var apiTokensFolder string
@@ -125,6 +154,8 @@ var runtimeInfo runtimeMeta
 var metricsCollector *metricsCounters
 var metricsReporterInstance *metricsReporter
 var metricsLoopOnce sync.Once
+var randomxStoresMu sync.RWMutex
+var randomxStores = map[string]*randomxCacheStore{}
 
 var currentChallengesGeneration = map[string]int{}
 var challenges = map[string]map[string]int{}
@@ -133,6 +164,23 @@ var challengesMu sync.RWMutex
 type tokenCache struct {
 	tokens map[string]struct{}
 	mu     sync.RWMutex
+}
+
+type randomxCacheEntry struct {
+	key          string
+	cache        *randomx.Cache
+	expiresAt    time.Time
+	refCount     int
+	pendingClose bool
+	element      *list.Element
+}
+
+type randomxCacheStore struct {
+	mu         sync.Mutex
+	maxEntries int
+	ttl        time.Duration
+	entries    map[string]*randomxCacheEntry
+	order      *list.List
 }
 
 var apiTokensCache = tokenCache{tokens: map[string]struct{}{}}
@@ -305,15 +353,29 @@ func main() {
 		token := strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")
 
 		requestQuery := request.URL.Query()
+		algo := normalizeAlgo(requestQuery.Get("algo"))
+		if algo == "" {
+			metricsAdd("challenges_bad_request")
+			http.Error(responseWriter, "400 url param ?algo is required", http.StatusBadRequest)
+			return true
+		}
 		difficultyLevelString := requestQuery.Get("difficultyLevel")
 		difficultyLevel, err := strconv.Atoi(difficultyLevelString)
-		if err != nil {
+		if err != nil || difficultyLevel <= 0 {
 			metricsAdd("challenges_bad_request")
 			errorMessage := fmt.Sprintf(
-				"400 url param ?difficultyLevel=%s value could not be converted to an integer",
+				"400 url param ?difficultyLevel=%s value could not be converted to a positive integer",
 				difficultyLevelString,
 			)
 			http.Error(responseWriter, errorMessage, http.StatusBadRequest)
+			return true
+		}
+
+		cfg := currentConfig()
+		algoCfg, ok := getEnabledAlgorithm(cfg, algo)
+		if !ok {
+			metricsAdd("challenges_bad_request")
+			http.Error(responseWriter, "400 unsupported powdet algorithm", http.StatusBadRequest)
 			return true
 		}
 
@@ -329,8 +391,14 @@ func main() {
 		currentGeneration := currentChallengesGeneration[token]
 		challengesMu.Unlock()
 
-		cfg, argon := getRuntimeState()
 		metricsAdd("challenge_batches")
+
+		difficulty := buildDifficultyHex(difficultyLevel)
+		if difficulty == "" {
+			metricsAdd("challenges_generate_error")
+			http.Error(responseWriter, "500 invalid difficulty", http.StatusInternalServerError)
+			return true
+		}
 
 		toReturn := make([]string, cfg.BatchSize)
 		for i := 0; i < cfg.BatchSize; i++ {
@@ -343,29 +411,42 @@ func main() {
 				return true
 			}
 			preimage := base64.StdEncoding.EncodeToString(preimageBytes)
-			difficultyBytes := make([]byte, int(math.Ceil(float64(difficultyLevel)/float64(8))))
-
-			for j := 0; j < len(difficultyBytes); j++ {
-				difficultyByte := byte(0)
-				for k := 0; k < 8; k++ {
-					currentBitIndex := (j*8 + (7 - k))
-					if currentBitIndex+1 > difficultyLevel {
-						difficultyByte = difficultyByte | 1<<k
-					}
-				}
-				difficultyBytes[j] = difficultyByte
-			}
-
-			difficulty := hex.EncodeToString(difficultyBytes)
 			challenge := Challenge{
+				Alg:             algo,
 				Preimage:        preimage,
 				Difficulty:      difficulty,
 				DifficultyLevel: difficultyLevel,
 			}
-			challenge.MemoryKiB = argon.MemoryKiB
-			challenge.Iterations = argon.Iterations
-			challenge.Parallelism = argon.Parallelism
-			challenge.KeyLength = argon.KeyLength
+			switch algo {
+			case algoArgon2id:
+				challenge.Argon2Parameters = &Argon2Parameters{
+					MemoryKiB:   algoCfg.MemoryKiB,
+					Iterations:  algoCfg.Iterations,
+					Parallelism: algoCfg.Parallelism,
+					KeyLength:   algoCfg.KeyLength,
+				}
+			case algoRandomx:
+				if algoCfg.SeedLen <= 0 || algoCfg.SeedLen > randomxSeedMaxLen {
+					metricsAdd("challenges_generate_error")
+					http.Error(responseWriter, "500 randomx config invalid", http.StatusInternalServerError)
+					return true
+				}
+				seedKey := make([]byte, algoCfg.SeedLen)
+				if _, err := rand.Read(seedKey); err != nil {
+					metricsAdd("challenges_generate_error")
+					log.Printf("read random bytes failed: %v", err)
+					http.Error(responseWriter, "500 internal server error", http.StatusInternalServerError)
+					return true
+				}
+				challenge.RandomxParameters = &RandomxParameters{
+					SeedKey: base64.StdEncoding.EncodeToString(seedKey),
+					V2:      algoCfg.V2,
+				}
+			default:
+				metricsAdd("challenges_generate_error")
+				http.Error(responseWriter, "500 unsupported algorithm", http.StatusInternalServerError)
+				return true
+			}
 
 			challengeBytes, err := json.Marshal(challenge)
 			if err != nil {
@@ -417,8 +498,22 @@ func main() {
 		metricsAdd("verify_requests")
 
 		requestQuery := request.URL.Query()
+		algo := normalizeAlgo(requestQuery.Get("algo"))
+		if algo == "" {
+			metricsAdd("verify_bad_request")
+			http.Error(responseWriter, "400 url param ?algo is required", http.StatusBadRequest)
+			return true
+		}
 		challengeBase64 := requestQuery.Get("challenge")
 		nonceHex := requestQuery.Get("nonce")
+
+		cfg := currentConfig()
+		algoCfg, ok := getEnabledAlgorithm(cfg, algo)
+		if !ok {
+			metricsAdd("verify_bad_request")
+			http.Error(responseWriter, "400 unsupported powdet algorithm", http.StatusBadRequest)
+			return true
+		}
 
 		challengesMu.Lock()
 		tokenChallenges, hasAnyChallenges := challenges[token]
@@ -433,16 +528,13 @@ func main() {
 		delete(tokenChallenges, challengeBase64)
 		challengesMu.Unlock()
 
-		nonceBuffer := make([]byte, 8)
-		bytesWritten, err := hex.Decode(nonceBuffer, []byte(nonceHex))
-		if nonceHex == "" || err != nil {
+		nonceBytes, err := hex.DecodeString(nonceHex)
+		if nonceHex == "" || err != nil || len(nonceBytes) == 0 {
 			metricsAdd("verify_bad_nonce")
 			errorMessage := fmt.Sprintf("400 bad request: nonce given by url param ?nonce=%s could not be hex decoded", nonceHex)
 			http.Error(responseWriter, errorMessage, http.StatusBadRequest)
 			return true
 		}
-
-		nonceBytes := nonceBuffer[:bytesWritten]
 
 		challengeJSON, err := base64.StdEncoding.DecodeString(challengeBase64)
 		if err != nil {
@@ -458,35 +550,124 @@ func main() {
 			return true
 		}
 
-		preimageBytes := make([]byte, 8)
-		n, err := base64.StdEncoding.Decode(preimageBytes, []byte(challenge.Preimage))
-		if n != 8 || err != nil {
-			metricsAdd("verify_invalid_preimage")
-			log.Printf("invalid preimage %s: %v\n", challenge.Preimage, err)
-			http.Error(responseWriter, "500 invalid preimage", http.StatusInternalServerError)
+		challengeAlg := normalizeAlgo(challenge.Alg)
+		if challengeAlg == "" || challengeAlg != algo {
+			metricsAdd("verify_bad_request")
+			http.Error(responseWriter, "400 challenge algorithm mismatch", http.StatusBadRequest)
 			return true
 		}
 
-		hash := argon2.IDKey(
-			nonceBytes,
-			preimageBytes,
-			uint32(challenge.Iterations),
-			uint32(challenge.MemoryKiB),
-			uint8(challenge.Parallelism),
-			uint32(challenge.KeyLength),
-		)
+		switch challengeAlg {
+		case algoArgon2id:
+			if challenge.Argon2Parameters == nil {
+				metricsAdd("verify_bad_request")
+				http.Error(responseWriter, "400 argon2 challenge missing parameters", http.StatusBadRequest)
+				return true
+			}
+			preimageBytes, err := decodeBase64Fixed(challenge.Preimage, 8)
+			if err != nil {
+				metricsAdd("verify_invalid_preimage")
+				log.Printf("invalid preimage %s: %v\n", challenge.Preimage, err)
+				http.Error(responseWriter, "500 invalid preimage", http.StatusInternalServerError)
+				return true
+			}
 
-		hashHex := hex.EncodeToString(hash)
-		endOfHash := hashHex[len(hashHex)-len(challenge.Difficulty):]
-
-		log.Printf("endOfHash: %s <= Difficulty: %s", endOfHash, challenge.Difficulty)
-		if endOfHash > challenge.Difficulty {
-			metricsAdd("verify_fail")
-			errorMessage := fmt.Sprintf(
-				"400 bad request: nonce given by url param ?nonce=%s did not result in a hash that meets the required difficulty",
-				nonceHex,
+			hash := argon2.IDKey(
+				nonceBytes,
+				preimageBytes,
+				uint32(challenge.Argon2Parameters.Iterations),
+				uint32(challenge.Argon2Parameters.MemoryKiB),
+				uint8(challenge.Argon2Parameters.Parallelism),
+				uint32(challenge.Argon2Parameters.KeyLength),
 			)
-			http.Error(responseWriter, errorMessage, http.StatusBadRequest)
+			hashHex := hex.EncodeToString(hash)
+			ok, err := hashMeetsDifficulty(hashHex, challenge.Difficulty)
+			if err != nil {
+				metricsAdd("verify_fail")
+				http.Error(responseWriter, "500 invalid difficulty", http.StatusInternalServerError)
+				return true
+			}
+			log.Printf("endOfHash ok=%t <= Difficulty: %s", ok, challenge.Difficulty)
+			if !ok {
+				metricsAdd("verify_fail")
+				errorMessage := fmt.Sprintf(
+					"400 bad request: nonce given by url param ?nonce=%s did not result in a hash that meets the required difficulty",
+					nonceHex,
+				)
+				http.Error(responseWriter, errorMessage, http.StatusBadRequest)
+				return true
+			}
+		case algoRandomx:
+			if challenge.RandomxParameters == nil || challenge.RandomxParameters.SeedKey == "" {
+				metricsAdd("verify_bad_request")
+				http.Error(responseWriter, "400 randomx challenge missing seed key", http.StatusBadRequest)
+				return true
+			}
+			preimageBytes, err := decodeBase64Fixed(challenge.Preimage, 8)
+			if err != nil {
+				metricsAdd("verify_invalid_preimage")
+				log.Printf("invalid preimage %s: %v\n", challenge.Preimage, err)
+				http.Error(responseWriter, "500 invalid preimage", http.StatusInternalServerError)
+				return true
+			}
+			seedKeyBytes, err := base64.StdEncoding.DecodeString(challenge.RandomxParameters.SeedKey)
+			if err != nil || len(seedKeyBytes) == 0 || len(seedKeyBytes) > randomxSeedMaxLen {
+				metricsAdd("verify_bad_request")
+				http.Error(responseWriter, "400 randomx seed key invalid", http.StatusBadRequest)
+				return true
+			}
+
+			flags := buildRandomxFlags(algoCfg, challenge.RandomxParameters.V2)
+			cacheKey := fmt.Sprintf("%x|%d", seedKeyBytes, flags)
+			store := getRandomxStore(algo)
+			cache, release, err := store.getOrCreate(cacheKey, time.Now(), func() (*randomx.Cache, error) {
+				cache, err := randomx.NewCache(flags)
+				if err != nil {
+					return nil, err
+				}
+				cache.Init(seedKeyBytes)
+				return cache, nil
+			})
+			if err != nil {
+				metricsAdd("verify_fail")
+				http.Error(responseWriter, "500 randomx cache init failed", http.StatusInternalServerError)
+				return true
+			}
+			defer release()
+
+			vm, err := randomx.NewVM(flags, cache, nil)
+			if err != nil {
+				metricsAdd("verify_fail")
+				http.Error(responseWriter, "500 randomx vm init failed", http.StatusInternalServerError)
+				return true
+			}
+			defer vm.Close()
+
+			input := make([]byte, 0, len(preimageBytes)+len(nonceBytes))
+			input = append(input, preimageBytes...)
+			input = append(input, nonceBytes...)
+			var output [randomx.RANDOMX_HASH_SIZE]byte
+			vm.CalculateHash(input, &output)
+			hashHex := hex.EncodeToString(output[:])
+			ok, err := hashMeetsDifficulty(hashHex, challenge.Difficulty)
+			if err != nil {
+				metricsAdd("verify_fail")
+				http.Error(responseWriter, "500 invalid difficulty", http.StatusInternalServerError)
+				return true
+			}
+			log.Printf("endOfHash ok=%t <= Difficulty: %s", ok, challenge.Difficulty)
+			if !ok {
+				metricsAdd("verify_fail")
+				errorMessage := fmt.Sprintf(
+					"400 bad request: nonce given by url param ?nonce=%s did not result in a hash that meets the required difficulty",
+					nonceHex,
+				)
+				http.Error(responseWriter, errorMessage, http.StatusBadRequest)
+				return true
+			}
+		default:
+			metricsAdd("verify_bad_request")
+			http.Error(responseWriter, "400 unsupported powdet algorithm", http.StatusBadRequest)
 			return true
 		}
 
@@ -509,8 +690,6 @@ func main() {
 	})
 
 	http.Handle("/powdet/static/", http.StripPrefix("/powdet/static/", http.FileServer(http.Dir("./static/"))))
-	// Backward compatibility for older paths
-	http.Handle("/pow-bot-deterrent-static/", http.StripPrefix("/pow-bot-deterrent-static/", http.FileServer(http.Dir("./static/"))))
 
 	cfg := currentConfig()
 	log.Printf("💥  PoW! Bot Deterrent server listening on port %d (configVersion=%s)", cfg.ListenPort, currentConfigVersion())
@@ -627,13 +806,6 @@ func currentConfig() Config {
 	return cfg
 }
 
-func currentArgonParams() Argon2Parameters {
-	configMu.RLock()
-	params := argon2Parameters
-	configMu.RUnlock()
-	return params
-}
-
 func currentConfigVersion() string {
 	configMu.RLock()
 	version := configVersion
@@ -641,12 +813,280 @@ func currentConfigVersion() string {
 	return version
 }
 
-func getRuntimeState() (Config, Argon2Parameters) {
-	configMu.RLock()
-	cfg := config
-	params := argon2Parameters
-	configMu.RUnlock()
-	return cfg, params
+func normalizeAlgo(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func getEnabledAlgorithm(cfg Config, algo string) (PowdetAlgorithmConfig, bool) {
+	key := normalizeAlgo(algo)
+	if key == "" {
+		return PowdetAlgorithmConfig{}, false
+	}
+	algoCfg, ok := cfg.Algorithms[key]
+	if !ok || !algoCfg.Enabled {
+		return PowdetAlgorithmConfig{}, false
+	}
+	return algoCfg, true
+}
+
+func buildDifficultyHex(difficultyLevel int) string {
+	if difficultyLevel <= 0 {
+		return ""
+	}
+	byteLen := (difficultyLevel + 7) / 8
+	difficultyBytes := make([]byte, byteLen)
+	for j := 0; j < len(difficultyBytes); j++ {
+		var difficultyByte byte
+		for k := 0; k < 8; k++ {
+			currentBitIndex := (j * 8) + (7 - k)
+			if currentBitIndex+1 > difficultyLevel {
+				difficultyByte |= 1 << k
+			}
+		}
+		difficultyBytes[j] = difficultyByte
+	}
+	return hex.EncodeToString(difficultyBytes)
+}
+
+func hashMeetsDifficulty(hashHex string, difficulty string) (bool, error) {
+	if difficulty == "" {
+		return false, fmt.Errorf("difficulty is empty")
+	}
+	if len(hashHex) < len(difficulty) {
+		return false, fmt.Errorf("difficulty length exceeds hash length")
+	}
+	endOfHash := hashHex[len(hashHex)-len(difficulty):]
+	return endOfHash <= difficulty, nil
+}
+
+func decodeBase64Fixed(value string, size int) ([]byte, error) {
+	if size <= 0 {
+		return nil, fmt.Errorf("invalid target size")
+	}
+	raw, err := base64.StdEncoding.DecodeString(value)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) != size {
+		return nil, fmt.Errorf("unexpected length %d", len(raw))
+	}
+	return raw, nil
+}
+
+func buildRandomxFlags(cfg PowdetAlgorithmConfig, v2 bool) randomx.Flags {
+	flags := randomx.RANDOMX_FLAG_DEFAULT
+	if cfg.JIT {
+		flags |= randomx.RANDOMX_FLAG_JIT
+	}
+	if cfg.HardAes {
+		flags |= randomx.RANDOMX_FLAG_HARD_AES
+	}
+	if cfg.LargePages {
+		flags |= randomx.RANDOMX_FLAG_LARGE_PAGES
+	}
+	if v2 {
+		flags |= randomx.RANDOMX_FLAG_V2
+	}
+	return flags
+}
+
+func resetRandomxStores(cfg Config) {
+	stores := map[string]*randomxCacheStore{}
+	for name, algoCfg := range cfg.Algorithms {
+		if normalizeAlgo(name) != algoRandomx || !algoCfg.Enabled {
+			continue
+		}
+		ttl := time.Duration(algoCfg.CacheTTL) * time.Second
+		stores[algoRandomx] = newRandomxCacheStore(algoCfg.CacheLRUSize, ttl)
+	}
+
+	randomxStoresMu.Lock()
+	oldStores := randomxStores
+	randomxStores = stores
+	randomxStoresMu.Unlock()
+
+	for _, store := range oldStores {
+		if store != nil {
+			store.closeAll()
+		}
+	}
+}
+
+func getRandomxStore(algo string) *randomxCacheStore {
+	key := normalizeAlgo(algo)
+	randomxStoresMu.RLock()
+	store := randomxStores[key]
+	randomxStoresMu.RUnlock()
+	return store
+}
+
+func newRandomxCacheStore(maxEntries int, ttl time.Duration) *randomxCacheStore {
+	if maxEntries <= 0 {
+		maxEntries = 1
+	}
+	if ttl <= 0 {
+		ttl = time.Duration(defaultRandomxCacheTTL) * time.Second
+	}
+	return &randomxCacheStore{
+		maxEntries: maxEntries,
+		ttl:        ttl,
+		entries:    map[string]*randomxCacheEntry{},
+		order:      list.New(),
+	}
+}
+
+func (s *randomxCacheStore) getOrCreate(key string, now time.Time, create func() (*randomx.Cache, error)) (*randomx.Cache, func(), error) {
+	if s == nil {
+		cache, err := create()
+		if err != nil {
+			return nil, nil, err
+		}
+		release := func() {
+			if cache != nil {
+				_ = cache.Close()
+			}
+		}
+		return cache, release, nil
+	}
+
+	s.mu.Lock()
+	if entry, ok := s.entries[key]; ok {
+		if now.After(entry.expiresAt) {
+			toClose := s.removeEntryLocked(entry)
+			s.mu.Unlock()
+			if toClose != nil {
+				_ = toClose.Close()
+			}
+		} else {
+			entry.refCount++
+			entry.expiresAt = now.Add(s.ttl)
+			s.order.MoveToFront(entry.element)
+			s.mu.Unlock()
+			return entry.cache, func() { s.release(entry) }, nil
+		}
+	} else {
+		s.mu.Unlock()
+	}
+
+	cache, err := create()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	s.mu.Lock()
+	if entry, ok := s.entries[key]; ok {
+		if now.After(entry.expiresAt) {
+			toClose := s.removeEntryLocked(entry)
+			s.mu.Unlock()
+			if toClose != nil {
+				_ = toClose.Close()
+			}
+			s.mu.Lock()
+		} else {
+			entry.refCount++
+			entry.expiresAt = now.Add(s.ttl)
+			s.order.MoveToFront(entry.element)
+			s.mu.Unlock()
+			_ = cache.Close()
+			return entry.cache, func() { s.release(entry) }, nil
+		}
+	}
+
+	entry := &randomxCacheEntry{
+		key:       key,
+		cache:     cache,
+		refCount:  1,
+		expiresAt: now.Add(s.ttl),
+	}
+	entry.element = s.order.PushFront(entry)
+	s.entries[key] = entry
+	toClose := s.evictLocked(now)
+	s.mu.Unlock()
+	for _, cache := range toClose {
+		_ = cache.Close()
+	}
+	return cache, func() { s.release(entry) }, nil
+}
+
+func (s *randomxCacheStore) release(entry *randomxCacheEntry) {
+	if s == nil || entry == nil {
+		return
+	}
+	var toClose *randomx.Cache
+	s.mu.Lock()
+	if entry.refCount > 0 {
+		entry.refCount--
+	}
+	if entry.refCount == 0 && entry.pendingClose && entry.cache != nil {
+		toClose = entry.cache
+		entry.cache = nil
+	}
+	s.mu.Unlock()
+	if toClose != nil {
+		_ = toClose.Close()
+	}
+}
+
+func (s *randomxCacheStore) removeEntryLocked(entry *randomxCacheEntry) *randomx.Cache {
+	delete(s.entries, entry.key)
+	if entry.element != nil {
+		s.order.Remove(entry.element)
+		entry.element = nil
+	}
+	if entry.refCount == 0 && entry.cache != nil {
+		cache := entry.cache
+		entry.cache = nil
+		return cache
+	}
+	entry.pendingClose = true
+	return nil
+}
+
+func (s *randomxCacheStore) evictLocked(now time.Time) []*randomx.Cache {
+	var toClose []*randomx.Cache
+	for _, entry := range s.entries {
+		if now.After(entry.expiresAt) {
+			if cache := s.removeEntryLocked(entry); cache != nil {
+				toClose = append(toClose, cache)
+			}
+		}
+	}
+	for len(s.entries) > s.maxEntries {
+		elem := s.order.Back()
+		if elem == nil {
+			break
+		}
+		entry := elem.Value.(*randomxCacheEntry)
+		if cache := s.removeEntryLocked(entry); cache != nil {
+			toClose = append(toClose, cache)
+		}
+	}
+	return toClose
+}
+
+func (s *randomxCacheStore) closeAll() {
+	if s == nil {
+		return
+	}
+	var toClose []*randomx.Cache
+	s.mu.Lock()
+	for _, entry := range s.entries {
+		if entry.cache == nil {
+			continue
+		}
+		if entry.refCount == 0 {
+			toClose = append(toClose, entry.cache)
+			entry.cache = nil
+		} else {
+			entry.pendingClose = true
+		}
+	}
+	s.entries = map[string]*randomxCacheEntry{}
+	s.order = list.New()
+	s.mu.Unlock()
+	for _, cache := range toClose {
+		_ = cache.Close()
+	}
 }
 
 func (c controllerEnv) role() string {
@@ -875,51 +1315,95 @@ func clearChallenges() {
 }
 
 func applyConfig(cfg Config, version string) error {
-	normalized, params, err := normalizeConfig(cfg)
+	normalized, err := normalizeConfig(cfg)
 	if err != nil {
 		return err
 	}
 
 	configMu.Lock()
 	config = normalized
-	argon2Parameters = params
 	if strings.TrimSpace(version) == "" {
 		configVersion = "local-config"
 	} else {
 		configVersion = version
 	}
 	configMu.Unlock()
+	resetRandomxStores(normalized)
 	return nil
 }
 
-func normalizeConfig(cfg Config) (Config, Argon2Parameters, error) {
+func normalizeConfig(cfg Config) (Config, error) {
 	cfg.ListenPort = intOrDefault(cfg.ListenPort, defaultListenPort)
 	cfg.BatchSize = intOrDefault(cfg.BatchSize, defaultBatchSize)
 	cfg.DeprecateAfterBatches = intOrDefault(cfg.DeprecateAfterBatches, defaultDeprecateAfterBatches)
-	cfg.Argon2MemoryKiB = intOrDefault(cfg.Argon2MemoryKiB, defaultArgonMemoryKiB)
-	cfg.Argon2Iterations = intOrDefault(cfg.Argon2Iterations, defaultArgonIterations)
-	cfg.Argon2Parallelism = intOrDefault(cfg.Argon2Parallelism, defaultArgonParallelism)
-	cfg.Argon2KeyLength = intOrDefault(cfg.Argon2KeyLength, defaultArgonKeyLength)
 
+	if !cfg.Enabled {
+		return cfg, fmt.Errorf("powdet config is disabled")
+	}
 	if strings.TrimSpace(cfg.AdminAPIToken) == "" {
-		return cfg, Argon2Parameters{}, fmt.Errorf("the POW_BOT_DETERRENT_ADMIN_API_TOKEN environment variable is required")
+		return cfg, fmt.Errorf("the powdet adminApiToken is required")
+	}
+	if len(cfg.Algorithms) == 0 {
+		return cfg, fmt.Errorf("powdet algorithms are required")
 	}
 
-	params := Argon2Parameters{
-		MemoryKiB:   cfg.Argon2MemoryKiB,
-		Iterations:  cfg.Argon2Iterations,
-		Parallelism: cfg.Argon2Parallelism,
-		KeyLength:   cfg.Argon2KeyLength,
+	hasEnabled := false
+	normalized := map[string]PowdetAlgorithmConfig{}
+	for name, algo := range cfg.Algorithms {
+		key := normalizeAlgo(name)
+		if key == "" {
+			continue
+		}
+		switch key {
+		case algoArgon2id:
+			if algo.MemoryKiB <= 0 {
+				algo.MemoryKiB = defaultArgonMemoryKiB
+			}
+			if algo.Iterations <= 0 {
+				algo.Iterations = defaultArgonIterations
+			}
+			if algo.Parallelism <= 0 {
+				algo.Parallelism = defaultArgonParallelism
+			}
+			if algo.KeyLength <= 0 {
+				algo.KeyLength = defaultArgonKeyLength
+			}
+		case algoRandomx:
+			if algo.SeedLen <= 0 {
+				algo.SeedLen = defaultRandomxSeedLen
+			}
+			if algo.SeedLen > randomxSeedMaxLen {
+				return cfg, fmt.Errorf("randomx seedLen must be <= %d", randomxSeedMaxLen)
+			}
+			if algo.CacheLRUSize <= 0 {
+				algo.CacheLRUSize = defaultRandomxCacheLRU
+			}
+			if algo.CacheTTL <= 0 {
+				algo.CacheTTL = defaultRandomxCacheTTL
+			}
+		default:
+			if algo.Enabled {
+				return cfg, fmt.Errorf("unsupported powdet algorithm: %s", key)
+			}
+			continue
+		}
+		if algo.Enabled {
+			hasEnabled = true
+		}
+		normalized[key] = algo
 	}
-
-	return cfg, params, nil
+	if !hasEnabled {
+		return cfg, fmt.Errorf("powdet algorithms must enable at least one algorithm")
+	}
+	cfg.Algorithms = normalized
+	return cfg, nil
 }
 
 func logEffectiveConfig(cfg Config, version string) {
 	log.Printf("💥 PoW Bot Deterrent starting up with config (version=%s):", version)
 	configToLogBytes, _ := json.MarshalIndent(cfg, "", "  ")
 	configToLogString := regexp.MustCompile(
-		`("admin_api_token": ")[^"]+(",)`,
+		`("adminApiToken": ")[^"]+(",)`,
 	).ReplaceAllString(
 		string(configToLogBytes),
 		"$1******$2",
@@ -1050,17 +1534,12 @@ func fetchConfigFromController(ctrl controllerEnv) (Config, string, error) {
 	var parsed struct {
 		ConfigVersion string `json:"configVersion"`
 		Powdet        *struct {
-			Enabled               bool `json:"enabled"`
-			ListenPort            int  `json:"listenPort"`
-			BatchSize             int  `json:"batchSize"`
-			DeprecateAfterBatches int  `json:"deprecateAfterBatches"`
-			Argon2                struct {
-				MemoryKiB   int `json:"memoryKiB"`
-				Iterations  int `json:"iterations"`
-				Parallelism int `json:"parallelism"`
-				KeyLength   int `json:"keyLength"`
-			} `json:"argon2"`
-			AdminAPIToken string `json:"adminApiToken"`
+			Enabled               bool                             `json:"enabled"`
+			ListenPort            int                              `json:"listenPort"`
+			BatchSize             int                              `json:"batchSize"`
+			DeprecateAfterBatches int                              `json:"deprecateAfterBatches"`
+			Algorithms            map[string]PowdetAlgorithmConfig `json:"algorithms"`
+			AdminAPIToken         string                           `json:"adminApiToken"`
 		} `json:"powdet"`
 	}
 
@@ -1076,13 +1555,11 @@ func fetchConfigFromController(ctrl controllerEnv) (Config, string, error) {
 	}
 
 	cfg := Config{
+		Enabled:               parsed.Powdet.Enabled,
 		ListenPort:            parsed.Powdet.ListenPort,
 		BatchSize:             parsed.Powdet.BatchSize,
 		DeprecateAfterBatches: parsed.Powdet.DeprecateAfterBatches,
-		Argon2MemoryKiB:       parsed.Powdet.Argon2.MemoryKiB,
-		Argon2Iterations:      parsed.Powdet.Argon2.Iterations,
-		Argon2Parallelism:     parsed.Powdet.Argon2.Parallelism,
-		Argon2KeyLength:       parsed.Powdet.Argon2.KeyLength,
+		Algorithms:            parsed.Powdet.Algorithms,
 		AdminAPIToken:         parsed.Powdet.AdminAPIToken,
 	}
 

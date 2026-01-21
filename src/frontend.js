@@ -133,32 +133,36 @@ const renderLandingPageHtml = (path, options = {}) => {
         link: typeof rawTurnstileBinding.link === 'string' ? rawTurnstileBinding.link : '',
       }
     : null;
-  const rawPowdetChallenge =
-    normalizedOptions.powdetChallenge && typeof normalizedOptions.powdetChallenge === 'object'
-      ? normalizedOptions.powdetChallenge
-      : null;
-  const powdetStaticBase =
-    typeof normalizedOptions.powdetStaticBase === 'string'
-      ? normalizedOptions.powdetStaticBase.trim()
-      : '';
-  const normalizedPowdetChallenge = rawPowdetChallenge
-    ? {
-        challenge:
-          typeof rawPowdetChallenge.challenge === 'string' ? rawPowdetChallenge.challenge : '',
-        expireAt:
-          typeof rawPowdetChallenge.expireAt === 'number'
-            ? rawPowdetChallenge.expireAt
-            : typeof rawPowdetChallenge.expireAt === 'string'
-            ? Number.parseInt(rawPowdetChallenge.expireAt, 10)
-            : 0,
-        randomStr:
-          typeof rawPowdetChallenge.randomStr === 'string'
-            ? rawPowdetChallenge.randomStr
-            : '',
-        hmac: typeof rawPowdetChallenge.hmac === 'string' ? rawPowdetChallenge.hmac : '',
-        link: typeof rawPowdetChallenge.link === 'string' ? rawPowdetChallenge.link : '',
+  const rawPowdetChallenges = Array.isArray(normalizedOptions.powdetChallenges)
+    ? normalizedOptions.powdetChallenges
+    : [];
+  const normalizedPowdetChallenges = rawPowdetChallenges
+    .map((entry) => {
+      if (!entry || typeof entry !== 'object') {
+        return null;
       }
-    : null;
+      const alg = typeof entry.alg === 'string' ? entry.alg.trim() : '';
+      const challenge = typeof entry.challenge === 'string' ? entry.challenge : '';
+      const expireRaw = entry.expireAt ?? entry.expiresAt;
+      const expireAt = Number.isFinite(expireRaw) ? Number(expireRaw) : Number.parseInt(expireRaw, 10);
+      const randomStr = typeof entry.randomStr === 'string' ? entry.randomStr : '';
+      const hmac = typeof entry.hmac === 'string' ? entry.hmac : '';
+      const link = typeof entry.link === 'string' ? entry.link : '';
+      const staticBase = typeof entry.staticBase === 'string' ? entry.staticBase.trim() : '';
+      if (!alg || !challenge || !randomStr || !hmac || !Number.isFinite(expireAt)) {
+        return null;
+      }
+      return {
+        alg,
+        challenge,
+        expireAt,
+        randomStr,
+        hmac,
+        link,
+        staticBase,
+      };
+    })
+    .filter((entry) => entry);
   const turnstileAction =
     typeof normalizedOptions.turnstileAction === 'string' && normalizedOptions.turnstileAction.trim().length > 0
       ? normalizedOptions.turnstileAction.trim()
@@ -170,8 +174,7 @@ const renderLandingPageHtml = (path, options = {}) => {
     turnstileAction,
     altchaChallenge: normalizedAltchaChallenge,
     turnstileBinding: normalizedTurnstileBinding,
-    powdetChallenge: normalizedPowdetChallenge,
-    powdetStaticBase,
+    powdetChallenges: normalizedPowdetChallenges,
   };
   const securityJson = JSON.stringify(securityConfig).replace(/</g, '\\u003c');
   const autoRedirectEnabled = normalizedOptions.autoRedirect === true;

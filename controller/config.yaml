@@ -28,7 +28,7 @@ envs:
         themeCssUrl: "https://cdn.jsdelivr.net/gh/your-org/alist-landing-worker@<commit>/src/assets/landing/landing.minimal.css" # Default theme CSS URL (required)
       tlsFingerprintBinding: false # Bind challenges to tlsClientExtensionsSha1+tlsClientCiphersSha1 when true
       captcha:
-        defaultCombo: ["verify-altcha"] # Ordered challenge pipeline; allowed values: verify-altcha|verify-turn|verify-turnstile|verify-powdet|verify-none; empty array = no challenge
+        defaultCombo: ["verify-altcha"] # Ordered challenge pipeline; allowed values: verify-altcha|verify-turn|verify-turnstile|verify-powdet|verify-powdet-randomx|verify-none; empty array = no challenge
       turnstile:
         enabled: false # Enable Cloudflare Turnstile challenge (default=false)
         siteKey: "" # Turnstile site key used by frontend (required if enabled)
@@ -126,19 +126,36 @@ envs:
         staticBaseUrl: "" # Static assets base for powdet challenge; optional
         token: "" # powdet API token; required if enabled
         table: "POW_CHALLENGE_TICKET" # Table for powdet tickets
-        difficultyTable: "POWDET_DIFFICULTY_STATE" # Table storing dynamic difficulty state
+        difficultyTable: "POWDET_DIFFICULTY_STATE" # Default table for powdet difficulty state
         expireSeconds: 180 # powdet ticket TTL; >0
         clockSkewSeconds: 60 # Allowed client clock skew when validating tickets; seconds >=0
         maxWindowSeconds: 600 # Max rolling window considered for difficulty; seconds >=0
-        staticLevel: 12 # Base difficulty when dynamic is disabled; >=0
-        dynamic: # Adaptive difficulty parameters (mirrors legacy POWDET_DYNAMIC_* envs)
-          windowSeconds: 60 # Rolling window for leveling up; seconds >0
-          resetSeconds: 300 # Cooldown to decay level; seconds >0
-          blockSeconds: 300 # Block duration after reaching max level; seconds >=0
-          baseLevelMin: 12 # Minimum base level for difficulty mapping; >=0
-          baseLevelMax: 20 # Maximum base level; >= baseLevelMin
-          levelStep: 1 # Difficulty increment per level; >0
-          maxLevel: 4 # Maximum dynamic level; >=0
+        algorithms:
+          argon2id:
+            enabled: true
+            staticLevel: 12 # Base difficulty when dynamic is disabled; >=0
+            difficultyTable: "POWDET_DIFFICULTY_STATE"
+            dynamic: # Adaptive difficulty parameters (argon2id)
+              windowSeconds: 60 # Rolling window for leveling up; seconds >0
+              resetSeconds: 300 # Cooldown to decay level; seconds >0
+              blockSeconds: 300 # Block duration after reaching max level; seconds >=0
+              baseLevelMin: 12 # Minimum base level for difficulty mapping; >=0
+              baseLevelMax: 20 # Maximum base level; >= baseLevelMin
+              levelStep: 1 # Difficulty increment per level; >0
+              maxLevel: 4 # Maximum dynamic level; >=0
+          randomx:
+            enabled: false
+            staticLevel: 12
+            difficultyTable: "POWDET_DIFFICULTY_STATE"
+            staticBaseUrl: "" # Optional override for randomx static assets
+            dynamic:
+              windowSeconds: 60
+              resetSeconds: 300
+              blockSeconds: 300
+              baseLevelMin: 12
+              baseLevelMax: 20
+              levelStep: 1
+              maxLevel: 4
       db:
         mode: "custom-pg-rest" # Database mode; allowed: "" (disabled) | "custom-pg-rest"
         postgrestUrl: "https://postgrest-staging.example.com" # PostgREST endpoint used by landing; required if mode set
@@ -331,11 +348,22 @@ envs:
       listenPort: 2370 # powdet listen port; >0, default=2370
       batchSize: 1000 # Number of challenges per batch; >=1
       deprecateAfterBatches: 10 # How many batches before rotating challenges; >=0
-      argon2:
-        memoryKiB: 16384 # Argon2 memory cost; >0
-        iterations: 2 # Argon2 iterations; >0
-        parallelism: 1 # Argon2 parallelism; >0
-        keyLength: 16 # Argon2 key length; >0
+      algorithms:
+        argon2id:
+          enabled: true
+          memoryKiB: 16384 # Argon2 memory cost; >0
+          iterations: 2 # Argon2 iterations; >0
+          parallelism: 1 # Argon2 parallelism; >0
+          keyLength: 16 # Argon2 key length; >0
+        randomx:
+          enabled: false
+          v2: false
+          jit: true
+          hardAes: true
+          largePages: false
+          seedLen: 32
+          cacheLRUSize: 128
+          cacheTTL: 600
       adminApiToken: "replace-with-admin-token" # Token to protect powdet admin endpoints; required if admin API exposed
     slotHandler: # slot-handler config for staging (prod mirrors structure)
       listen: ":8080" # Slot-handler listen address; host:port
@@ -408,7 +436,7 @@ envs:
         themeCssUrl: "https://cdn.jsdelivr.net/gh/your-org/alist-landing-worker@<commit>/src/assets/landing/landing.minimal.css" # Default theme CSS URL (required)
       tlsFingerprintBinding: false # Bind challenges to tlsClientExtensionsSha1+tlsClientCiphersSha1 when true
       captcha:
-        defaultCombo: ["verify-altcha"] # Same enum as staging: verify-altcha|verify-turnstile|verify-powdet|verify-none; order defines pipeline
+        defaultCombo: ["verify-altcha"] # Same enum as staging: verify-altcha|verify-turnstile|verify-powdet|verify-powdet-randomx|verify-none; order defines pipeline
       turnstile:
         enabled: false
         siteKey: ""
@@ -487,15 +515,32 @@ envs:
         expireSeconds: 180
         clockSkewSeconds: 60
         maxWindowSeconds: 600
-        staticLevel: 12
-        dynamic:
-          windowSeconds: 60
-          resetSeconds: 300
-          blockSeconds: 300
-          baseLevelMin: 12
-          baseLevelMax: 20
-          levelStep: 1
-          maxLevel: 4
+        algorithms:
+          argon2id:
+            enabled: true
+            staticLevel: 12
+            difficultyTable: "POWDET_DIFFICULTY_STATE"
+            dynamic:
+              windowSeconds: 60
+              resetSeconds: 300
+              blockSeconds: 300
+              baseLevelMin: 12
+              baseLevelMax: 20
+              levelStep: 1
+              maxLevel: 4
+          randomx:
+            enabled: false
+            staticLevel: 12
+            difficultyTable: "POWDET_DIFFICULTY_STATE"
+            staticBaseUrl: ""
+            dynamic:
+              windowSeconds: 60
+              resetSeconds: 300
+              blockSeconds: 300
+              baseLevelMin: 12
+              baseLevelMax: 20
+              levelStep: 1
+              maxLevel: 4
       db:
         mode: "custom-pg-rest"
         postgrestUrl: "https://postgrest.example.com"
@@ -657,11 +702,22 @@ envs:
       listenPort: 2370
       batchSize: 1000
       deprecateAfterBatches: 10
-      argon2:
-        memoryKiB: 16384
-        iterations: 2
-        parallelism: 1
-        keyLength: 16
+      algorithms:
+        argon2id:
+          enabled: true
+          memoryKiB: 16384
+          iterations: 2
+          parallelism: 1
+          keyLength: 16
+        randomx:
+          enabled: false
+          v2: false
+          jit: true
+          hardAes: true
+          largePages: false
+          seedLen: 32
+          cacheLRUSize: 128
+          cacheTTL: 600
       adminApiToken: "replace-with-admin-token"
     slotHandler: # slot-handler config for prod; mirrors staging structure
       listen: ":8080"

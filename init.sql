@@ -453,23 +453,27 @@ CREATE INDEX IF NOT EXISTS idx_altcha_diff_block_until
 -- ========================================
 
 CREATE TABLE IF NOT EXISTS "POW_CHALLENGE_TICKET" (
-  "CHALLENGE_HASH"   TEXT PRIMARY KEY,
+  "ALGO"             TEXT NOT NULL,
+  "CHALLENGE_HASH"   TEXT NOT NULL,
   "FIRST_ISSUED_AT"  INTEGER NOT NULL,
   "EXPIRE_AT"        INTEGER NOT NULL,
   "CONSUMED"         INTEGER NOT NULL DEFAULT 0,
   "CONSUMED_AT"      INTEGER,
-  "LAST_NONCE"       TEXT
+  "LAST_NONCE"       TEXT,
+  PRIMARY KEY ("ALGO", "CHALLENGE_HASH")
 );
 
 CREATE INDEX IF NOT EXISTS idx_pow_challenge_expire
   ON "POW_CHALLENGE_TICKET" ("EXPIRE_AT");
 
 CREATE TABLE IF NOT EXISTS "POWDET_DIFFICULTY_STATE" (
-  "IP_HASH" TEXT PRIMARY KEY,
+  "ALGO" TEXT NOT NULL,
+  "IP_HASH" TEXT NOT NULL,
   "IP_RANGE" TEXT NOT NULL,
   "LEVEL" INTEGER NOT NULL DEFAULT 0,
   "LAST_SUCCESS_AT" INTEGER NOT NULL,
-  "BLOCK_UNTIL" INTEGER
+  "BLOCK_UNTIL" INTEGER,
+  PRIMARY KEY ("ALGO", "IP_HASH")
 );
 
 CREATE INDEX IF NOT EXISTS idx_powdet_diff_block_until
@@ -713,10 +717,116 @@ $$ LANGUAGE plpgsql;
 
 
 -- ========================================
+-- Stored Procedures: POWDET Dynamic Difficulty Helpers
+-- ========================================
+
+CREATE OR REPLACE FUNCTION landing_get_powdet_difficulty(
+  p_alg TEXT,
+  p_ip_hash TEXT,
+  p_table_name TEXT DEFAULT 'POWDET_DIFFICULTY_STATE'
+)
+RETURNS TABLE(
+  "LEVEL" INTEGER,
+  "LAST_SUCCESS_AT" INTEGER,
+  "BLOCK_UNTIL" INTEGER
+) AS $$
+DECLARE
+  sql TEXT;
+BEGIN
+  sql := format(
+    'SELECT "LEVEL", "LAST_SUCCESS_AT", "BLOCK_UNTIL"
+     FROM %1$I
+     WHERE "ALGO" = $1 AND "IP_HASH" = $2',
+    p_table_name
+  );
+
+  RETURN QUERY EXECUTE sql USING p_alg, p_ip_hash;
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+CREATE OR REPLACE FUNCTION landing_update_powdet_difficulty(
+  p_alg TEXT,
+  p_ip_hash TEXT,
+  p_ip_range TEXT,
+  p_now INTEGER,
+  p_window_seconds INTEGER,
+  p_reset_seconds INTEGER,
+  p_max_exponent INTEGER,
+  p_block_seconds INTEGER,
+  p_table_name TEXT DEFAULT 'POWDET_DIFFICULTY_STATE'
+)
+RETURNS TABLE(
+  "LEVEL" INTEGER,
+  "LAST_SUCCESS_AT" INTEGER,
+  "BLOCK_UNTIL" INTEGER
+) AS $$
+DECLARE
+  sql TEXT;
+BEGIN
+  sql := format(
+    'INSERT INTO %1$I ("ALGO", "IP_HASH", "IP_RANGE", "LEVEL", "LAST_SUCCESS_AT", "BLOCK_UNTIL")
+     VALUES ($1, $2, $3, 0, $4, NULL)
+     ON CONFLICT ("ALGO", "IP_HASH") DO UPDATE SET
+       "LEVEL" = CASE
+         WHEN $4 - %1$I."LAST_SUCCESS_AT" >= $6 THEN 0
+         WHEN $4 - %1$I."LAST_SUCCESS_AT" <= $5 THEN %1$I."LEVEL" + 1
+         ELSE GREATEST(%1$I."LEVEL" - 1, 0)
+       END,
+       "LAST_SUCCESS_AT" = $4,
+       "BLOCK_UNTIL" = CASE
+         WHEN (
+           CASE
+             WHEN $4 - %1$I."LAST_SUCCESS_AT" >= $6 THEN 0
+             WHEN $4 - %1$I."LAST_SUCCESS_AT" <= $5 THEN %1$I."LEVEL" + 1
+             ELSE GREATEST(%1$I."LEVEL" - 1, 0)
+           END
+         ) >= $7 AND $8 > 0 THEN $4 + $8
+         WHEN %1$I."BLOCK_UNTIL" IS NOT NULL AND %1$I."BLOCK_UNTIL" <= $4 THEN NULL
+         ELSE %1$I."BLOCK_UNTIL"
+       END
+     RETURNING "LEVEL", "LAST_SUCCESS_AT", "BLOCK_UNTIL"',
+    p_table_name
+  );
+
+  RETURN QUERY EXECUTE sql
+    USING p_alg, p_ip_hash, p_ip_range, p_now, p_window_seconds, p_reset_seconds, p_max_exponent, p_block_seconds;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION landing_cleanup_powdet_difficulty_state(
+  p_alg TEXT,
+  p_before INTEGER,
+  p_table_name TEXT DEFAULT 'POWDET_DIFFICULTY_STATE'
+)
+RETURNS INTEGER AS $$
+DECLARE
+  sql TEXT;
+  deleted_count INTEGER := 0;
+BEGIN
+  IF p_before IS NULL THEN
+    RETURN 0;
+  END IF;
+
+  sql := format(
+    'DELETE FROM %1$I
+     WHERE "ALGO" = $1 AND "LAST_SUCCESS_AT" < $2',
+    p_table_name
+  );
+
+  EXECUTE sql USING p_alg, p_before;
+  GET DIAGNOSTICS deleted_count = ROW_COUNT;
+
+  RETURN COALESCE(deleted_count, 0);
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- ========================================
 -- Stored Procedures: POWDET Challenge 票据
 -- ========================================
 
 CREATE OR REPLACE FUNCTION landing_consume_pow_challenge(
+  p_alg TEXT,
   p_hash TEXT,
   p_now INTEGER,
   p_expire_at INTEGER,
@@ -728,22 +838,23 @@ DECLARE
   updated_count INTEGER := 0;
 BEGIN
   sql := format(
-    'INSERT INTO %1$I ("CHALLENGE_HASH", "FIRST_ISSUED_AT", "EXPIRE_AT", "CONSUMED")
-     VALUES ($1, $2, $3, 0)
-     ON CONFLICT ("CHALLENGE_HASH") DO NOTHING',
+    'INSERT INTO %1$I ("ALGO", "CHALLENGE_HASH", "FIRST_ISSUED_AT", "EXPIRE_AT", "CONSUMED")
+     VALUES ($1, $2, $3, $4, 0)
+     ON CONFLICT ("ALGO", "CHALLENGE_HASH") DO NOTHING',
     p_table_name
   );
-  EXECUTE sql USING p_hash, p_now, p_expire_at;
+  EXECUTE sql USING p_alg, p_hash, p_now, p_expire_at;
 
   sql := format(
     'UPDATE %1$I
      SET "CONSUMED" = 1,
-         "CONSUMED_AT" = $2
-     WHERE "CHALLENGE_HASH" = $1
+         "CONSUMED_AT" = $3
+     WHERE "ALGO" = $1
+       AND "CHALLENGE_HASH" = $2
        AND "CONSUMED" = 0',
     p_table_name
   );
-  EXECUTE sql USING p_hash, p_now;
+  EXECUTE sql USING p_alg, p_hash, p_now;
   GET DIAGNOSTICS updated_count = ROW_COUNT;
 
   RETURN updated_count;
@@ -828,8 +939,7 @@ CREATE OR REPLACE FUNCTION landing_unified_check(
   p_altcha_token_ip TEXT DEFAULT NULL,
   p_altcha_filepath_hash TEXT DEFAULT NULL,
   p_altcha_table_name TEXT DEFAULT 'ALTCHA_TOKEN_LIST',
-  p_pow_challenge_hash TEXT DEFAULT NULL,
-  p_pow_expire_at INTEGER DEFAULT NULL,
+  p_pow_challenges JSON DEFAULT NULL,
   p_pow_table_name TEXT DEFAULT 'POW_CHALLENGE_TICKET'
 )
 RETURNS TABLE(
@@ -851,8 +961,7 @@ RETURNS TABLE(
   altcha_error_code INTEGER,
   altcha_access_count INTEGER,
   altcha_expires_at INTEGER,
-  pow_consumed BOOLEAN,
-  pow_error_code INTEGER
+  pow_results JSONB
 ) AS $$
 DECLARE
   cache_sql TEXT;
@@ -872,10 +981,14 @@ DECLARE
   altcha_error_local INTEGER := 0;
   altcha_access_local INTEGER := 0;
   altcha_expires_local INTEGER := NULL;
-  pow_consumed_local BOOLEAN := TRUE;
-  pow_error_local INTEGER := 0;
-  pow_updated_count INTEGER := 0;
-  pow_expire_at_local INTEGER := NULL;
+  pow_results_local JSONB := '{}'::jsonb;
+  pow_item JSONB;
+  pow_alg TEXT;
+  pow_hash TEXT;
+  pow_consumed_local BOOLEAN;
+  pow_error_local INTEGER;
+  pow_updated_count INTEGER;
+  pow_expire_at_local INTEGER;
 BEGIN
   IF p_cache_ttl IS NOT NULL AND p_cache_ttl > 0 THEN
     cache_sql := format(
@@ -1023,28 +1136,45 @@ BEGIN
   altcha_access_count := altcha_access_local;
   altcha_expires_at := altcha_expires_local;
 
-  IF p_pow_challenge_hash IS NOT NULL AND length(p_pow_challenge_hash) > 0 THEN
-    pow_expire_at_local := COALESCE(p_pow_expire_at, p_now);
-    pow_updated_count := landing_consume_pow_challenge(
-      p_pow_challenge_hash,
-      p_now,
-      pow_expire_at_local,
-      p_pow_table_name
-    );
-    IF pow_updated_count = 1 THEN
-      pow_consumed_local := TRUE;
-      pow_error_local := 0;
-    ELSE
-      pow_consumed_local := FALSE;
-      pow_error_local := 1;
-    END IF;
-  ELSE
-    pow_consumed_local := TRUE;
-    pow_error_local := 0;
+  IF p_pow_challenges IS NOT NULL THEN
+    FOR pow_item IN SELECT * FROM jsonb_array_elements(p_pow_challenges::jsonb)
+    LOOP
+      pow_alg := NULLIF(pow_item->>'alg', '');
+      pow_hash := NULLIF(pow_item->>'hash', '');
+      pow_expire_at_local := NULL;
+      IF pow_item ? 'expire_at' THEN
+        BEGIN
+          pow_expire_at_local := NULLIF(pow_item->>'expire_at', '')::integer;
+        EXCEPTION WHEN others THEN
+          pow_expire_at_local := NULL;
+        END;
+      END IF;
+      IF pow_alg IS NULL OR pow_hash IS NULL THEN
+        CONTINUE;
+      END IF;
+      pow_expire_at_local := COALESCE(pow_expire_at_local, p_now);
+      pow_updated_count := landing_consume_pow_challenge(
+        pow_alg,
+        pow_hash,
+        p_now,
+        pow_expire_at_local,
+        p_pow_table_name
+      );
+      IF pow_updated_count = 1 THEN
+        pow_consumed_local := TRUE;
+        pow_error_local := 0;
+      ELSE
+        pow_consumed_local := FALSE;
+        pow_error_local := 1;
+      END IF;
+      pow_results_local := pow_results_local || jsonb_build_object(
+        pow_alg,
+        jsonb_build_object('consumed', pow_consumed_local, 'error_code', pow_error_local)
+      );
+    END LOOP;
   END IF;
 
-  pow_consumed := pow_consumed_local;
-  pow_error_code := pow_error_local;
+  pow_results := pow_results_local;
 
   RETURN NEXT;
 END;
