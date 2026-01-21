@@ -5239,6 +5239,7 @@
           ipHash: typeof challenge.ipHash === 'string' ? challenge.ipHash : '',
           binding: challenge.binding,
           bindingExpiresAt: challenge.bindingExpiresAt,
+          link: typeof challenge.link === 'string' ? challenge.link : '',
         };
         state.verification.altchaSolution = solution;
         state.verification.altchaIssuedAt = Date.now();
@@ -5746,6 +5747,7 @@
         typeof rawTurnstileBinding.cdata === 'string'
           ? rawTurnstileBinding.cdata.replace(/=+$/u, '')
           : '';
+      const link = typeof rawTurnstileBinding.link === 'string' ? rawTurnstileBinding.link : '';
       if (bindingValue && bindingExpiresAt > 0 && pathHash && nonce && cdata) {
         state.security.turnstileBinding = {
           pathHash,
@@ -5754,6 +5756,7 @@
           bindingExpiresAt,
           nonce,
           cdata,
+          link,
         };
       } else {
         state.security.turnstileBinding = null;
@@ -5780,12 +5783,14 @@
       const randomStr =
         typeof rawPowdetChallenge.randomStr === 'string' ? rawPowdetChallenge.randomStr : '';
       const hmac = typeof rawPowdetChallenge.hmac === 'string' ? rawPowdetChallenge.hmac : '';
+      const link = typeof rawPowdetChallenge.link === 'string' ? rawPowdetChallenge.link : '';
       if (challengeValue && expireAt > 0 && randomStr && hmac) {
         state.security.powdetChallenge = {
           challenge: challengeValue,
           expireAt,
           randomStr,
           hmac,
+          link,
         };
       } else {
         state.security.powdetChallenge = null;
@@ -6000,6 +6005,7 @@
           bindingExpiresAt: binding.bindingExpiresAt,
           nonce: sanitizedNonce,
           cdata: sanitizedCData,
+          link: typeof binding.link === 'string' ? binding.link : '',
         };
         turnstileBindingEncoded = base64urlEncode(JSON.stringify(payload));
       }
@@ -6042,6 +6048,7 @@
         randomStr: powChallenge.randomStr,
         hmac: powChallenge.hmac,
         nonce: powNonce,
+        link: typeof powChallenge.link === 'string' ? powChallenge.link : '',
       };
     }
 

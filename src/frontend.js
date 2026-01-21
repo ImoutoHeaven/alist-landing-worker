@@ -98,6 +98,7 @@ const renderLandingPageHtml = (path, options = {}) => {
             : typeof rawAltchaChallenge.bindingExpiresAt === 'string'
             ? Number.parseInt(rawAltchaChallenge.bindingExpiresAt, 10)
             : 0,
+        link: typeof rawAltchaChallenge.link === 'string' ? rawAltchaChallenge.link : '',
       }
     : null;
   const rawTurnstileBinding =
@@ -129,6 +130,7 @@ const renderLandingPageHtml = (path, options = {}) => {
           typeof rawTurnstileBinding.nonce === 'string' ? rawTurnstileBinding.nonce : '',
         cdata:
           typeof rawTurnstileBinding.cdata === 'string' ? rawTurnstileBinding.cdata : '',
+        link: typeof rawTurnstileBinding.link === 'string' ? rawTurnstileBinding.link : '',
       }
     : null;
   const rawPowdetChallenge =
@@ -154,6 +156,7 @@ const renderLandingPageHtml = (path, options = {}) => {
             ? rawPowdetChallenge.randomStr
             : '',
         hmac: typeof rawPowdetChallenge.hmac === 'string' ? rawPowdetChallenge.hmac : '',
+        link: typeof rawPowdetChallenge.link === 'string' ? rawPowdetChallenge.link : '',
       }
     : null;
   const turnstileAction =
