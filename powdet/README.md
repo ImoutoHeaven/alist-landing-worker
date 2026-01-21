@@ -43,6 +43,10 @@
 
 运行前需在工作目录或可执行文件目录创建 `PoW_Bot_Deterrent_API_Tokens` 文件夹，否则服务会直接退出。
 
+## 启动参数
+
+- `-c`, `--config`：指定 `config.json` 路径。启动时会切换工作目录到该配置文件所在目录，并在该目录下查找 `PoW_Bot_Deterrent_API_Tokens`。
+
 ## Controller 集成与指标
 
 `config.json` 的 `controller` 字段填写完整后：

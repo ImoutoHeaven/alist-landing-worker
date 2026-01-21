@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -146,6 +147,7 @@ var configMu sync.RWMutex
 var configVersion string
 var appDirectory string
 var apiTokensFolder string
+var configFilePath string
 var controllerSettings controllerEnv
 var internalAPIToken string
 var runtimeInfo runtimeMeta
@@ -185,6 +187,25 @@ var apiTokensCache = tokenCache{tokens: map[string]struct{}{}}
 
 func main() {
 	metricsCollector = newMetricsCounters()
+
+	var configPathArg string
+	flag.StringVar(&configPathArg, "config", "", "path to config.json")
+	flag.StringVar(&configPathArg, "c", "", "path to config.json")
+	flag.Parse()
+
+	if strings.TrimSpace(configPathArg) != "" {
+		configPathAbs, err := filepath.Abs(configPathArg)
+		if err != nil {
+			log.Fatalf("invalid --config path: %v", err)
+		}
+		if _, err := os.Stat(configPathAbs); err != nil {
+			log.Fatalf("config file not found: %v", err)
+		}
+		if err := os.Chdir(filepath.Dir(configPathAbs)); err != nil {
+			log.Fatalf("failed to set working directory: %v", err)
+		}
+		configFilePath = configPathAbs
+	}
 
 	if err := readConfiguration(); err != nil {
 		log.Fatalf("failed to load configuration: %v", err)
@@ -617,6 +638,11 @@ func main() {
 			flags := buildRandomxFlags(algoCfg)
 			cacheKey := fmt.Sprintf("%x|%d", seedKeyBytes, flags)
 			store := getRandomxStore(algo)
+			if store == nil {
+				// Avoid nil store after config refresh; fall back to a local cache store.
+				ttl := time.Duration(algoCfg.CacheTTL) * time.Second
+				store = newRandomxCacheStore(algoCfg.CacheLRUSize, ttl)
+			}
 			cache, release, err := store.getOrCreate(cacheKey, time.Now(), func() (*randomx.Cache, error) {
 				cache, err := randomx.NewCache(flags)
 				if err != nil {
@@ -1414,6 +1440,9 @@ func readConfiguration() error {
 	var err error
 
 	configPath := filepath.Join(appDirectory, "config.json")
+	if strings.TrimSpace(configFilePath) != "" {
+		configPath = configFilePath
+	}
 	cfgFromFile, meta, versionFromFile, err := loadConfigFromFile(configPath)
 	if err != nil {
 		return fmt.Errorf("load local config: %w", err)

@@ -81,7 +81,7 @@ func TestRandomxHashMeetsDifficulty(t *testing.T) {
 	seedKey := []byte("0123456789abcdef0123456789abcdef")
 	nonce := []byte{0x10, 0x20, 0x30, 0x40}
 
-	flags := buildRandomxFlags(PowdetAlgorithmConfig{}, false)
+	flags := buildRandomxFlags(PowdetAlgorithmConfig{})
 	cache, err := randomx.NewCache(flags)
 	if err != nil {
 		t.Fatalf("randomx cache init failed: %v", err)
