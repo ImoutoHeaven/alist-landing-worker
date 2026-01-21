@@ -67,17 +67,18 @@ Worker 入口逻辑（`fetch`）顺序：
 4. 若启用 TLS 指纹绑定（`landing.tlsFingerprintBinding`），要求 `request.cf` 中包含 `tlsClientExtensionsSha1` 与 `tlsClientCiphersSha1`，否则直接拒绝。
 5. **ALTCHA 校验**：  
    - 无状态校验：`altcha-lib` 的 `verifySolution`。  
-   - 绑定校验：pathHash（含 IP 范围 scope hash 与难度指数）+ ipHash + expires + salt + 可选 TLS 指纹。  
+   - 绑定校验：pathHash（含 IP 范围 scope hash 与难度指数）+ ipHash + expires + salt + link + 可选 TLS 指纹。  
    - 动态难度：通过 `landing_get_altcha_difficulty` 获取状态，超限时直接 429。  
 6. **Turnstile 校验**：  
-   - 校验 binding payload（path/ip/expires + 可选 TLS 指纹）与 cData。  
+   - 校验 binding payload（path/ip/expires + link + 可选 TLS 指纹）与 cData。  
    - 调用 Cloudflare siteverify，并按配置校验 action/hostname。  
    - 如启用 token binding，则要求 DB 可用并在 unified check 中验证/消费。
 7. **Powdet 校验**：  
    - 验证 payload 时窗（expireAt + skew + maxWindow）。  
-   - 按 `ipRangeHash + pathHash + expireAt + randomStr + challenge (+ TLS fingerprint)` 计算 HMAC；  
+   - 按 `ipRangeHash + pathHash + expireAt + randomStr + challenge + link (+ TLS fingerprint)` 计算 HMAC；  
      HMAC 密钥使用 `common.tokenHmacKey`。  
-   - 调用 Powdet `/Verify`；失败会落入短期 LRU 拒绝。
+   - 调用 Powdet `/Verify`；失败会落入短期 LRU 拒绝。  
+   - 若同时启用多项验证（Turnstile/ALTCHA/Powdet ≥2），则要求 link 全部存在且一致，否则 463。
 8. **签名校验**：  
    `sign = base64url(HMAC_SHA256(signSecret, path + ":" + expire)) + ":" + expire`  
    `signSecret` 取自 `common.signSecret`，为空时回落到 `tokenHmacKey`。
@@ -102,28 +103,36 @@ Worker 入口逻辑（`fetch`）顺序：
    - 生成 Turnstile binding  
    - 生成 ALTCHA challenge（含动态难度、算法升级）  
    - 生成 Powdet challenge（调用 `/GetChallenges` + HMAC 绑定）  
+   - 生成 link（随机串）并注入到 Turnstile/ALTCHA/Powdet 的绑定与 payload  
    - `renderLandingPage` 注入前端资源与验证 payload。
 
 ## 6. 验证链与绑定策略
 
 ### 6.1 Turnstile Binding
 
-- 绑定字段：`pathHash` + `ipHash` + `expiresAt`（可选 TLS 指纹）。
+- 绑定字段：`pathHash` + `ipHash` + `expiresAt` + `link`（可选 TLS 指纹）。
 - cData = HMAC(pageSecret, bindingMac + nonce)。
 - DB token binding 需要 `custom-pg-rest` 与 `TURNSTILE_TOKEN_BINDING` 表。
+- 若 Turnstile 启用且需要参与多验证一致性校验，必须开启 binding（否则 link 无法携带）。
 
 ### 6.2 ALTCHA Binding
 
 - `pathHash` 中包含 `pathHash + scopeHash + exponent` 的 canonical JSON。
 - `scopeHash` 基于 `calculateIPSubnet` 的 IP 范围哈希。
-- 可选 TLS 指纹写入绑定 MAC。
+- 绑定 MAC 包含 `link`，可选 TLS 指纹写入绑定 MAC。
 - 动态难度采用 `landing_get_altcha_difficulty` / `landing_update_altcha_difficulty`。
 
 ### 6.3 Powdet Binding
 
-- HMAC 绑定：`ipRangeHash + pathHash + expireAt + randomStr + challenge (+ TLS fingerprint)`。
+- HMAC 绑定：`ipRangeHash + pathHash + expireAt + randomStr + challenge + link (+ TLS fingerprint)`。
 - 校验时序窗口：`expireAt` + `clockSkewSeconds` + `maxWindowSeconds`。
 - 动态难度采用同一组 RPC，但传入 `POWDET_DIFFICULTY_STATE` 表名。
+
+### 6.4 Link 一致性
+
+- link 为随机串，仅作为多验证之间的粘合字段并参与各自 MAC/HMAC。
+- 当 Turnstile/ALTCHA/Powdet 中启用两项或以上时，`/info` 必须校验 link 全部存在且一致，否则返回 463。
+- 单项验证场景不依赖一致性检查，但仍会生成并纳入 MAC/HMAC，以避免降级分支的兼容性攻击面。
 
 ## 7. 限流、缓存与清理
 

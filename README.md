@@ -5,7 +5,7 @@ Cloudflare Workers 版 AList 下载落地网关。它位于 AList 与 download w
 ## 核心能力
 
 - 控制面驱动配置与路径决策（bootstrap + 动态 decision）。
-- Turnstile / ALTCHA / Powdet 多层验证，支持 token binding 与 TLS 指纹绑定。
+- Turnstile / ALTCHA / Powdet 多层验证，支持 token binding、TLS 指纹绑定与跨验证 link 绑定。
 - CF Rate Limiter + PostgREST 统一检查（限流 + token 消费 + 文件大小缓存）。
 - 生成 download worker 票据：`sign` / `hashSign` / `workerSign` / `additionalInfo`。
 - 快速 302、落地页模式、webDownloader 分段下载与客户端解密。
@@ -58,6 +58,11 @@ npm run deploy
 ```
 
 前端静态资源需单独托管，并在 controller 的 `landing.frontend.*` 指向相应 URL。
+
+## 升级注意
+
+- 现已将随机 `link` 纳入 Turnstile/ALTCHA/POWDET 的签名与校验，旧版前端若不透传 `link` 会直接 403。
+- 多验证同时启用时要求 `link` 一致，否则返回 463；若启用 Turnstile，需开启 binding（`turnstileCookieExpireSeconds > 0`）。
 
 ## 相关项目
 
