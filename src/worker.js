@@ -4351,7 +4351,21 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
 
   let needAltcha = parsedNeeds.needAltcha;
   let needTurnstile = parsedNeeds.needTurnstile;
-  let needPowdet = parsedNeeds.needPowdet;
+  const powdetRequiredAlgorithms = Array.isArray(parsedNeeds.powdetAlgorithms)
+    ? parsedNeeds.powdetAlgorithms
+        .map((alg) => normalizePowdetAlgorithm(alg))
+        .filter((alg) => alg)
+    : [];
+  let needPowdet = powdetRequiredAlgorithms.length > 0;
+  if (needPowdet) {
+    const invalidPowdet = powdetRequiredAlgorithms.filter((alg) => {
+      const algoCfg = getPowdetAlgorithmConfig(config, alg);
+      return !algoCfg || !algoCfg.enabled;
+    });
+    if (invalidPowdet.length > 0) {
+      return respondJson(origin, { code: 500, message: 'powdet algorithm unavailable' }, 500);
+    }
+  }
 
   const needsVerification = needAltcha || needTurnstile || needPowdet;
   const needWebDownloader =
