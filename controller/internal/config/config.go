@@ -348,12 +348,11 @@ type LandingWebDownloaderConfig struct {
 	MaxConnections int  `yaml:"maxConnections" json:"maxConnections"`
 }
 
-// LandingAdditionalConfig groups misc landing behavior toggles.
-type LandingAdditionalConfig struct {
-	AppendAdditional   bool `yaml:"appendAdditional" json:"appendAdditional"`
-	MinBandwidthMbps   int  `yaml:"minBandwidthMbps" json:"minBandwidthMbps"`
-	MinDurationSeconds int  `yaml:"minDurationSeconds" json:"minDurationSeconds"`
-	MaxDurationSeconds int  `yaml:"maxDurationSeconds" json:"maxDurationSeconds"`
+// LandingPayloadConfig groups payload expiration controls.
+type LandingPayloadConfig struct {
+	MinBandwidthMbps   int `yaml:"minBandwidthMbps" json:"minBandwidthMbps"`
+	MinDurationSeconds int `yaml:"minDurationSeconds" json:"minDurationSeconds"`
+	MaxDurationSeconds int `yaml:"maxDurationSeconds" json:"maxDurationSeconds"`
 }
 
 // LandingFrontendConfig describes landing page asset locations.
@@ -385,7 +384,7 @@ type LandingConfig struct {
 	Crypt                 LandingCryptConfig         `yaml:"crypt" json:"crypt"`
 	WebDownloader         LandingWebDownloaderConfig `yaml:"webDownloader" json:"webDownloader"`
 	ClientDecryptEnabled  bool                       `yaml:"clientDecryptEnabled" json:"clientDecryptEnabled"`
-	Additional            LandingAdditionalConfig    `yaml:"additional" json:"additional"`
+	Payload               LandingPayloadConfig       `yaml:"payload" json:"payload"`
 	Extra                 map[string]any             `yaml:",inline" json:"-"`
 }
 
@@ -944,7 +943,7 @@ func (l *LandingConfig) ensureDefaults(envName string) error {
 
 	l.Crypt.ensureDefaults()
 	l.WebDownloader.ensureDefaults()
-	l.Additional.ensureDefaults()
+	l.Payload.ensureDefaults()
 
 	if strings.TrimSpace(l.DownloadWorkerHrwMax) == "" {
 		l.DownloadWorkerHrwMax = defaultLandingHrwMaxSize
@@ -1079,15 +1078,15 @@ func (w *LandingWebDownloaderConfig) ensureDefaults() {
 	}
 }
 
-func (a *LandingAdditionalConfig) ensureDefaults() {
-	if a.MinBandwidthMbps <= 0 {
-		a.MinBandwidthMbps = defaultLandingMinBandwidthMbps
+func (p *LandingPayloadConfig) ensureDefaults() {
+	if p.MinBandwidthMbps <= 0 {
+		p.MinBandwidthMbps = defaultLandingMinBandwidthMbps
 	}
-	if a.MinDurationSeconds <= 0 {
-		a.MinDurationSeconds = defaultLandingMinDurationSec
+	if p.MinDurationSeconds <= 0 {
+		p.MinDurationSeconds = defaultLandingMinDurationSec
 	}
-	if a.MaxDurationSeconds < 0 {
-		a.MaxDurationSeconds = 0
+	if p.MaxDurationSeconds < 0 {
+		p.MaxDurationSeconds = 0
 	}
 }
 

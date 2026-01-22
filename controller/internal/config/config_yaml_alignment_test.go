@@ -30,13 +30,20 @@ func TestSampleConfigAlignment(t *testing.T) {
 	}
 
 	powdet := staging.Landing.Powdet
-	if powdet.StaticLevel == nil {
-		t.Fatalf("powdet staticLevel missing")
+	if len(powdet.Algorithms) == 0 {
+		t.Fatalf("powdet algorithms missing")
 	}
-	if powdet.Dynamic == nil {
-		t.Fatalf("powdet dynamic missing")
+	argon2id, ok := powdet.Algorithms["argon2id"]
+	if !ok {
+		t.Fatalf("powdet argon2id algorithm missing")
 	}
-	if powdet.Dynamic.WindowSeconds == 0 || powdet.Dynamic.ResetSeconds == 0 || powdet.Dynamic.LevelStep == 0 {
-		t.Fatalf("powdet dynamic fields incomplete: %+v", powdet.Dynamic)
+	if argon2id.StaticLevel == nil {
+		t.Fatalf("powdet argon2id staticLevel missing")
+	}
+	if argon2id.Dynamic == nil {
+		t.Fatalf("powdet argon2id dynamic missing")
+	}
+	if argon2id.Dynamic.WindowSeconds == 0 || argon2id.Dynamic.ResetSeconds == 0 || argon2id.Dynamic.LevelStep == 0 {
+		t.Fatalf("powdet argon2id dynamic fields incomplete: %+v", argon2id.Dynamic)
 	}
 }

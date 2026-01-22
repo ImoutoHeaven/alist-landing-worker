@@ -1310,23 +1310,18 @@ const resolveConfig = (env = {}, bootstrap = null) => {
   const idleTimeoutRaw = `${idleTimeoutSeconds}s`;
   const idleTableName = normalizeString(dbConfig.idleTable, 'DOWNLOAD_LAST_ACTIVE_TABLE') || 'DOWNLOAD_LAST_ACTIVE_TABLE';
 
-  const additionalConfig = landingBootstrap.additional && typeof landingBootstrap.additional === 'object'
-    ? landingBootstrap.additional
+  const payloadConfig = landingBootstrap.payload && typeof landingBootstrap.payload === 'object'
+    ? landingBootstrap.payload
     : {};
-  const appendAdditional = additionalConfig.appendAdditional !== false;
   const normalizedAlistAddress = normalizeString(commonBootstrap.alistBaseUrl).replace(/\/$/, '');
-  const minBandwidthMbps = parseNumber(additionalConfig.minBandwidthMbps, 10);
+  const minBandwidthMbps = parseNumber(payloadConfig.minBandwidthMbps, 10);
   const bandwidthBytesPerSecond = minBandwidthMbps > 0
     ? (minBandwidthMbps * 1_000_000) / 8
     : (10 * 1_000_000) / 8;
-  const minDurationSeconds = parseDurationToSeconds(additionalConfig.minDurationSeconds, 3600);
-  const rawMaxDurationSeconds = parseDurationToSeconds(additionalConfig.maxDurationSeconds, 0);
+  const minDurationSeconds = parseDurationToSeconds(payloadConfig.minDurationSeconds, 3600);
+  const rawMaxDurationSeconds = parseDurationToSeconds(payloadConfig.maxDurationSeconds, 0);
   const maxDurationSeconds = Math.max(0, rawMaxDurationSeconds);
   const maxDurationMilliseconds = maxDurationSeconds > 0 ? maxDurationSeconds * 1000 : null;
-
-  if (appendAdditional && !normalizedAlistAddress) {
-    throw new Error('controller common.alistBaseUrl is required when additional.appendAdditional is true');
-  }
 
   const workerAddressesList = Array.isArray(commonBootstrap.workerAddresses)
     ? commonBootstrap.workerAddresses
@@ -1448,7 +1443,6 @@ const resolveConfig = (env = {}, bootstrap = null) => {
     ipv6Suffix,
     ipRateLimitActive,
     fileRateLimitActive,
-    appendAdditional,
     alistAddress: normalizedAlistAddress,
     alistAuthHeaders,
     minBandwidthBytesPerSecond: bandwidthBytesPerSecond,

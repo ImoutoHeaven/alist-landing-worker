@@ -201,9 +201,8 @@ envs:
         enabled: false # Enable web downloader UI (default=false)
         maxConnections: 16 # Max concurrent connections in web downloader; >0
       clientDecryptEnabled: false # Allow client-side decryption; default=false
-      additional:
-        appendAdditional: true # Append extra info to response when true; default=true
-        minBandwidthMbps: 10 # Minimum bandwidth requirement; Mbps, 0 means no check
+      payload:
+        minBandwidthMbps: 10 # Min bandwidth used to estimate expireTime; Mbps, 0 means no check
         minDurationSeconds: 3600 # Minimum allowed download duration; seconds, >=0
         maxDurationSeconds: 0 # Maximum allowed duration; 0 means unlimited
     download: # Download-side configuration for staging
@@ -582,8 +581,7 @@ envs:
         enabled: false
         maxConnections: 16
       clientDecryptEnabled: false
-      additional:
-        appendAdditional: true
+      payload:
         minBandwidthMbps: 10
         minDurationSeconds: 3600
         maxDurationSeconds: 0

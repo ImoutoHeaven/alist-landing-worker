@@ -29,7 +29,7 @@ Worker 启动后会从 controller 拉取 `bootstrap`，并基于 `paths.*` 匹�
 重要字段：
 
 - `common`：`tokenHmacKey`、`signSecret`、`workerAddresses`、`landingWorkerAddresses`、`binding`、`alistBaseUrl`、`alistAuthHeaders`
-- `landing`：`pageSecret`、`frontend.*`、`turnstile/altcha/powdet`、`paths.*`、`db`、`crypt`、`webDownloader`、`additional`
+- `landing`：`pageSecret`、`frontend.*`、`turnstile/altcha/powdet`、`paths.*`、`db`、`crypt`、`webDownloader`、`payload`
 
 没有 controller 或 bootstrap/decision 获取失败时，Worker 会返回 503。
 
