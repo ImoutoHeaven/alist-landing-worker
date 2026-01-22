@@ -5102,12 +5102,20 @@
     }
     const nonce = typeof binding.nonce === 'string' ? binding.nonce.replace(/=+$/u, '') : '';
     const cdata = typeof binding.cdata === 'string' ? binding.cdata.replace(/=+$/u, '') : '';
+    const bindingStr = typeof binding.bindingStr === 'string' ? binding.bindingStr : '';
+    const link = typeof binding.link === 'string' ? binding.link : '';
     if (!nonce || !cdata) {
+      return { valid: false, binding, reason: 'invalid' };
+    }
+    if (!bindingStr) {
+      return { valid: false, binding, reason: 'invalid' };
+    }
+    if (!link) {
       return { valid: false, binding, reason: 'invalid' };
     }
     return {
       valid: true,
-      binding: { ...binding, bindingExpiresAt: expiresAt, nonce, cdata },
+      binding: { ...binding, bindingExpiresAt: expiresAt, nonce, cdata, bindingStr, link },
       reason: null,
     };
   };
@@ -5203,8 +5211,8 @@
     if (
       typeof challenge.binding !== 'string' ||
       challenge.binding.length === 0 ||
-      typeof challenge.pathHash !== 'string' ||
-      challenge.pathHash.length === 0 ||
+      typeof challenge.bindingStr !== 'string' ||
+      challenge.bindingStr.length === 0 ||
       !Number.isFinite(challenge.bindingExpiresAt)
     ) {
       state.verification.altchaReady = false;
@@ -5236,8 +5244,7 @@
           number: solutionResult.number,
           salt: challenge.salt,
           signature: challenge.signature,
-          pathHash: challenge.pathHash,
-          ipHash: typeof challenge.ipHash === 'string' ? challenge.ipHash : '',
+          bindingStr: challenge.bindingStr,
           binding: challenge.binding,
           bindingExpiresAt: challenge.bindingExpiresAt,
           link: typeof challenge.link === 'string' ? challenge.link : '',
@@ -6089,10 +6096,8 @@
           : typeof rawTurnstileBinding.bindingMac === 'string'
             ? rawTurnstileBinding.bindingMac
             : '';
-      const pathHash =
-        typeof rawTurnstileBinding.pathHash === 'string' ? rawTurnstileBinding.pathHash : '';
-      const ipHash =
-        typeof rawTurnstileBinding.ipHash === 'string' ? rawTurnstileBinding.ipHash : '';
+      const bindingStr =
+        typeof rawTurnstileBinding.bindingStr === 'string' ? rawTurnstileBinding.bindingStr : '';
       const nonce =
         typeof rawTurnstileBinding.nonce === 'string'
           ? rawTurnstileBinding.nonce.replace(/=+$/u, '')
@@ -6102,10 +6107,9 @@
           ? rawTurnstileBinding.cdata.replace(/=+$/u, '')
           : '';
       const link = typeof rawTurnstileBinding.link === 'string' ? rawTurnstileBinding.link : '';
-      if (bindingValue && bindingExpiresAt > 0 && pathHash && nonce && cdata) {
+      if (bindingValue && bindingExpiresAt > 0 && bindingStr && nonce && cdata) {
         state.security.turnstileBinding = {
-          pathHash,
-          ipHash,
+          bindingStr,
           binding: bindingValue,
           bindingExpiresAt,
           nonce,
@@ -6362,8 +6366,7 @@
         const sanitizedNonce = typeof binding.nonce === 'string' ? binding.nonce.replace(/=+$/u, '') : '';
         const sanitizedCData = typeof binding.cdata === 'string' ? binding.cdata.replace(/=+$/u, '') : '';
         const payload = {
-          pathHash: binding.pathHash,
-          ipHash: binding.ipHash,
+          bindingStr: binding.bindingStr,
           binding: binding.binding || '',
           bindingExpiresAt: binding.bindingExpiresAt,
           nonce: sanitizedNonce,

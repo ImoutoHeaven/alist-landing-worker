@@ -29,7 +29,7 @@ Worker 启动后会从 controller 拉取 `bootstrap`，并基于 `paths.*` 匹�
 重要字段：
 
 - `common`：`tokenHmacKey`、`signSecret`、`workerAddresses`、`landingWorkerAddresses`、`binding`、`alistBaseUrl`、`alistAuthHeaders`
-- `landing`：`pageSecret`、`frontend.*`、`turnstile/altcha/powdet`、`paths.*`、`db`、`crypt`、`webDownloader`、`payload`
+- `landing`：`pageSecret`、`frontend.*`、`turnstile/altcha/powdet`、`paths.*`、`db`、`crypt`、`webDownloader`、`payload`、`captchaBinding`
 
 没有 controller 或 bootstrap/decision 获取失败时，Worker 会返回 503。
 
@@ -64,20 +64,20 @@ Worker 入口逻辑（`fetch`）顺序：
 3. 从 controller 决策中提取 `captchaCombo`，解析成动作集合：  
    `verify-altcha` / `verify-turn` / `verify-powdet` / `verify-powdet-randomx` / `pass-web` / `pass-server` / `pass-asis` / `pass-web-download` / `pass-decrypt` / `verify-web-download` / `verify-decrypt`。  
    这些动作决定是否强制验证、强制落地页/跳转、以及是否启用 webDownloader / client-decrypt。
-4. 若启用 TLS 指纹绑定（`landing.tlsFingerprintBinding`），要求 `request.cf` 中包含 `tlsClientExtensionsSha1` 与 `tlsClientCiphersSha1`，否则直接拒绝。
+4. 若计算 `bindingStr` 时包含 `tls` 模式（`landing.captchaBinding`/`common.binding`/`decision.download.checkOriginMode`），要求 `request.cf` 中包含 `tlsClientExtensionsSha1` 与 `tlsClientCiphersSha1`，否则直接拒绝。
 5. **ALTCHA 校验**：  
    - 无状态校验：`altcha-lib` 的 `verifySolution`。  
-   - 绑定校验：pathHash（含 IP 范围 scope hash 与难度指数）+ ipHash + expires + salt + link + 可选 TLS 指纹。  
+   - 绑定校验：`bindingStr` + expires + salt + link。  
    - 动态难度：通过 `landing_get_altcha_difficulty` 获取状态，超限时直接 429。  
 6. **Turnstile 校验**：  
-   - 校验 binding payload（path/ip/expires + link + 可选 TLS 指纹）与 cData。  
+   - 校验 binding payload（`bindingStr`/expires + link）与 cData。  
    - 调用 Cloudflare siteverify，并按配置校验 action/hostname。  
    - 如启用 token binding，则要求 DB 可用并在 unified check 中验证/消费。
 7. **Powdet 校验**：  
    - `powdetSolutions` 为数组，元素包含 `alg/challenge/nonce/expireAt/randomStr/hmac/link`。  
    - 需要的算法集合由 `captchaCombo` 决定（`verify-powdet`/`verify-powdet-randomx`），缺任意算法直接 403。  
    - 验证 payload 时窗（expireAt + skew + maxWindow）。  
-   - 按 `alg + ipRangeHash + pathHash + expireAt + randomStr + challenge + link (+ TLS fingerprint)` 计算 HMAC；  
+   - 按 `alg + bindingStr + expireAt + randomStr + challenge + link` 计算 HMAC；  
      HMAC 密钥使用 `common.tokenHmacKey`。  
    - 调用 Powdet `/Verify`；失败会落入短期 LRU 拒绝。  
    - 若同时启用多项验证（Turnstile/ALTCHA/Powdet ≥2），则要求 link 全部存在且一致，否则 463。
@@ -113,21 +113,21 @@ Worker 入口逻辑（`fetch`）顺序：
 
 ### 6.1 Turnstile Binding
 
-- 绑定字段：`pathHash` + `ipHash` + `expiresAt` + `link`（可选 TLS 指纹）。
+- 绑定字段：`bindingStr` + `expiresAt` + `link`（link 必填）。
+- `bindingStr` 来自 `landing.captchaBinding`（若配置）或 `decision.download.checkOriginMode` + `common.binding`。
 - cData = HMAC(pageSecret, bindingMac + nonce)。
 - DB token binding 需要 `custom-pg-rest` 与 `TURNSTILE_TOKEN_BINDING` 表。
 - 若 Turnstile 启用且需要参与多验证一致性校验，必须开启 binding（否则 link 无法携带）。
 
 ### 6.2 ALTCHA Binding
 
-- `pathHash` 中包含 `pathHash + scopeHash + exponent` 的 canonical JSON。
-- `scopeHash` 基于 `calculateIPSubnet` 的 IP 范围哈希。
-- 绑定 MAC 包含 `link`，可选 TLS 指纹写入绑定 MAC。
+- `bindingStr` 来自 `landing.captchaBinding`（若配置）或 `decision.download.checkOriginMode` + `common.binding`。
+- 绑定 MAC 包含 `link`（必填）。
 - 动态难度采用 `landing_get_altcha_difficulty` / `landing_update_altcha_difficulty`。
 
 ### 6.3 Powdet Binding
 
-- HMAC 绑定：`alg + ipRangeHash + pathHash + expireAt + randomStr + challenge + link (+ TLS fingerprint)`。
+- HMAC 绑定：`alg + bindingStr + expireAt + randomStr + challenge + link`。
 - 校验时序窗口：`expireAt` + `clockSkewSeconds` + `maxWindowSeconds`。
 - 动态难度按算法分别记录，使用 `POWDET_DIFFICULTY_STATE`（主键为 `ALGO + IP_HASH`）。
 

@@ -88,9 +88,8 @@ const renderLandingPageHtml = (path, options = {}) => {
         salt: rawAltchaChallenge.salt,
         signature: rawAltchaChallenge.signature,
         maxnumber: rawAltchaChallenge.maxnumber,
-        pathHash:
-          typeof rawAltchaChallenge.pathHash === 'string' ? rawAltchaChallenge.pathHash : '',
-        ipHash: typeof rawAltchaChallenge.ipHash === 'string' ? rawAltchaChallenge.ipHash : '',
+        bindingStr:
+          typeof rawAltchaChallenge.bindingStr === 'string' ? rawAltchaChallenge.bindingStr : '',
         binding: typeof rawAltchaChallenge.binding === 'string' ? rawAltchaChallenge.binding : '',
         bindingExpiresAt:
           typeof rawAltchaChallenge.bindingExpiresAt === 'number'
@@ -107,9 +106,8 @@ const renderLandingPageHtml = (path, options = {}) => {
       : null;
   const normalizedTurnstileBinding = rawTurnstileBinding
     ? {
-        pathHash:
-          typeof rawTurnstileBinding.pathHash === 'string' ? rawTurnstileBinding.pathHash : '',
-        ipHash: typeof rawTurnstileBinding.ipHash === 'string' ? rawTurnstileBinding.ipHash : '',
+        bindingStr:
+          typeof rawTurnstileBinding.bindingStr === 'string' ? rawTurnstileBinding.bindingStr : '',
         binding:
           typeof rawTurnstileBinding.binding === 'string'
             ? rawTurnstileBinding.binding

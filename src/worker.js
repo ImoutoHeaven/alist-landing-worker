@@ -740,61 +740,6 @@ const computeAltchaIpScope = async (clientIP, ipv4Suffix, ipv6Suffix) => {
   }
 };
 
-const ALTCHA_PATH_HASH_VERSION = 1;
-
-const normalizeAltchaExponentValue = (value) => {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return Math.max(0, Math.floor(value));
-  }
-  const parsed = Number.parseInt(value, 10);
-  if (Number.isFinite(parsed)) {
-    return Math.max(0, Math.floor(parsed));
-  }
-  return 0;
-};
-
-const buildAltchaPathBindingValue = (pathHash, scopeHash, difficultyLevel) => {
-  const normalizedPathHash = typeof pathHash === 'string' ? pathHash : '';
-  const normalizedScopeHash = typeof scopeHash === 'string' ? scopeHash : '';
-  const normalizedLevel = normalizeAltchaExponentValue(difficultyLevel);
-  return JSON.stringify({
-    v: ALTCHA_PATH_HASH_VERSION,
-    p: normalizedPathHash,
-    s: normalizedScopeHash,
-    l: normalizedLevel,
-  });
-};
-
-const parseAltchaPathBindingValue = (value) => {
-  if (typeof value !== 'string' || value.length === 0) {
-    return null;
-  }
-  let payload = null;
-  try {
-    payload = JSON.parse(value);
-  } catch (error) {
-    return null;
-  }
-  if (!payload || typeof payload !== 'object') {
-    return null;
-  }
-  const pathHash = typeof payload.p === 'string' ? payload.p : '';
-  if (!pathHash) {
-    return null;
-  }
-  const scopeHash = typeof payload.s === 'string' ? payload.s : '';
-  const level = normalizeAltchaExponentValue(payload.l);
-  const canonicalValue = buildAltchaPathBindingValue(pathHash, scopeHash, level);
-  const version = Number.isFinite(payload.v) ? Number(payload.v) : ALTCHA_PATH_HASH_VERSION;
-  return {
-    version,
-    pathHash,
-    scopeHash,
-    level,
-    canonicalValue,
-  };
-};
-
 const hopByHopHeaders = new Set([
   'connection',
   'keep-alive',
@@ -882,24 +827,41 @@ const resolveConfig = (env = {}, bootstrap = null) => {
   }
   const signSecretFromController = normalizeString(commonBootstrap.signSecret) || token;
   const alistAuthHeaders = normalizeHeaderMap(commonBootstrap.alistAuthHeaders);
-  const bindingBootstrap = commonBootstrap.binding && typeof commonBootstrap.binding === 'object'
-    ? commonBootstrap.binding
-    : {};
-  const bindingDefaultModesRaw = typeof bindingBootstrap.defaultModes === 'string'
-    ? bindingBootstrap.defaultModes.trim()
-    : '';
-  const bindingDefaultModes = Object.prototype.hasOwnProperty.call(bindingBootstrap, 'defaultModes')
-    ? bindingDefaultModesRaw
-    : 'path,asn,country,iprange';
-  const bindingVersionRaw = Number(bindingBootstrap.version);
-  const bindingVersion = Number.isFinite(bindingVersionRaw) && bindingVersionRaw > 0
-    ? Math.trunc(bindingVersionRaw)
-    : 1;
-  const bindingIpv4Suffix = normalizeString(bindingBootstrap.ipv4Suffix, '/32') || '/32';
-  const bindingIpv6Suffix = normalizeString(bindingBootstrap.ipv6Suffix, '/60') || '/60';
-  const bindingBindTls = Object.prototype.hasOwnProperty.call(bindingBootstrap, 'bindTls')
-    ? bindingBootstrap.bindTls !== false
-    : true;
+  const bindingDefaults = {
+    version: 1,
+    defaultModes: 'path,asn,country,iprange',
+    ipv4Suffix: '/32',
+    ipv6Suffix: '/60',
+    bindTls: true,
+  };
+  const normalizeBindingBootstrap = (bindingSource, fallback) => {
+    const binding = bindingSource && typeof bindingSource === 'object'
+      ? bindingSource
+      : {};
+    const defaultModesRaw = typeof binding.defaultModes === 'string'
+      ? binding.defaultModes.trim()
+      : '';
+    const defaultModes = Object.prototype.hasOwnProperty.call(binding, 'defaultModes')
+      ? defaultModesRaw
+      : fallback.defaultModes;
+    const versionRaw = Number(binding.version);
+    const version = Number.isFinite(versionRaw) && versionRaw > 0
+      ? Math.trunc(versionRaw)
+      : fallback.version;
+    const ipv4Suffix = normalizeString(binding.ipv4Suffix, fallback.ipv4Suffix) || fallback.ipv4Suffix;
+    const ipv6Suffix = normalizeString(binding.ipv6Suffix, fallback.ipv6Suffix) || fallback.ipv6Suffix;
+    const bindTls = Object.prototype.hasOwnProperty.call(binding, 'bindTls')
+      ? binding.bindTls !== false
+      : fallback.bindTls;
+    return {
+      version,
+      defaultModes,
+      ipv4Suffix,
+      ipv6Suffix,
+      bindTls,
+    };
+  };
+  const bindingConfig = normalizeBindingBootstrap(commonBootstrap.binding, bindingDefaults);
 
   const landingBootstrap = bootstrap && typeof bootstrap === 'object'
     ? bootstrap.landing || null
@@ -932,7 +894,9 @@ const resolveConfig = (env = {}, bootstrap = null) => {
   if (!frontendThemeCssUrl) {
     throw new Error('controller bootstrap.landing.frontend.themeCssUrl is required');
   }
-  const tlsFingerprintBindingEnabled = Boolean(landingBootstrap.tlsFingerprintBinding);
+  const captchaBindingConfig = landingBootstrap.captchaBinding && typeof landingBootstrap.captchaBinding === 'object'
+    ? normalizeBindingBootstrap(landingBootstrap.captchaBinding, bindingDefaults)
+    : null;
   const altchaConfig = landingBootstrap.altcha && typeof landingBootstrap.altcha === 'object'
     ? landingBootstrap.altcha
     : null;
@@ -1368,13 +1332,8 @@ const resolveConfig = (env = {}, bootstrap = null) => {
 
   return {
     token,
-    binding: {
-      version: bindingVersion,
-      defaultModes: bindingDefaultModes,
-      ipv4Suffix: bindingIpv4Suffix,
-      ipv6Suffix: bindingIpv6Suffix,
-      bindTls: bindingBindTls,
-    },
+    binding: bindingConfig,
+    captchaBinding: captchaBindingConfig,
     workerAddresses: workerAddressesValue,
     landingWorkerAddresses: normalizedLandingWorkerAddresses,
     verifyHeader: verifyHeaders,
@@ -1408,7 +1367,6 @@ const resolveConfig = (env = {}, bootstrap = null) => {
     frontendHtmlUrl,
     frontendCommonCssUrl,
     frontendThemeCssUrl,
-    tlsFingerprintBindingEnabled,
     turnstileSiteKey,
     turnstileSecretKey,
     turnstileTokenBindingEnabled,
@@ -1631,25 +1589,6 @@ const generateNonce = (byteLength = 16) => {
   }
 };
 
-const computeClientIpHash = async (clientIP) => {
-  if (!clientIP || typeof clientIP !== 'string' || clientIP.trim().length === 0) {
-    return '';
-  }
-  try {
-    return await sha256Hash(clientIP.trim());
-  } catch (error) {
-    console.error('[Binding] Failed to compute client IP hash:', error instanceof Error ? error.message : String(error));
-    return '';
-  }
-};
-
-const normalizeTlsFingerprintValue = (value) => {
-  if (typeof value !== 'string') {
-    return '';
-  }
-  return value.trim();
-};
-
 const normalizeLinkValue = (value) => {
   if (typeof value !== 'string') {
     return '';
@@ -1658,40 +1597,18 @@ const normalizeLinkValue = (value) => {
   return trimmed ? trimmed : '';
 };
 
-const computeTlsFingerprintHash = async (request) => {
-  const cf = request && typeof request === 'object' ? request.cf : null;
-  if (!cf || typeof cf !== 'object') {
-    return '';
-  }
-  const extensions = normalizeTlsFingerprintValue(cf.tlsClientExtensionsSha1);
-  const ciphers = normalizeTlsFingerprintValue(cf.tlsClientCiphersSha1);
-  if (!extensions || !ciphers) {
-    return '';
-  }
-  const fingerprint = `${extensions}|${ciphers}`;
-  try {
-    return await sha256Hash(fingerprint);
-  } catch (error) {
-    console.error('[TLS Binding] Failed to hash TLS fingerprint:', error instanceof Error ? error.message : String(error));
-    return '';
-  }
-};
-
 const buildBindingPayload = async (
   secret,
-  pathHash,
-  ipHash,
+  bindingStr,
   expiresAtSeconds,
   context = 'Binding',
   additionalData = null,
 ) => {
-  const normalizedPathHash = typeof pathHash === 'string' ? pathHash : '';
-  const normalizedIpHash = typeof ipHash === 'string' ? ipHash : '';
+  const normalizedBindingStr = typeof bindingStr === 'string' ? bindingStr : '';
   const normalizedExpires =
     Number.isFinite(expiresAtSeconds) && expiresAtSeconds > 0 ? Math.floor(expiresAtSeconds) : 0;
   const payloadObject = {
-    pathHash: normalizedPathHash,
-    ipHash: normalizedIpHash,
+    bindingStr: normalizedBindingStr,
     expiresAt: normalizedExpires,
   };
   if (additionalData && typeof additionalData === 'object') {
@@ -1704,38 +1621,32 @@ const buildBindingPayload = async (
     const macBytes = await computeHmac(secret, payload);
     const mac = encodeUrlSafeBase64(macBytes);
     return {
-      pathHash: normalizedPathHash,
-      ipHash: normalizedIpHash,
+      bindingStr: normalizedBindingStr,
       bindingMac: mac,
       expiresAt: normalizedExpires,
     };
   } catch (error) {
     console.error(`[${context}] Failed to compute binding MAC:`, error instanceof Error ? error.message : String(error));
     return {
-      pathHash: normalizedPathHash,
-      ipHash: normalizedIpHash,
+      bindingStr: normalizedBindingStr,
       bindingMac: '',
       expiresAt: normalizedExpires,
     };
   }
 };
 
-const buildAltchaBinding = async (secret, pathHash, ipHash, expiresAtSeconds, salt, tlsFingerprintHash, link) => {
+const buildAltchaBinding = async (secret, bindingStr, expiresAtSeconds, salt, link) => {
   const normalizedSalt = typeof salt === 'string' ? salt : '';
-  const normalizedTls = typeof tlsFingerprintHash === 'string' ? tlsFingerprintHash : '';
   const normalizedLink = normalizeLinkValue(link);
   const additionalData = {};
   if (normalizedSalt) {
     additionalData.salt = normalizedSalt;
   }
-  if (normalizedTls) {
-    additionalData.tlsFingerprint = normalizedTls;
-  }
   if (normalizedLink) {
     additionalData.link = normalizedLink;
   }
   const payloadData = Object.keys(additionalData).length > 0 ? additionalData : null;
-  return buildBindingPayload(secret, pathHash, ipHash, expiresAtSeconds, 'ALTCHA', payloadData);
+  return buildBindingPayload(secret, bindingStr, expiresAtSeconds, 'ALTCHA', payloadData);
 };
 
 const normalizeAltchaStateRow = (row) => {
@@ -1994,6 +1905,29 @@ const resolveBindingModes = (downloadDecision, bindingConfig) => {
     return decisionModes;
   }
   return parseCheckOriginEnv(bindingConfig?.defaultModes || '');
+};
+
+const resolveCaptchaBindingConfig = (config, downloadDecision) => {
+  const captchaBinding = config?.captchaBinding && typeof config.captchaBinding === 'object'
+    ? config.captchaBinding
+    : null;
+  const bindingConfig = captchaBinding || config?.binding;
+  const bindingModes = captchaBinding
+    ? parseCheckOriginEnv(bindingConfig?.defaultModes || '')
+    : resolveBindingModes(downloadDecision, bindingConfig);
+  return { bindingConfig, bindingModes, override: Boolean(captchaBinding) };
+};
+
+const buildCaptchaBindingStr = async (config, downloadDecision, request, clientIP, path) => {
+  const { bindingConfig, bindingModes } = resolveCaptchaBindingConfig(config, downloadDecision);
+  return buildBindingStr({
+    modes: bindingModes,
+    path,
+    cf: request?.cf,
+    clientIP,
+    bindingConfig,
+    token: config?.token,
+  });
 };
 
 const safeHeaders = (origin) => {
@@ -2760,13 +2694,6 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
       return respondJson(origin, { code: 500, message: 'powdet algorithm unavailable' }, 500);
     }
   }
-  let tlsFingerprintHash = '';
-  if (config.tlsFingerprintBindingEnabled && (needAltcha || needTurnstile || needPowdet)) {
-    tlsFingerprintHash = await computeTlsFingerprintHash(request);
-    if (!tlsFingerprintHash) {
-      return respondJson(origin, { code: 403, message: 'tls fingerprint missing' }, 403);
-    }
-  }
 
   let altchaScope = clientIP
     ? await computeAltchaIpScope(clientIP, config.ipv4Suffix, config.ipv6Suffix)
@@ -2972,23 +2899,37 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
   };
 
   const encodedPath = path;
+  const downloadDecision = ctx?.controllerState?.decision?.download;
+  const needsTurnstileBinding = needTurnstile && config.turnstileCookieExpireSeconds > 0;
+  const needsChallengeBinding = needsTurnstileBinding || needAltcha || needPowdet;
+  let captchaBindingStr = '';
+  if (needsChallengeBinding) {
+    const bindingResult = await buildCaptchaBindingStr(config, downloadDecision, request, clientIP, encodedPath);
+    if (!bindingResult.ok) {
+      return respondJson(
+        origin,
+        { code: 403, message: bindingResult.reason || 'captcha binding unavailable' },
+        403
+      );
+    }
+    captchaBindingStr = bindingResult.bindingStr;
+  }
 
   let altchaTokenHash = null;
   let expectedTurnstileCData = '';
   let payloadTurnstileNonce = '';
   const powdetChallengeStates = new Map();
   const powdetChallengesForDb = [];
-  if (needTurnstile && config.turnstileCookieExpireSeconds > 0) {
+  if (needsTurnstileBinding) {
     if (!turnstileBindingPayload) {
       return respondJson(origin, { code: 463, message: 'turnstile binding required' }, 403);
     }
-    const payloadPathHash = typeof turnstileBindingPayload.pathHash === 'string' ? turnstileBindingPayload.pathHash : '';
-    const payloadIpHash = typeof turnstileBindingPayload.ipHash === 'string' ? turnstileBindingPayload.ipHash : '';
+    const payloadBindingStr = typeof turnstileBindingPayload.bindingStr === 'string'
+      ? turnstileBindingPayload.bindingStr
+      : '';
     const payloadBindingMac = typeof turnstileBindingPayload.binding === 'string'
       ? turnstileBindingPayload.binding
-      : typeof turnstileBindingPayload.bindingMac === 'string'
-        ? turnstileBindingPayload.bindingMac
-        : '';
+      : '';
     const payloadLink = normalizeLinkValue(turnstileBindingPayload.link);
     const rawBindingExpires = turnstileBindingPayload.bindingExpiresAt ?? turnstileBindingPayload.expiresAt;
     const payloadBindingExpiresAt = Number.isFinite(rawBindingExpires)
@@ -3001,8 +2942,11 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
       ? turnstileBindingPayload.cdata
       : '';
     const payloadBindingCData = payloadBindingCDataRaw.replace(/=+$/u, '');
-    if (!payloadPathHash || !payloadBindingMac || !Number.isFinite(payloadBindingExpiresAt) || payloadBindingExpiresAt <= 0) {
+    if (!payloadBindingStr || !payloadBindingMac || !Number.isFinite(payloadBindingExpiresAt) || payloadBindingExpiresAt <= 0) {
       return respondJson(origin, { code: 463, message: 'turnstile binding missing' }, 403);
+    }
+    if (!payloadLink) {
+      return respondJson(origin, { code: 463, message: 'turnstile binding missing link' }, 403);
     }
     if (!payloadTurnstileNonce) {
       return respondJson(origin, { code: 463, message: 'turnstile binding missing nonce' }, 403);
@@ -3010,27 +2954,22 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
     if (!/^[A-Za-z0-9_-]+$/.test(payloadTurnstileNonce)) {
       return respondJson(origin, { code: 463, message: 'turnstile binding nonce invalid' }, 403);
     }
-    const expectedPathHash = typeof filepathHash === 'string' ? filepathHash : '';
-    const expectedIpHash = await computeClientIpHash(clientIP);
     const nowSeconds = Math.floor(Date.now() / 1000);
     if (payloadBindingExpiresAt < nowSeconds) {
       return respondJson(origin, { code: 463, message: 'turnstile binding expired' }, 403);
     }
-    const turnstileBindingExtra = {
-      ...(config.tlsFingerprintBindingEnabled ? { tlsFingerprint: tlsFingerprintHash } : {}),
-      ...(payloadLink ? { link: payloadLink } : {}),
-    };
+    if (payloadBindingStr !== captchaBindingStr) {
+      return respondJson(origin, { code: 463, message: 'turnstile binding mismatch' }, 403);
+    }
+    const turnstileBindingExtra = { link: payloadLink };
     const expectedBinding = await buildBindingPayload(
       config.pageSecret,
-      expectedPathHash,
-      expectedIpHash,
+      captchaBindingStr,
       payloadBindingExpiresAt,
       'Turnstile',
       Object.keys(turnstileBindingExtra).length > 0 ? turnstileBindingExtra : null
     );
     const mismatch =
-      payloadPathHash !== expectedBinding.pathHash ||
-      payloadIpHash !== expectedBinding.ipHash ||
       payloadBindingMac !== expectedBinding.bindingMac ||
       payloadBindingExpiresAt !== expectedBinding.expiresAt;
     if (mismatch) {
@@ -3065,8 +3004,7 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
       }
       // Stateful 验证会在 unified check 中额外检查 DB 的 EXPIRES_AT 字段
 
-      const payloadPathHash = typeof altchaPayload.pathHash === 'string' ? altchaPayload.pathHash : '';
-      const payloadIpHash = typeof altchaPayload.ipHash === 'string' ? altchaPayload.ipHash : '';
+      const payloadBindingStr = typeof altchaPayload.bindingStr === 'string' ? altchaPayload.bindingStr : '';
       const payloadBindingMac = typeof altchaPayload.binding === 'string' ? altchaPayload.binding : '';
       const payloadBindingExpireRaw = altchaPayload.bindingExpiresAt;
       const payloadBindingExpiresAt = Number.isFinite(payloadBindingExpireRaw)
@@ -3077,43 +3015,28 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
       if (!payloadSalt) {
         return respondJson(origin, { code: 403, message: 'ALTCHA binding missing salt' }, 403);
       }
-      if (!payloadPathHash || !payloadBindingMac || !Number.isFinite(payloadBindingExpiresAt) || payloadBindingExpiresAt <= 0) {
+      if (!payloadBindingStr || !payloadBindingMac || !Number.isFinite(payloadBindingExpiresAt) || payloadBindingExpiresAt <= 0) {
         return respondJson(origin, { code: 403, message: 'ALTCHA binding missing' }, 403);
       }
+      if (!payloadLink) {
+        return respondJson(origin, { code: 403, message: 'ALTCHA binding missing link' }, 403);
+      }
 
-      const pathHashDetails = parseAltchaPathBindingValue(payloadPathHash);
-      if (!pathHashDetails) {
-        return respondJson(origin, { code: 463, message: 'ALTCHA binding path invalid' }, 403);
-      }
-      if (pathHashDetails.canonicalValue !== payloadPathHash) {
-        return respondJson(origin, { code: 463, message: 'ALTCHA binding path tampered' }, 403);
-      }
-      const expectedPathHash = typeof filepathHash === 'string' ? filepathHash : '';
-      const expectedIpHash = await computeClientIpHash(clientIP);
       const nowSeconds = Math.floor(Date.now() / 1000);
       if (payloadBindingExpiresAt < nowSeconds) {
         return respondJson(origin, { code: 463, message: 'ALTCHA binding expired' }, 403);
       }
-      if (!expectedPathHash || pathHashDetails.pathHash !== expectedPathHash) {
-        return respondJson(origin, { code: 463, message: 'ALTCHA binding path mismatch' }, 403);
+      if (payloadBindingStr !== captchaBindingStr) {
+        return respondJson(origin, { code: 463, message: 'ALTCHA binding mismatch' }, 403);
       }
-      const expectedScopeHash = altchaScope?.ipHash || '';
-      if (pathHashDetails.scopeHash !== expectedScopeHash) {
-        return respondJson(origin, { code: 463, message: 'ALTCHA binding scope mismatch' }, 403);
-      }
-      const canonicalPathHash = pathHashDetails.canonicalValue;
       const expectedBinding = await buildAltchaBinding(
         config.pageSecret,
-        canonicalPathHash,
-        expectedIpHash,
+        captchaBindingStr,
         payloadBindingExpiresAt,
         payloadSalt,
-        tlsFingerprintHash,
         payloadLink
       );
       const bindingMismatch =
-        canonicalPathHash !== expectedBinding.pathHash ||
-        payloadIpHash !== expectedBinding.ipHash ||
         payloadBindingMac !== expectedBinding.bindingMac ||
         payloadBindingExpiresAt !== expectedBinding.expiresAt;
       if (bindingMismatch) {
@@ -3154,10 +3077,9 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
     const nowSeconds = Math.floor(Date.now() / 1000);
     const clockSkew = Number.isFinite(config.powdetClockSkewSeconds) ? config.powdetClockSkewSeconds : 60;
     const maxWindow = Number.isFinite(config.powdetMaxWindowSeconds) ? config.powdetMaxWindowSeconds : 600;
-    const expectedPathHash = typeof filepathHash === 'string' ? filepathHash : '';
-    const expectedIpRangeHash = powdetScope?.ipRange ? await sha256Hash(powdetScope.ipRange) : '';
-    if (!expectedPathHash || !expectedIpRangeHash) {
-      return respondJson(origin, { code: 403, message: 'powdet binding context missing' }, 403);
+    const expectedBindingStr = captchaBindingStr;
+    if (!expectedBindingStr) {
+      return respondJson(origin, { code: 403, message: 'powdet binding unavailable' }, 403);
     }
 
     let powdetLinkValue = null;
@@ -3173,6 +3095,9 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
 
       if (!payloadChallenge || !payloadNonce || !payloadRandom || !payloadHmac || !Number.isFinite(payloadExpireAt)) {
         return respondJson(origin, { code: 403, message: 'powdet payload missing' }, 403);
+      }
+      if (!payloadLink) {
+        return respondJson(origin, { code: 403, message: 'powdet link missing' }, 403);
       }
       if (payloadExpireAt + clockSkew < nowSeconds) {
         return respondJson(origin, { code: 463, message: 'powdet challenge expired' }, 403);
@@ -3191,18 +3116,12 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
       try {
         const bindingPayload = {
           alg,
-          ipRangeHash: expectedIpRangeHash,
-          pathHash: expectedPathHash,
+          bindingStr: expectedBindingStr,
           expireAt: payloadExpireAt,
           randomStr: payloadRandom,
           challenge: payloadChallenge,
+          link: payloadLink,
         };
-        if (payloadLink) {
-          bindingPayload.link = payloadLink;
-        }
-        if (config.tlsFingerprintBindingEnabled) {
-          bindingPayload.tlsFingerprint = tlsFingerprintHash;
-        }
         expectedHmac = await computePowdetHmac(config, bindingPayload);
       } catch (error) {
         console.error('[Powdet] Failed to compute HMAC:', error instanceof Error ? error.message : String(error));
@@ -3701,7 +3620,6 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
     config.minBandwidthBytesPerSecond,
     config.maxDurationSeconds
   );
-  const downloadDecision = ctx?.controllerState?.decision?.download;
   if (!downloadDecision) {
     return respondJson(origin, { code: 503, message: 'controller download decision unavailable' }, 503);
   }
@@ -4598,16 +4516,21 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
   const needsPowdetChallenge = needPowdet;
   const shouldGenerateBindings = !shouldRedirect && (needsAltchaChallenge || needsTurnstileBinding || needsPowdetChallenge);
   const challengeLink = shouldGenerateBindings ? generateNonce(16) : '';
-  let tlsFingerprintHash = '';
-  if (config.tlsFingerprintBindingEnabled && shouldGenerateBindings) {
-    tlsFingerprintHash = await computeTlsFingerprintHash(request);
-    if (!tlsFingerprintHash) {
-      return respondJson(origin, { code: 403, message: 'tls fingerprint missing' }, 403);
-    }
+  if (shouldGenerateBindings && !challengeLink) {
+    return respondJson(origin, { code: 500, message: 'challenge link unavailable' }, 500);
   }
-  let decodedChallengePath = '';
+  let captchaBindingStr = '';
   if (shouldGenerateBindings) {
-    decodedChallengePath = decodedPath;
+    const downloadDecision = ctx?.controllerState?.decision?.download;
+    const bindingResult = await buildCaptchaBindingStr(config, downloadDecision, request, clientIP, encodedPath);
+    if (!bindingResult.ok) {
+      return respondJson(
+        origin,
+        { code: 403, message: bindingResult.reason || 'captcha binding unavailable' },
+        403
+      );
+    }
+    captchaBindingStr = bindingResult.bindingStr;
   }
 
   let altchaScopeForChallenge = null;
@@ -4672,22 +4595,16 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
 
   if (!shouldRedirect && needsTurnstileBinding) {
     try {
-      const bindingPathHash = decodedChallengePath ? await sha256Hash(decodedChallengePath) : '';
-      const bindingIpHash = await computeClientIpHash(clientIP);
       const nowSeconds = Math.floor(Date.now() / 1000);
       const ttlSeconds = Number.isFinite(config.turnstileCookieExpireSeconds)
         ? Math.floor(config.turnstileCookieExpireSeconds)
         : 0;
       if (ttlSeconds > 0) {
         const expiresAt = nowSeconds + ttlSeconds;
-        const turnstileBindingExtra = {
-          ...(config.tlsFingerprintBindingEnabled ? { tlsFingerprint: tlsFingerprintHash } : {}),
-          ...(challengeLink ? { link: challengeLink } : {}),
-        };
+        const turnstileBindingExtra = { link: challengeLink };
         const binding = await buildBindingPayload(
           config.pageSecret,
-          bindingPathHash,
-          bindingIpHash,
+          captchaBindingStr,
           expiresAt,
           'Turnstile',
           Object.keys(turnstileBindingExtra).length > 0 ? turnstileBindingExtra : null
@@ -4697,8 +4614,7 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
           const cdata = await buildTurnstileCData(config.pageSecret, binding.bindingMac, nonce);
           if (nonce && cdata) {
             turnstileBindingPayload = {
-              pathHash: binding.pathHash,
-              ipHash: binding.ipHash,
+              bindingStr: binding.bindingStr,
               binding: binding.bindingMac,
               bindingExpiresAt: binding.expiresAt,
               nonce,
@@ -4719,14 +4635,6 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
 
   if (!shouldRedirect && needsAltchaChallenge) {
     try {
-      const baseChallengePathHash = decodedChallengePath ? await sha256Hash(decodedChallengePath) : '';
-      const scopeHashForBinding = altchaScopeForChallenge?.ipHash || '';
-      const challengePathHash = buildAltchaPathBindingValue(
-        baseChallengePathHash,
-        scopeHashForBinding,
-        altchaEffectiveExponent
-      );
-      const challengeIpHash = await computeClientIpHash(clientIP);
       const baseNowSeconds = Math.floor(Date.now() / 1000);
       const configuredTtlSeconds = Number.isFinite(config.altchaTokenExpire) && config.altchaTokenExpire > 0
         ? Math.floor(config.altchaTokenExpire)
@@ -4740,11 +4648,9 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
       });
       const challengeBinding = await buildAltchaBinding(
         config.pageSecret,
-        challengePathHash,
-        challengeIpHash,
+        captchaBindingStr,
         challengeExpiresAt,
         challenge.salt,
-        tlsFingerprintHash,
         challengeLink
       );
       altchaChallengePayload = {
@@ -4753,8 +4659,7 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
         salt: challenge.salt,
         signature: challenge.signature,
         maxnumber: challenge.maxnumber,
-        pathHash: challengeBinding.pathHash,
-        ipHash: challengeBinding.ipHash,
+        bindingStr: challengeBinding.bindingStr,
         binding: challengeBinding.bindingMac,
         bindingExpiresAt: challengeBinding.expiresAt,
         link: challengeLink,
@@ -4769,10 +4674,9 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
       const baseNowSeconds = Math.floor(Date.now() / 1000);
       const expireSeconds = Number.isFinite(config.powdetExpireSeconds) ? config.powdetExpireSeconds : 180;
       const expireAt = baseNowSeconds + expireSeconds;
-      const pathHash = decodedChallengePath ? await sha256Hash(decodedChallengePath) : '';
-      const ipRangeHash = powdetScopeForChallenge?.ipRange ? await sha256Hash(powdetScopeForChallenge.ipRange) : '';
-      if (!pathHash || !ipRangeHash) {
-        throw new Error('powdet binding context missing');
+      const bindingStr = captchaBindingStr;
+      if (!bindingStr) {
+        throw new Error('powdet binding unavailable');
       }
 
       for (const alg of powdetRequiredAlgorithms) {
@@ -4821,18 +4725,12 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
         const challenge = await fetchPowdetChallenge(config, alg, difficultyLevel);
         const bindingPayload = {
           alg,
-          ipRangeHash,
-          pathHash,
+          bindingStr,
           expireAt,
           randomStr,
           challenge,
+          link: challengeLink,
         };
-        if (challengeLink) {
-          bindingPayload.link = challengeLink;
-        }
-        if (config.tlsFingerprintBindingEnabled) {
-          bindingPayload.tlsFingerprint = tlsFingerprintHash;
-        }
         const hmac = await computePowdetHmac(config, bindingPayload);
         let staticBase = algoCfg.staticBaseUrl;
         if (!staticBase) {

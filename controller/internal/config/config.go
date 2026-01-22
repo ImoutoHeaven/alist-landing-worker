@@ -368,8 +368,8 @@ type LandingFrontendConfig struct {
 type LandingConfig struct {
 	PageSecret            string                     `yaml:"pageSecret" json:"pageSecret"`
 	Frontend              LandingFrontendConfig      `yaml:"frontend" json:"frontend"`
-	TlsFingerprintBinding bool                       `yaml:"tlsFingerprintBinding" json:"tlsFingerprintBinding"`
 	Captcha               LandingCaptchaConfig       `yaml:"captcha" json:"captcha"`
+	CaptchaBinding        *BindingConfig             `yaml:"captchaBinding,omitempty" json:"captchaBinding,omitempty"`
 	Turnstile             LandingTurnstileConfig     `yaml:"turnstile" json:"turnstile"`
 	Altcha                LandingAltchaConfig        `yaml:"altcha" json:"altcha"`
 	Powdet                LandingPowdetConfig        `yaml:"powdet" json:"powdet"`
@@ -939,6 +939,10 @@ func (l *LandingConfig) ensureDefaults(envName string) error {
 
 	if err := l.DB.ensureDefaults(envName); err != nil {
 		return fmt.Errorf("landing.db invalid for env %s: %w", envName, err)
+	}
+
+	if l.CaptchaBinding != nil {
+		l.CaptchaBinding.ensureDefaults()
 	}
 
 	l.Crypt.ensureDefaults()

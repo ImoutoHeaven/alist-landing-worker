@@ -32,7 +32,12 @@ envs:
         htmlUrl: "https://cdn.jsdelivr.net/gh/your-org/alist-landing-worker@<commit>/src/assets/landing/landing.html" # Landing HTML URL (required)
         commonCssUrl: "https://cdn.jsdelivr.net/gh/your-org/alist-landing-worker@<commit>/src/assets/landing/landing.common.css" # Common layout CSS URL (required)
         themeCssUrl: "https://cdn.jsdelivr.net/gh/your-org/alist-landing-worker@<commit>/src/assets/landing/landing.minimal.css" # Default theme CSS URL (required)
-      tlsFingerprintBinding: false # Bind challenges to tlsClientExtensionsSha1+tlsClientCiphersSha1 when true
+      captchaBinding:
+        version: 1 # bindingStr schema version used by challenges
+        defaultModes: "path,iprange" # Challenge binding modes; overrides common/decision when set
+        ipv4Suffix: "/32" # CIDR suffix for IPv4 binding (iprange)
+        ipv6Suffix: "/128" # CIDR suffix for IPv6 binding (iprange)
+        bindTls: true # Whether to require TLS fingerprint binding when tls mode is enabled
       captcha:
         defaultCombo: ["verify-altcha"] # Ordered challenge pipeline; allowed: verify-altcha|verify-turn|verify-turnstile|verify-powdet|verify-powdet-randomx|verify-none; empty array = no challenge
       turnstile:
@@ -436,7 +441,12 @@ envs:
         htmlUrl: "https://cdn.jsdelivr.net/gh/your-org/alist-landing-worker@<commit>/src/assets/landing/landing.html" # Landing HTML URL (required)
         commonCssUrl: "https://cdn.jsdelivr.net/gh/your-org/alist-landing-worker@<commit>/src/assets/landing/landing.common.css" # Common layout CSS URL (required)
         themeCssUrl: "https://cdn.jsdelivr.net/gh/your-org/alist-landing-worker@<commit>/src/assets/landing/landing.minimal.css" # Default theme CSS URL (required)
-      tlsFingerprintBinding: false # Bind challenges to tlsClientExtensionsSha1+tlsClientCiphersSha1 when true
+      captchaBinding:
+        version: 1
+        defaultModes: "path,iprange"
+        ipv4Suffix: "/32"
+        ipv6Suffix: "/128"
+        bindTls: true
       captcha:
         defaultCombo: ["verify-altcha"] # Same enum as staging: verify-altcha|verify-turn|verify-turnstile|verify-powdet|verify-powdet-randomx|verify-none; order defines pipeline
       turnstile:
