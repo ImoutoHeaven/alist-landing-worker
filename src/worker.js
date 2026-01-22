@@ -890,7 +890,7 @@ const resolveConfig = (env = {}, bootstrap = null) => {
     : '';
   const bindingDefaultModes = Object.prototype.hasOwnProperty.call(bindingBootstrap, 'defaultModes')
     ? bindingDefaultModesRaw
-    : 'asn,iprange';
+    : 'path,asn,country,iprange';
   const bindingVersionRaw = Number(bindingBootstrap.version);
   const bindingVersion = Number.isFinite(bindingVersionRaw) && bindingVersionRaw > 0
     ? Math.trunc(bindingVersionRaw)

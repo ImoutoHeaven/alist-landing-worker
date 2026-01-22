@@ -307,22 +307,6 @@ export async function fetchControllerState(request, env, options = {}) {
       return null;
     }
 
-    let decisionPayload = null;
-    if (profile.dynamic) {
-      decisionPayload = await getDecisionForRequest(env, {
-        role: env.ROLE,
-        env: env.ENV,
-        instance_id: env.INSTANCE_ID,
-        profileId: profile.id,
-        filepath,
-        request: ctx,
-        bootstrapVersion: bootstrap?.configVersion,
-      });
-    }
-
-    const staticDecision = buildStaticLandingDecision(profile, bootstrap);
-    const effectiveDecision = mergeLandingDecision(staticDecision, decisionPayload?.landing);
-
     const downloadPaths = bootstrap?.download?.paths || {};
     const downloadGlobal = downloadPaths.global || {};
     const downloadRules = Array.isArray(downloadPaths.pathRules) ? downloadPaths.pathRules : [];
@@ -331,11 +315,57 @@ export async function fetchControllerState(request, env, options = {}) {
     const downloadDefaultProfileId = pickString(downloadGlobal.defaultProfileId, 'default');
     const downloadProfileId = pickString(downloadRule?.profileId, downloadDefaultProfileId);
     const downloadProfile = findProfileById(downloadProfiles, downloadProfileId);
+    const landingNeedsDecision = Boolean(profile.dynamic);
+    const downloadNeedsDecision = Boolean(downloadProfile?.dynamic);
+
+    let landingDecisionPayload = null;
+    let downloadDecisionPayload = null;
+    const decisionTasks = [];
+
+    if (landingNeedsDecision) {
+      decisionTasks.push(
+        getDecisionForRequest(env, {
+          role: 'landing',
+          env: env.ENV,
+          instance_id: env.INSTANCE_ID,
+          profileId: profile.id,
+          filepath,
+          request: ctx,
+          bootstrapVersion: bootstrap?.configVersion,
+        }).then((payload) => {
+          landingDecisionPayload = payload;
+        })
+      );
+    }
+
+    if (downloadNeedsDecision) {
+      decisionTasks.push(
+        getDecisionForRequest(env, {
+          role: 'download',
+          env: env.ENV,
+          instance_id: env.INSTANCE_ID,
+          profileId: downloadProfile.id,
+          filepath,
+          request: ctx,
+          bootstrapVersion: bootstrap?.configVersion,
+        }).then((payload) => {
+          downloadDecisionPayload = payload;
+        })
+      );
+    }
+
+    if (decisionTasks.length > 0) {
+      await Promise.all(decisionTasks);
+    }
+
+    const staticDecision = buildStaticLandingDecision(profile, bootstrap);
+    const effectiveDecision = mergeLandingDecision(staticDecision, landingDecisionPayload?.landing);
+
     const staticDownloadDecision = downloadProfile
       ? buildStaticDownloadDecision(downloadProfile, bootstrap)
       : null;
     const effectiveDownloadDecision = staticDownloadDecision
-      ? mergeDownloadDecision(staticDownloadDecision, decisionPayload?.download)
+      ? mergeDownloadDecision(staticDownloadDecision, downloadDecisionPayload?.download)
       : null;
 
     return {

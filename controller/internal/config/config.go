@@ -46,7 +46,7 @@ const (
 	defaultRateLimitIPv4Suffix      = "/32"
 	defaultRateLimitIPv6Suffix      = "/60"
 	defaultBindingVersion           = 1
-	defaultBindingModes             = "asn,iprange"
+	defaultBindingModes             = "path,asn,country,iprange"
 	defaultBindingIPv4Suffix        = "/32"
 	defaultBindingIPv6Suffix        = "/60"
 	defaultRateLimitBlockSeconds    = 600

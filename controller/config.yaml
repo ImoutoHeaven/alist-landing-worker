@@ -21,7 +21,7 @@ envs:
         - "https://landing-staging.example.com" # Landing worker origins allowed to issue tickets
       binding:
         version: 1 # bindingStr schema version
-        defaultModes: "asn,iprange" # Default binding modes for download decision fallback
+        defaultModes: "path,asn,country,iprange" # Default binding modes for download decision fallback
         ipv4Suffix: "/32" # CIDR suffix for IPv4 binding (iprange)
         ipv6Suffix: "/60" # CIDR suffix for IPv6 binding (iprange)
         bindTls: true # Whether to require TLS fingerprint binding when tls mode is enabled
@@ -267,7 +267,7 @@ envs:
           protectHttpCodes: [429, 499, 500, 502, 503, 504] # Status codes considered errors; list of ints
           cleanupPercentage: 1 # Chance (0-100) to clean throttle table
           tableName: "THROTTLE_PROTECTION" # Table storing throttle state (must match init2.sql)
-      originBindingDefault: "asn,iprange" # Default binding mode; allowed tokens: ip|iprange|country|continent|region|city|asn|tls|path (comma-separated); empty string disables binding
+      originBindingDefault: "path,asn,country,iprange" # Default binding mode; allowed tokens: ip|iprange|country|continent|region|city|asn|tls|path (comma-separated); empty string disables binding
       pathRules: # Ignored by controller-overhaul; kept only as legacy placeholder (controller 仅看 paths.*)
         blacklist: []
         whitelist: []
@@ -292,10 +292,10 @@ envs:
               # checkOriginMode：origin 绑定/校验模式（逗号分隔的 token 列表）；枚举值：
               #   ip | iprange | country | continent | region | city | asn | tls | path
               # 例如：
-              #   "asn,iprange"（默认）  → 按 ASN + IP 段绑定；
+              #   "path,asn,country,iprange"（默认）  → 按 path + ASN + country + IP 段绑定；
               #   "ip"                   → 单 IP 绑定；
               #   "country,asn"          → 国家 + ASN 绑定。
-              checkOriginMode: "asn,iprange"
+              checkOriginMode: "path,asn,country,iprange"
               # fairQueueProfile：FQ 策略名称；必须出现在 download.fairQueue.profiles.* 中，例如：default|strict
               fairQueueProfile: "default"
               # throttleProfile：Throttle 策略名称；必须出现在 download.throttleProfiles.* 中，例如：default
@@ -305,7 +305,7 @@ envs:
             dynamic: false
             actions:
               pathAction: ["block"] # 管理路径全部阻断
-              checkOriginMode: "asn,iprange"
+              checkOriginMode: "path,asn,country,iprange"
               fairQueueProfile: "default"
               throttleProfile: "default"
               blockReason: "blocked by rule block_admin" # 可选，供日志/前端提示使用
@@ -313,14 +313,14 @@ envs:
             dynamic: false
             actions:
               pathAction: ["skip-origin"] # 对公共分享路径优先使用缓存/短路
-              checkOriginMode: "asn,iprange"
+              checkOriginMode: "path,asn,country,iprange"
               fairQueueProfile: "default"
               throttleProfile: "default"
           - id: "download-public-share-passthrough"
             dynamic: false
             actions:
               pathAction: ["asis"] # 公共分享中某些路径完全 passthrough
-              checkOriginMode: "asn,iprange"
+              checkOriginMode: "path,asn,country,iprange"
               fairQueueProfile: "default"
               throttleProfile: "default"
         # pathRules：按 pattern → profileId 映射；priority 越大优先级越高，未设置时视为 0
@@ -425,7 +425,7 @@ envs:
         - "https://landing.example.com"
       binding:
         version: 1
-        defaultModes: "asn,iprange"
+        defaultModes: "path,asn,country,iprange"
         ipv4Suffix: "/32"
         ipv6Suffix: "/60"
         bindTls: true
@@ -643,7 +643,7 @@ envs:
           protectHttpCodes: [429, 499, 500, 502, 503, 504]
           cleanupPercentage: 1
           tableName: "THROTTLE_PROTECTION"
-      originBindingDefault: "asn,iprange" # Default binding mode; allowed tokens: ip|iprange|country|continent|region|city|asn|tls|path; empty string disables binding
+      originBindingDefault: "path,asn,country,iprange" # Default binding mode; allowed tokens: ip|iprange|country|continent|region|city|asn|tls|path; empty string disables binding
       pathRules: # Ignored by controller-overhaul; kept only as legacy placeholder (controller 仅看 paths.*)
         blacklist: []
         whitelist: []
@@ -657,14 +657,14 @@ envs:
             dynamic: false
             actions:
               pathAction: []
-              checkOriginMode: "asn,iprange"
+              checkOriginMode: "path,asn,country,iprange"
               fairQueueProfile: "default"
               throttleProfile: "default"
           - id: "download-block-admin"
             dynamic: false
             actions:
               pathAction: ["block"]
-              checkOriginMode: "asn,iprange"
+              checkOriginMode: "path,asn,country,iprange"
               fairQueueProfile: "default"
               throttleProfile: "default"
               blockReason: "blocked by rule block_admin"
@@ -672,14 +672,14 @@ envs:
             dynamic: false
             actions:
               pathAction: ["skip-origin"]
-              checkOriginMode: "asn,iprange"
+              checkOriginMode: "path,asn,country,iprange"
               fairQueueProfile: "default"
               throttleProfile: "default"
           - id: "download-public-share-passthrough"
             dynamic: false
             actions:
               pathAction: ["asis"]
-              checkOriginMode: "asn,iprange"
+              checkOriginMode: "path,asn,country,iprange"
               fairQueueProfile: "default"
               throttleProfile: "default"
         pathRules:
