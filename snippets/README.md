@@ -51,8 +51,8 @@ const CONFIG = [
 - `enableInfoEndpoint`（boolean）：当请求路径为 `/info` 时生效，使用 `path` 查询参数作为签名输入，并基于该路径重新匹配规则。
 - `stripDownloadPrefix`（boolean）：仅对非 `/info` 请求生效，将 `/d/...`、`/p/...` 归一化后再参与签名计算；路径匹配仍使用原始路径。
 - `captchaPrecheck`（boolean）：启用验证码 payload 预校验（默认 false，未开启时忽略验证码参数）。
-- `PAGE_SECRET`（string）：用于 Turnstile/ALTCHA 绑定 MAC 与 cData 预校验。
-- `TOKEN_HMAC_KEY`（string）：用于 powdet HMAC 与 bindingStr 预校验（通常为 `common.tokenHmacKey`）。
+- `PAGE_SECRET`（string）：用于 Turnstile/ALTCHA 绑定 MAC 与 cData 预校验；为空时回落 `HMAC_SECRET`。
+- `TOKEN_HMAC_KEY`（string）：用于 powdet HMAC 与 bindingStr 预校验（通常为 `common.tokenHmacKey`）；为空时回落 `HMAC_SECRET`。
 - `CAPTCHA_BINDING`（object）：powdet 预校验时用的绑定配置（`version/defaultModes/ipv4Suffix/ipv6Suffix/bindTls`），应与 controller 的 `landing.captchaBinding` 一致。
 
 ### `sign` 格式

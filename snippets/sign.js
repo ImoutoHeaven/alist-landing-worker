@@ -555,8 +555,18 @@ const precheckCaptcha = async (request, url, config, bindingPathInput, nowSecond
     return null;
   }
 
-  const pageSecret = typeof config.PAGE_SECRET === "string" ? config.PAGE_SECRET : "";
-  const tokenHmacKey = typeof config.TOKEN_HMAC_KEY === "string" ? config.TOKEN_HMAC_KEY : "";
+  const pageSecret =
+    typeof config.PAGE_SECRET === "string"
+      ? config.PAGE_SECRET
+      : typeof config.HMAC_SECRET === "string"
+      ? config.HMAC_SECRET
+      : "";
+  const tokenHmacKey =
+    typeof config.TOKEN_HMAC_KEY === "string"
+      ? config.TOKEN_HMAC_KEY
+      : typeof config.HMAC_SECRET === "string"
+      ? config.HMAC_SECRET
+      : "";
   const rawCaptchaBinding =
     config.CAPTCHA_BINDING && typeof config.CAPTCHA_BINDING === "object"
       ? config.CAPTCHA_BINDING
