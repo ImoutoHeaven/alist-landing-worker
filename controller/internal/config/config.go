@@ -45,6 +45,10 @@ const (
 	defaultDownloadCacheOverrideMax = "500MB"
 	defaultRateLimitIPv4Suffix      = "/32"
 	defaultRateLimitIPv6Suffix      = "/60"
+	defaultBindingVersion           = 1
+	defaultBindingModes             = "asn,iprange"
+	defaultBindingIPv4Suffix        = "/32"
+	defaultBindingIPv6Suffix        = "/60"
 	defaultRateLimitBlockSeconds    = 600
 	defaultThrottleObserveWindow    = 60
 	defaultThrottleWindowSeconds    = 60
@@ -110,6 +114,24 @@ func normalizeAddressList(values []string) []string {
 	return cleaned
 }
 
+func (b *BindingConfig) ensureDefaults() {
+	if b.Version <= 0 {
+		b.Version = defaultBindingVersion
+	}
+	if strings.TrimSpace(b.DefaultModes) == "" {
+		b.DefaultModes = defaultBindingModes
+	}
+	if strings.TrimSpace(b.IPv4Suffix) == "" {
+		b.IPv4Suffix = defaultBindingIPv4Suffix
+	}
+	if strings.TrimSpace(b.IPv6Suffix) == "" {
+		b.IPv6Suffix = defaultBindingIPv6Suffix
+	}
+	if b.BindTLS == nil {
+		b.BindTLS = boolPtr(true)
+	}
+}
+
 // PathProfile describes a reusable action set for path matching.
 type PathProfile struct {
 	ID      string         `yaml:"id" json:"id"`
@@ -156,6 +178,16 @@ type CommonConfig struct {
 	SignSecret             string            `yaml:"signSecret" json:"signSecret"`
 	WorkerAddresses        []string          `yaml:"workerAddresses" json:"workerAddresses"`
 	LandingWorkerAddresses []string          `yaml:"landingWorkerAddresses" json:"landingWorkerAddresses"`
+	Binding                BindingConfig     `yaml:"binding" json:"binding"`
+}
+
+// BindingConfig controls binding string normalization defaults.
+type BindingConfig struct {
+	Version      int    `yaml:"version" json:"version"`
+	DefaultModes string `yaml:"defaultModes" json:"defaultModes"`
+	IPv4Suffix   string `yaml:"ipv4Suffix" json:"ipv4Suffix"`
+	IPv6Suffix   string `yaml:"ipv6Suffix" json:"ipv6Suffix"`
+	BindTLS      *bool  `yaml:"bindTls" json:"bindTls"`
 }
 
 // LandingCaptchaConfig carries captcha defaults for landing.
@@ -471,13 +503,7 @@ type DownloadFairQueueConfig struct {
 
 // DownloadAuthConfig controls request integrity checks.
 type DownloadAuthConfig struct {
-	SignCheck               *bool  `yaml:"signCheck" json:"signCheck"`
-	HashCheck               *bool  `yaml:"hashCheck" json:"hashCheck"`
-	WorkerCheck             *bool  `yaml:"workerCheck" json:"workerCheck"`
-	AdditionCheck           *bool  `yaml:"additionCheck" json:"additionCheck"`
-	AdditionExpireTimeCheck *bool  `yaml:"additionExpireTimeCheck" json:"additionExpireTimeCheck"`
-	IPv4Only                *bool  `yaml:"ipv4Only" json:"ipv4Only"`
-	SignSecret              string `yaml:"signSecret" json:"signSecret"`
+	IPv4Only *bool `yaml:"ipv4Only" json:"ipv4Only"`
 }
 
 // DownloadConfig collects download-side strategy and upstream config.
@@ -698,6 +724,7 @@ func (e *EnvConfig) validate(envName string) error {
 	if len(e.Common.LandingWorkerAddresses) == 0 {
 		return fmt.Errorf("common.landingWorkerAddresses is required for env %s", envName)
 	}
+	e.Common.Binding.ensureDefaults()
 
 	e.Download.OriginBindingDefault = strings.TrimSpace(e.Download.OriginBindingDefault)
 
@@ -1211,7 +1238,11 @@ func (d *DownloadConfig) ensureDefaults(common CommonConfig, envName string) err
 		}
 	}
 
-	d.Auth.ensureDefaults(common)
+	if strings.TrimSpace(d.OriginBindingDefault) == "" {
+		d.OriginBindingDefault = strings.TrimSpace(common.Binding.DefaultModes)
+	}
+
+	d.Auth.ensureDefaults()
 
 	return nil
 }
@@ -1401,27 +1432,9 @@ func (f *DownloadFairQueueConfig) ensureDefaults(envName string) error {
 	return nil
 }
 
-func (a *DownloadAuthConfig) ensureDefaults(common CommonConfig) {
-	if a.SignCheck == nil {
-		a.SignCheck = boolPtr(true)
-	}
-	if a.HashCheck == nil {
-		a.HashCheck = boolPtr(true)
-	}
-	if a.WorkerCheck == nil {
-		a.WorkerCheck = boolPtr(true)
-	}
-	if a.AdditionCheck == nil {
-		a.AdditionCheck = boolPtr(true)
-	}
-	if a.AdditionExpireTimeCheck == nil {
-		a.AdditionExpireTimeCheck = boolPtr(true)
-	}
+func (a *DownloadAuthConfig) ensureDefaults() {
 	if a.IPv4Only == nil {
 		a.IPv4Only = boolPtr(true)
-	}
-	if a.SignSecret == "" {
-		a.SignSecret = common.SignSecret
 	}
 }
 

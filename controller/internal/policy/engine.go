@@ -96,6 +96,10 @@ func (e *Engine) EvalDecision(ctx DecisionContext) (DecisionResult, error) {
 		res.Landing = &ld
 		res.Meta.RuleIds = append(res.Meta.RuleIds, meta.RuleIds...)
 		res.Meta.Explain = append(res.Meta.Explain, meta.Explain...)
+		dl, dlMeta := e.evalDownloadDecision(ctx)
+		res.Download = &dl
+		res.Meta.RuleIds = append(res.Meta.RuleIds, dlMeta.RuleIds...)
+		res.Meta.Explain = append(res.Meta.Explain, dlMeta.Explain...)
 	default:
 		res.Meta.Explain = append(res.Meta.Explain, "unknown role: "+ctx.Role)
 	}

@@ -14,11 +14,17 @@ envs:
         Authorization: "Bearer staging-alist-token" # Extra headers sent to AList (token, cookies etc.)
       tokenHmacKeyId: "default" # Key ID placed in issued tokens
       tokenHmacKey: "replace-with-hmac-key" # HMAC secret for issuing/validating tickets
-      signSecret: "" # Optional legacy sign secret consumed by download worker
+      signSecret: "" # Optional override secret for landing ?sign verification (defaults to tokenHmacKey)
       workerAddresses:
         - "https://download-staging.example.com" # Download worker endpoints for issued tickets; non-empty list in prod
       landingWorkerAddresses:
         - "https://landing-staging.example.com" # Landing worker origins allowed to issue tickets
+      binding:
+        version: 1 # bindingStr schema version
+        defaultModes: "asn,iprange" # Default binding modes for download decision fallback
+        ipv4Suffix: "/32" # CIDR suffix for IPv4 binding (iprange)
+        ipv6Suffix: "/60" # CIDR suffix for IPv6 binding (iprange)
+        bindTls: true # Whether to require TLS fingerprint binding when tls mode is enabled
     landing: # Landing-side configuration for staging
       pageSecret: "replace-with-page-secret" # Used to sign/validate landing page state/token (non-empty when signatures required)
       frontend:
@@ -206,11 +212,6 @@ envs:
       cache-override-time: "30m" # Required when override-cache-control=true; supports <number>[s|m|h|d|w|y]
       cache-override-max-size: "500MB" # Max file size eligible for override; supports <number>[B|KB|MB|GB]
       auth:
-        signCheck: true # Enforce signature validation on generated links; default=true
-        hashCheck: true # Verify hash on download requests; default=true
-        workerCheck: true # Validate worker identity in ticket; default=true
-        additionCheck: true # Validate addition payload (extra metadata); default=true
-        additionExpireTimeCheck: true # Enforce addition payload expiry; default=true
         ipv4Only: true # Only allow IPv4 clients for downloads; default=true
       db:
         mode: "custom-pg-rest" # Database mode used by download worker; allowed: "" | "custom-pg-rest"
@@ -266,7 +267,7 @@ envs:
           protectHttpCodes: [429, 499, 500, 502, 503, 504] # Status codes considered errors; list of ints
           cleanupPercentage: 1 # Chance (0-100) to clean throttle table
           tableName: "THROTTLE_PROTECTION" # Table storing throttle state (must match init2.sql)
-      originBindingDefault: "asn,iprange" # Default origin binding mode; allowed tokens: ip|iprange|country|continent|region|city|asn (comma-separated); empty string disables origin binding (no origin snapshot check)
+      originBindingDefault: "asn,iprange" # Default binding mode; allowed tokens: ip|iprange|country|continent|region|city|asn|tls|path (comma-separated); empty string disables binding
       pathRules: # Ignored by controller-overhaul; kept only as legacy placeholder (controller 仅看 paths.*)
         blacklist: []
         whitelist: []
@@ -283,17 +284,13 @@ envs:
             actions:
               # pathAction：下载路径行为列表；枚举值：
               # - block        ：直接阻断
-              # - skip-sign    ：跳过签名校验
-              # - skip-hash    ：跳过哈希校验
-              # - skip-worker  ：跳过 Worker 逻辑（直连上游/缓存）
-              # - skip-origin  ：跳过 origin 请求（使用缓存或直接 404）
+              # - skip-origin  ：跳过 binding 校验（使用缓存或直接短路）
               # - asis         ：保持默认行为（与 pathRules 时代 "asis" 含义一致）
               # 组合规则：
-              # - "block" 和 "asis" 互斥；出现其中之一时应单独使用；
-              # - 其他标记可以按需组合，例如 ["skip-sign","skip-hash"]。
+              # - "block" 和 "asis" 互斥；出现其中之一时应单独使用。
               pathAction: []
               # checkOriginMode：origin 绑定/校验模式（逗号分隔的 token 列表）；枚举值：
-              #   ip | iprange | country | continent | region | city | asn
+              #   ip | iprange | country | continent | region | city | asn | tls | path
               # 例如：
               #   "asn,iprange"（默认）  → 按 ASN + IP 段绑定；
               #   "ip"                   → 单 IP 绑定；
@@ -426,6 +423,12 @@ envs:
         - "https://download.example.com"
       landingWorkerAddresses:
         - "https://landing.example.com"
+      binding:
+        version: 1
+        defaultModes: "asn,iprange"
+        ipv4Suffix: "/32"
+        ipv6Suffix: "/60"
+        bindTls: true
     # All prod sub-sections mirror staging; allowed values/defaults/ranges are identical.
     landing: # Production landing config; field meanings match staging.landing
       pageSecret: "replace-with-page-secret"
@@ -590,11 +593,6 @@ envs:
       cache-override-time: "30m" # Required when override-cache-control=true; supports <number>[s|m|h|d|w|y]
       cache-override-max-size: "500MB" # Max file size eligible for override; supports <number>[B|KB|MB|GB]
       auth:
-        signCheck: true
-        hashCheck: true
-        workerCheck: true
-        additionCheck: true
-        additionExpireTimeCheck: true
         ipv4Only: true
       db:
         mode: "custom-pg-rest"
@@ -645,7 +643,7 @@ envs:
           protectHttpCodes: [429, 499, 500, 502, 503, 504]
           cleanupPercentage: 1
           tableName: "THROTTLE_PROTECTION"
-      originBindingDefault: "asn,iprange" # Default origin binding mode; allowed tokens: ip|iprange|country|continent|region|city|asn; empty string disables origin binding (no origin snapshot check)
+      originBindingDefault: "asn,iprange" # Default binding mode; allowed tokens: ip|iprange|country|continent|region|city|asn|tls|path; empty string disables binding
       pathRules: # Ignored by controller-overhaul; kept only as legacy placeholder (controller 仅看 paths.*)
         blacklist: []
         whitelist: []

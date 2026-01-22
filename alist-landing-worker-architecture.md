@@ -28,7 +28,7 @@ Worker 启动后会从 controller 拉取 `bootstrap`，并基于 `paths.*` 匹�
 
 重要字段：
 
-- `common`：`tokenHmacKey`、`signSecret`、`workerAddresses`、`landingWorkerAddresses`、`alistBaseUrl`、`alistAuthHeaders`
+- `common`：`tokenHmacKey`、`signSecret`、`workerAddresses`、`landingWorkerAddresses`、`binding`、`alistBaseUrl`、`alistAuthHeaders`
 - `landing`：`pageSecret`、`frontend.*`、`turnstile/altcha/powdet`、`paths.*`、`db`、`crypt`、`webDownloader`、`additional`
 
 没有 controller 或 bootstrap/decision 获取失败时，Worker 会返回 503。
@@ -91,8 +91,9 @@ Worker 入口逻辑（`fetch`）顺序：
     调用 `POST {alistBaseUrl}/api/fs/get`，默认 `Authorization: tokenHmacKey`，并附加 `alistAuthHeaders`。
 11. **生成下载 URL**：  
     - 选择 download worker：随机或 HRW（`downloadWorkerHrwEnabled` + 小文件阈值）。  
-    - 生成 `hashSign` / `workerSign`。  
-    - 构造 `additionalInfo`（见第 8 节），并写入可选 `idle` 记录。
+    - 生成 `bindingStr`（基于 `decision.download.checkOriginMode` 与 `common.binding`）。  
+    - 构造 `payload`（`expireTime/filesize/idle_timeout/encrypt/bindingStr/bindingVer/isCrypted`）并签名为 `payloadSign`。  
+    - 写入可选 `idle` 记录。
 12. 返回 JSON：包含 `download.url`、`meta`，并在需要时返回 webDownloader / decrypt 参数。
 
 ## 5. 普通路径处理（落地页或快速 302）
@@ -177,26 +178,31 @@ Worker 内部维护 LRU 缓存用于：
 
 ## 8. 下载票据与 Origin 绑定
 
-### 8.1 签名结构
+### 8.1 payloadSign
 
-- `sign = base64url(HMAC_SHA256(signSecret, path + ":" + expire)) + ":" + expire`
-- `hashSign = HMAC_SHA256(signSecret, base64(path) + ":" + expire)`
-- `workerSign = HMAC_SHA256(signSecret, JSON.stringify({path, worker_addr}) + ":" + expire)`
+- `payloadSign = base64url(HMAC_SHA256(tokenHmacKey, payload + ":" + expire)) + ":" + expire`  
+  `expire` 来自 landing `?sign`（`signSecret` 取自 `common.signSecret`，为空时回落到 `tokenHmacKey`）。
 
-### 8.2 additionalInfo
+### 8.2 payload
 
-`additionalInfo` 为 JSON 的 Base64（去掉末尾 `=`），字段包含：
+`payload` 为 JSON 的 Base64Url（无 padding），字段包含：
 
-- `pathHash`（`sha256(path)`）
-- `filesize`
+- `v`（当前为 1）
 - `expireTime`
+- `filesize`
 - `idle_timeout`
-- `encrypt`：AES-256-GCM 加密的 origin snapshot（IP/ASN/国家/城市/issuer 等）
+- `encrypt`：AES-256-GCM 加密的 `{ v:2, issuer, workerAddress }`
+- `bindingStr`
+- `bindingVer`
 - `isCrypted`
 
-`additionalInfoSign = HMAC_SHA256(signSecret, additionalInfo + ":" + expire)`。
+### 8.3 bindingStr
 
-### 8.3 Idle 记录
+- `canonical = "v{binding.version}|pathHash|ipScope|country|continent|region|city|asn|tlsHash"`  
+- 不参与绑定的字段统一填 `any`。  
+- `bindingStr = base64url(HMAC_SHA256(tokenHmacKey, canonical))`（由 `decision.download.checkOriginMode` + `common.binding` 决定参与字段）。
+
+### 8.4 Idle 记录
 
 当 `landing.db.idleTimeoutSeconds > 0` 时，会调用 `download_update_last_active` 写入 `DOWNLOAD_LAST_ACTIVE_TABLE` 初始记录。
 

@@ -9,9 +9,10 @@ import {
   applyVerifyHeaders,
 } from './utils.js';
 import {
-  buildOriginSnapshot,
-  encryptOriginSnapshot,
+  buildBindingStr,
+  encryptBindingPayload,
   getClientIp,
+  parseCheckOriginEnv,
 } from './origin-binding.js';
 import { createChallenge, verifySolution } from 'altcha-lib';
 import { renderLandingPage } from './frontend.js';
@@ -881,6 +882,24 @@ const resolveConfig = (env = {}, bootstrap = null) => {
   }
   const signSecretFromController = normalizeString(commonBootstrap.signSecret) || token;
   const alistAuthHeaders = normalizeHeaderMap(commonBootstrap.alistAuthHeaders);
+  const bindingBootstrap = commonBootstrap.binding && typeof commonBootstrap.binding === 'object'
+    ? commonBootstrap.binding
+    : {};
+  const bindingDefaultModesRaw = typeof bindingBootstrap.defaultModes === 'string'
+    ? bindingBootstrap.defaultModes.trim()
+    : '';
+  const bindingDefaultModes = Object.prototype.hasOwnProperty.call(bindingBootstrap, 'defaultModes')
+    ? bindingDefaultModesRaw
+    : 'asn,iprange';
+  const bindingVersionRaw = Number(bindingBootstrap.version);
+  const bindingVersion = Number.isFinite(bindingVersionRaw) && bindingVersionRaw > 0
+    ? Math.trunc(bindingVersionRaw)
+    : 1;
+  const bindingIpv4Suffix = normalizeString(bindingBootstrap.ipv4Suffix, '/32') || '/32';
+  const bindingIpv6Suffix = normalizeString(bindingBootstrap.ipv6Suffix, '/60') || '/60';
+  const bindingBindTls = Object.prototype.hasOwnProperty.call(bindingBootstrap, 'bindTls')
+    ? bindingBootstrap.bindTls !== false
+    : true;
 
   const landingBootstrap = bootstrap && typeof bootstrap === 'object'
     ? bootstrap.landing || null
@@ -1354,6 +1373,13 @@ const resolveConfig = (env = {}, bootstrap = null) => {
 
   return {
     token,
+    binding: {
+      version: bindingVersion,
+      defaultModes: bindingDefaultModes,
+      ipv4Suffix: bindingIpv4Suffix,
+      ipv6Suffix: bindingIpv6Suffix,
+      bindTls: bindingBindTls,
+    },
     workerAddresses: workerAddressesValue,
     landingWorkerAddresses: normalizedLandingWorkerAddresses,
     verifyHeader: verifyHeaders,
@@ -1590,6 +1616,14 @@ const encodeUrlSafeBase64 = (bytes) =>
   btoa(String.fromCharCode(...bytes))
     .replace(/\+/g, '-')
     .replace(/\//g, '_');
+
+const encodeUrlSafeBase64NoPad = (bytes) => encodeUrlSafeBase64(bytes).replace(/=+$/u, '');
+
+const encodeJsonToBase64Url = (value) => {
+  const json = JSON.stringify(value);
+  const bytes = new TextEncoder().encode(json);
+  return encodeUrlSafeBase64NoPad(bytes);
+};
 
 const generateNonce = (byteLength = 16) => {
   try {
@@ -1960,6 +1994,14 @@ const extractExpireFromSign = (signature) => {
   return Number.isNaN(expire) ? 0 : expire;
 };
 
+const resolveBindingModes = (downloadDecision, bindingConfig) => {
+  const decisionModes = parseCheckOriginEnv(downloadDecision?.checkOriginMode || '');
+  if (decisionModes.length > 0) {
+    return decisionModes;
+  }
+  return parseCheckOriginEnv(bindingConfig?.defaultModes || '');
+};
+
 const safeHeaders = (origin) => {
   const headers = new Headers();
   if (origin) {
@@ -2288,86 +2330,10 @@ const fetchFilesizeFromCache = async (config, pathHash) => {
   return 0;
 };
 
-const createAdditionalParams = async (config, request, decodedPath, clientIP, signExpire, idleTimeoutSeconds, options = {}) => {
-  if (!config.appendAdditional) return null;
-  if (!request) {
-    throw new Error('request missing for additional info');
-  }
-  let { sizeBytes, expireTime, fileInfo, isCrypted } = options;
-  const safeIdleTimeoutSeconds =
-    Number.isFinite(idleTimeoutSeconds) && idleTimeoutSeconds >= 0
-      ? Math.floor(idleTimeoutSeconds)
-      : 0;
-
-  const pathHash = await sha256Hash(decodedPath);
-
-  let resolvedSize = parseFileSize(sizeBytes);
-  if (resolvedSize <= 0 && fileInfo) {
-    resolvedSize = parseFileSize(fileInfo.size);
-  }
-
-  if (resolvedSize <= 0) {
-    // Check the shared filesize cache before falling back to AList API.
-    const cachedSize = await fetchFilesizeFromCache(config, pathHash);
-    if (cachedSize > 0) {
-      resolvedSize = cachedSize;
-    }
-  }
-
-  if (resolvedSize <= 0) {
-    if (!fileInfo) {
-      fileInfo = await fetchAlistFileInfo(config, decodedPath, clientIP);
-    }
-    resolvedSize = parseFileSize(fileInfo?.size);
-  }
-
-  if (!Number.isFinite(resolvedSize) || resolvedSize < 0) {
-    resolvedSize = 0;
-  }
-  sizeBytes = resolvedSize;
-
-  if (!Number.isFinite(expireTime) || expireTime <= 0) {
-    expireTime = calculateExpireTimestamp(
-      sizeBytes,
-      config.minDurationSeconds,
-      config.minBandwidthBytesPerSecond,
-      config.maxDurationSeconds
-    );
-  } else if (Number.isFinite(config.maxDurationSeconds) && config.maxDurationSeconds > 0) {
-    const nowSeconds = Math.floor(Date.now() / 1000);
-    const maxAllowedExpire = nowSeconds + Math.floor(config.maxDurationSeconds);
-    expireTime = Math.min(expireTime, maxAllowedExpire);
-  }
-
-  const clientIpForOrigin = getClientIp(request);
-  if (!clientIpForOrigin) {
-    throw new Error('client ip missing for origin binding');
-  }
-  const snapshot = buildOriginSnapshot(request.cf, clientIpForOrigin);
-  if (!snapshot) {
-    throw new Error('origin snapshot unavailable');
-  }
-  snapshot.issuer = new URL(request.url).origin;
-  const encrypt = await encryptOriginSnapshot(snapshot, config.token);
-
-  const payload = JSON.stringify({
-    pathHash,
-    filesize: sizeBytes,
-    expireTime,
-    idle_timeout: safeIdleTimeoutSeconds,
-    encrypt,
-    isCrypted: isCrypted === true,
-  });
-  const rawAdditionalInfo = encodeTextToBase64(payload);
-  const additionalInfo = rawAdditionalInfo.replace(/=+$/, '');
-  const additionalInfoSign = await hmacSha256Sign(config.signSecret, additionalInfo, signExpire);
-  return { additionalInfo, additionalInfoSign };
-};
-
 const createDownloadURL = async (
   config,
   request,
-  { encodedPath, decodedPath, sign, clientIP, sizeBytes, expireTime, fileInfo, isCrypt = false },
+  { encodedPath, decodedPath, sign, clientIP, sizeBytes, expireTime, fileInfo, isCrypt = false, downloadDecision },
   ctx = null
 ) => {
   const workerBaseURL = await selectDownloadWorker(config, decodedPath, sizeBytes, fileInfo);
@@ -2395,31 +2361,44 @@ const createDownloadURL = async (
   }
 
   const expire = extractExpireFromSign(sign);
+  const bindingModes = resolveBindingModes(downloadDecision, config.binding);
+  const bindingResult = await buildBindingStr({
+    modes: bindingModes,
+    path: encodedPath,
+    cf: request.cf,
+    clientIP,
+    bindingConfig: config.binding,
+    token: config.token,
+  });
+  if (!bindingResult.ok) {
+    const error = new Error(bindingResult.reason || 'binding unavailable');
+    error.status = 403;
+    throw error;
+  }
 
-  const pathBytes = new TextEncoder().encode(decodedPath);
-  const base64Path = uint8ToBase64(pathBytes);
-  const hashSign = await hmacSha256Sign(config.signSecret, base64Path, expire);
+  const issuer = new URL(request.url).origin;
+  const workerOrigin = new URL(workerBaseURL).origin;
+  const encrypt = await encryptBindingPayload(
+    { v: 2, issuer, workerAddress: workerOrigin },
+    config.token
+  );
 
-  const workerSignData = JSON.stringify({ path: decodedPath, worker_addr: workerBaseURL });
-  const workerSign = await hmacSha256Sign(config.signSecret, workerSignData, expire);
+  const payloadObject = {
+    v: 1,
+    expireTime: resolvedExpireTime,
+    filesize: normalizedSizeBytes,
+    idle_timeout: idleTimeoutSeconds,
+    encrypt,
+    bindingStr: bindingResult.bindingStr,
+    bindingVer: config.binding?.version || 1,
+    isCrypted: isCrypt === true,
+  };
+  const payload = encodeJsonToBase64Url(payloadObject);
+  const payloadSign = await hmacSha256Sign(config.token, payload, expire);
 
   const downloadURLObj = new URL(encodedPath, workerBaseURL);
-  downloadURLObj.searchParams.set('sign', sign);
-  downloadURLObj.searchParams.set('hashSign', hashSign);
-  downloadURLObj.searchParams.set('workerSign', workerSign);
-
-  if (config.appendAdditional) {
-    const additionalParams = await createAdditionalParams(config, request, decodedPath, clientIP, expire, idleTimeoutSeconds, {
-      sizeBytes,
-      expireTime,
-      fileInfo,
-      isCrypted: Boolean(isCrypt),
-    });
-    if (additionalParams) {
-      downloadURLObj.searchParams.set('additionalInfo', additionalParams.additionalInfo);
-      downloadURLObj.searchParams.set('additionalInfoSign', additionalParams.additionalInfoSign);
-    }
-  }
+  downloadURLObj.searchParams.set('payload', payload);
+  downloadURLObj.searchParams.set('payloadSign', payloadSign);
 
   if (idleTimeoutSeconds > 0 && ctx && typeof ctx.waitUntil === 'function') {
     ctx.waitUntil(
@@ -3728,16 +3707,28 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
     config.minBandwidthBytesPerSecond,
     config.maxDurationSeconds
   );
-  let downloadURL = await createDownloadURL(config, request, {
-    encodedPath,
-    decodedPath,
-    sign,
-    clientIP,
-    sizeBytes,
-    expireTime,
-    fileInfo,
-    isCrypt,
-  }, ctx);
+  const downloadDecision = ctx?.controllerState?.decision?.download;
+  if (!downloadDecision) {
+    return respondJson(origin, { code: 503, message: 'controller download decision unavailable' }, 503);
+  }
+  let downloadURL = '';
+  try {
+    downloadURL = await createDownloadURL(config, request, {
+      encodedPath,
+      decodedPath,
+      sign,
+      clientIP,
+      sizeBytes,
+      expireTime,
+      fileInfo,
+      isCrypt,
+      downloadDecision,
+    }, ctx);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'download url generation failed';
+    const status = Number.isFinite(error?.status) ? error.status : 500;
+    return respondJson(origin, { code: status, message }, status);
+  }
 
   const needWebDownloader =
     config.webDownloaderEnabled && (isCrypt || forceWebDownloader);
@@ -4571,17 +4562,28 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
       config.minBandwidthBytesPerSecond,
       config.maxDurationSeconds
     );
-
-    const downloadURL = await createDownloadURL(config, request, {
-      encodedPath,
-      decodedPath,
-      sign,
-      clientIP,
-      sizeBytes,
-      expireTime,
-      fileInfo,
-      isCrypt,
-    }, ctx);
+    const downloadDecision = ctx?.controllerState?.decision?.download;
+    if (!downloadDecision) {
+      return respondJson(origin, { code: 503, message: 'controller download decision unavailable' }, 503);
+    }
+    let downloadURL = '';
+    try {
+      downloadURL = await createDownloadURL(config, request, {
+        encodedPath,
+        decodedPath,
+        sign,
+        clientIP,
+        sizeBytes,
+        expireTime,
+        fileInfo,
+        isCrypt,
+        downloadDecision,
+      }, ctx);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'download url generation failed';
+      const status = Number.isFinite(error?.status) ? error.status : 500;
+      return respondJson(origin, { code: status, message }, status);
+    }
 
     // Return 302 redirect
     return new Response(null, {

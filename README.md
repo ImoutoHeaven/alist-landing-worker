@@ -7,7 +7,7 @@ Cloudflare Workers 版 AList 下载落地网关。它位于 AList 与 download w
 - 控制面驱动配置与路径决策（bootstrap + 动态 decision）。
 - Turnstile / ALTCHA / Powdet 多层验证（Powdet 支持 argon2id/randomx 多算法），支持 token binding、TLS 指纹绑定与跨验证 link 绑定。
 - CF Rate Limiter + PostgREST 统一检查（限流 + token 消费 + 文件大小缓存）。
-- 生成 download worker 票据：`sign` / `hashSign` / `workerSign` / `additionalInfo`。
+- 生成 download worker 票据：`payload` / `payloadSign`（含 bindingStr）。
 - 快速 302、落地页模式、webDownloader 分段下载与客户端解密。
 - 下载 worker 选择支持随机或 HRW（小文件稳定分配）。
 
@@ -24,7 +24,7 @@ Cloudflare Workers 版 AList 下载落地网关。它位于 AList 与 download w
 
 ### Controller 下发
 
-- `common`：`tokenHmacKey`、`signSecret`、`workerAddresses`、`landingWorkerAddresses`、`alistBaseUrl`、`alistAuthHeaders`
+- `common`：`tokenHmacKey`、`signSecret`、`workerAddresses`、`landingWorkerAddresses`、`binding`、`alistBaseUrl`、`alistAuthHeaders`
 - `landing`：`pageSecret`、`frontend.*`、`turnstile/altcha/powdet`、`paths.*`、`db`、`crypt`、`webDownloader` 等
 
 ### Worker 环境变量（wrangler/Cloudflare）
