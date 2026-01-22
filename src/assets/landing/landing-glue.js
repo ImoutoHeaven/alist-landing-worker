@@ -2019,8 +2019,8 @@
       powdetReady: false,
       altchaSolution: null,
       turnstileToken: null,
-      powdetNonceByAlg: {},
-      powdetActiveAlg: '',
+      powdetNonceByKey: {},
+      powdetActiveKey: '',
       powdetWorkers: {},
       altchaIssuedAt: 0,
       turnstileIssuedAt: 0,
@@ -5376,6 +5376,29 @@
   const getPowdetChallenges = () =>
     Array.isArray(state.security.powdetChallenges) ? state.security.powdetChallenges : [];
 
+  const getPowdetChallengeKey = (challenge) => {
+    const alg = typeof challenge?.alg === 'string' ? challenge.alg.trim() : '';
+    const randomStr = typeof challenge?.randomStr === 'string' ? challenge.randomStr : '';
+    const challengeValue = typeof challenge?.challenge === 'string' ? challenge.challenge : '';
+    if (!alg) {
+      return '';
+    }
+    if (randomStr) {
+      return `${alg}|${randomStr}`;
+    }
+    if (challengeValue) {
+      return `${alg}|${challengeValue}`;
+    }
+    return '';
+  };
+
+  const isPowdetChallengeActive = (key) => {
+    if (!key) {
+      return false;
+    }
+    return getPowdetChallenges().some((item) => getPowdetChallengeKey(item) === key);
+  };
+
   const getPowdetRequiredAlgorithms = () => {
     const algs = [];
     for (const item of getPowdetChallenges()) {
@@ -5392,12 +5415,13 @@
     if (challenges.length === 0) {
       return [];
     }
-    const nonceMap = state.verification.powdetNonceByAlg || {};
+    const nonceMap = state.verification.powdetNonceByKey || {};
     const solutions = [];
     for (const challenge of challenges) {
       const alg = typeof challenge?.alg === 'string' ? challenge.alg.trim() : '';
-      const nonce = typeof nonceMap[alg] === 'string' ? nonceMap[alg] : '';
-      if (!alg || !nonce) {
+      const key = getPowdetChallengeKey(challenge);
+      const nonce = typeof nonceMap[key] === 'string' ? nonceMap[key] : '';
+      if (!alg || !key || !nonce) {
         return null;
       }
       solutions.push({
@@ -5429,14 +5453,17 @@
   };
 
   const refreshPowdetReadyState = () => {
-    const requiredAlgs = getPowdetRequiredAlgorithms();
-    state.verification.needPowdet = requiredAlgs.length > 0;
+    const challenges = getPowdetChallenges();
+    state.verification.needPowdet = challenges.length > 0;
     if (!state.verification.needPowdet) {
       state.verification.powdetReady = true;
       return;
     }
-    const nonceMap = state.verification.powdetNonceByAlg || {};
-    const ready = requiredAlgs.every((alg) => typeof nonceMap[alg] === 'string' && nonceMap[alg]);
+    const nonceMap = state.verification.powdetNonceByKey || {};
+    const ready = challenges.every((challenge) => {
+      const key = getPowdetChallengeKey(challenge);
+      return key && typeof nonceMap[key] === 'string' && nonceMap[key];
+    });
     state.verification.powdetReady = ready;
     if (ready) {
       const payload = buildPowdetSolutionsPayload();
@@ -5639,15 +5666,15 @@
     }
   };
 
-  const markPowdetSolved = (alg, nonce) => {
-    const normalizedAlg = typeof alg === 'string' ? alg.trim() : '';
-    if (!normalizedAlg) {
+  const markPowdetSolved = (key, nonce) => {
+    const normalizedKey = typeof key === 'string' ? key.trim() : '';
+    if (!normalizedKey || !isPowdetChallengeActive(normalizedKey)) {
       return;
     }
-    if (!state.verification.powdetNonceByAlg || typeof state.verification.powdetNonceByAlg !== 'object') {
-      state.verification.powdetNonceByAlg = {};
+    if (!state.verification.powdetNonceByKey || typeof state.verification.powdetNonceByKey !== 'object') {
+      state.verification.powdetNonceByKey = {};
     }
-    state.verification.powdetNonceByAlg[normalizedAlg] = String(nonce || '');
+    state.verification.powdetNonceByKey[normalizedKey] = String(nonce || '');
     refreshPowdetReadyState();
     updateButtonState();
     maybeAnnouncePowReady();
@@ -5779,7 +5806,11 @@
     if (!alg || alg !== POWDET_ALGO_RANDOMX) {
       return;
     }
-    if (state.verification.powdetNonceByAlg?.[alg]) {
+    const key = getPowdetChallengeKey(powdetChallenge);
+    if (!key) {
+      return;
+    }
+    if (state.verification.powdetNonceByKey?.[key]) {
       return;
     }
     const payload = decodePowdetChallengePayload(powdetChallenge.challenge);
@@ -5802,13 +5833,13 @@
 
     const worker = new Worker(getRandomxWorkerUrl(), { type: 'module' });
     state.verification.powdetWorkers = state.verification.powdetWorkers || {};
-    state.verification.powdetWorkers[alg] = worker;
+    state.verification.powdetWorkers[key] = worker;
     worker.onmessage = (event) => {
       const data = event.data || {};
       if (data && typeof data.nonce === 'string' && data.nonce) {
         worker.terminate();
-        delete state.verification.powdetWorkers[alg];
-        markPowdetSolved(alg, data.nonce);
+        delete state.verification.powdetWorkers[key];
+        markPowdetSolved(key, data.nonce);
         return;
       }
       if (data && data.error) {
@@ -5832,7 +5863,11 @@
       return;
     }
     const alg = typeof powdetChallenge.alg === 'string' ? powdetChallenge.alg.trim() : POWDET_ALGO_ARGON2ID;
-    if (state.verification.powdetNonceByAlg?.[alg]) {
+    const key = getPowdetChallengeKey(powdetChallenge);
+    if (!key) {
+      return;
+    }
+    if (state.verification.powdetNonceByKey?.[key]) {
       return;
     }
     const { challenge, expireAt, randomStr, hmac } = powdetChallenge;
@@ -5884,7 +5919,7 @@
     ensureInput('pow-hmac', 'pow_hmac', hmac);
     ensureInput('pow-nonce', 'pow_nonce', '');
 
-    state.verification.powdetActiveAlg = alg;
+    state.verification.powdetActiveKey = key;
 
     const maxWaitMs = 10000;
     const start = Date.now();
@@ -5989,7 +6024,11 @@
       if (!alg) {
         continue;
       }
-      if (state.verification.powdetNonceByAlg?.[alg]) {
+      const key = getPowdetChallengeKey(challenge);
+      if (!key) {
+        continue;
+      }
+      if (state.verification.powdetNonceByKey?.[key]) {
         continue;
       }
       if (alg === POWDET_ALGO_ARGON2ID) {
@@ -6008,8 +6047,10 @@
       if (input) {
         input.value = String(nonce || '');
       }
-      const alg = state.verification.powdetActiveAlg || POWDET_ALGO_ARGON2ID;
-      markPowdetSolved(alg, nonce);
+      const key = state.verification.powdetActiveKey || '';
+      if (key) {
+        markPowdetSolved(key, nonce);
+      }
     } catch (error) {
       console.error('powdet callback failed', error);
     }
@@ -6121,8 +6162,8 @@
     state.verification.turnstileIssuedAt = 0;
     state.verification.turnstileReady = !state.verification.needTurnstile;
     state.verification.powdetReady = !state.verification.needPowdet;
-    state.verification.powdetNonceByAlg = {};
-    state.verification.powdetActiveAlg = '';
+    state.verification.powdetNonceByKey = {};
+    state.verification.powdetActiveKey = '';
     if (state.verification.powdetWorkers && typeof state.verification.powdetWorkers === 'object') {
       Object.values(state.verification.powdetWorkers).forEach((worker) => {
         try {
