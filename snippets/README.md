@@ -4,6 +4,7 @@
 
 - `/info?path=...` 语义（用 `path` 参数作为签名输入）
 - `/d/...`、`/p/...` 前缀归一化（可选）
+- 预校验验证码 payload 的 HMAC 与 link（Turnstile / ALTCHA / Powdet）
 
 无状态 PoW/Turnstile snippet 与其前端资源已迁移至：
 
@@ -49,6 +50,10 @@ const CONFIG = [
 - `HMAC_SECRET`（string）：签名密钥；为空则不校验 `?sign=`，直接放行。
 - `enableInfoEndpoint`（boolean）：当请求路径为 `/info` 时生效，使用 `path` 查询参数作为签名输入，并基于该路径重新匹配规则。
 - `stripDownloadPrefix`（boolean）：仅对非 `/info` 请求生效，将 `/d/...`、`/p/...` 归一化后再参与签名计算；路径匹配仍使用原始路径。
+- `captchaPrecheck`（boolean）：启用验证码 payload 预校验（默认 false，未开启时忽略验证码参数）。
+- `PAGE_SECRET`（string）：用于 Turnstile/ALTCHA 绑定 MAC 与 cData 预校验。
+- `TOKEN_HMAC_KEY`（string）：用于 powdet HMAC 与 bindingStr 预校验（通常为 `common.tokenHmacKey`）。
+- `CAPTCHA_BINDING`（object）：powdet 预校验时用的绑定配置（`version/defaultModes/ipv4Suffix/ipv6Suffix/bindTls`），应与 controller 的 `landing.captchaBinding` 一致。
 
 ### `sign` 格式
 
@@ -64,6 +69,7 @@ sign = base64url(HMAC_SHA256(secret, authPath + ":" + expire)) + ":" + expire
 - 未匹配到配置时返回 `500 misconfigured`。
 - `OPTIONS` 返回 204（包含 CORS 头）。
 - 签名无效/过期/不匹配返回 401。
+- 当 `captchaPrecheck=true` 且请求携带 `x-turnstile-binding` / `altChallengeResult` / `powdetSolutions` 时，会执行绑定 HMAC 与 link 预校验；相关密钥或配置缺失会返回 `500 misconfigured`。
 
 ## 构建
 
