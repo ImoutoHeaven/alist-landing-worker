@@ -288,7 +288,6 @@ envs:
             actions:
               # pathAction：下载路径行为列表；枚举值：
               # - block        ：直接阻断
-              # - skip-origin  ：跳过 binding 校验（使用缓存或直接短路）
               # - asis         ：保持默认行为（与 pathRules 时代 "asis" 含义一致）
               # 组合规则：
               # - "block" 和 "asis" 互斥；出现其中之一时应单独使用。
@@ -316,7 +315,7 @@ envs:
           - id: "download-public-share"
             dynamic: false
             actions:
-              pathAction: ["skip-origin"] # 对公共分享路径优先使用缓存/短路
+              pathAction: [] # 公共分享路径保持默认行为
               checkOriginMode: "path,asn,country,iprange"
               fairQueueProfile: "default"
               throttleProfile: "default"
@@ -679,7 +678,7 @@ envs:
           - id: "download-public-share"
             dynamic: false
             actions:
-              pathAction: ["skip-origin"]
+              pathAction: []
               checkOriginMode: "path,asn,country,iprange"
               fairQueueProfile: "default"
               throttleProfile: "default"
