@@ -11,6 +11,11 @@ const (
 	defaultDecisionTTL = 60
 )
 
+var downloadPathActionAllowlist = map[string]struct{}{
+	"block": {},
+	"asis":  {},
+}
+
 // Engine keeps config and decision logic.
 type Engine struct {
 	cfg *config.RootConfig
@@ -42,6 +47,29 @@ func toStringSlice(v any) []string {
 	default:
 		return nil
 	}
+}
+
+func normalizeDownloadPathActions(actions []string) []string {
+	if len(actions) == 0 {
+		return nil
+	}
+	normalized := make([]string, 0, len(actions))
+	seen := make(map[string]struct{}, len(actions))
+	for _, action := range actions {
+		token := strings.ToLower(strings.TrimSpace(action))
+		if token == "" {
+			continue
+		}
+		if _, ok := downloadPathActionAllowlist[token]; !ok {
+			continue
+		}
+		if _, ok := seen[token]; ok {
+			continue
+		}
+		seen[token] = struct{}{}
+		normalized = append(normalized, token)
+	}
+	return normalized
 }
 
 func toIntPointer(v any) *int {
@@ -211,7 +239,7 @@ func applyDownloadActions(profile config.PathProfile, base DownloadDecision) Dow
 	}
 
 	if vals := toStringSlice(actions["pathAction"]); len(vals) > 0 {
-		base.PathAction = vals
+		base.PathAction = normalizeDownloadPathActions(vals)
 	}
 	if s := toString(actions["checkOriginMode"]); s != "" {
 		base.CheckOriginMode = s
