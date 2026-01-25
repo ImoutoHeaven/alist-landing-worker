@@ -11,7 +11,7 @@
 - **Download Worker**  
   执行真实文件下载并校验 landing 票据（例如 `simple-alist-cf-proxy`）。
 - **Powdet 服务（`powdet/`）**  
-  提供 PoW challenge / verify API 与前端静态资源，支持 argon2id/randomx 多算法。
+  提供 PoW challenge / verify API 与前端静态资源，支持 argon2id/argon2d/randomx 多算法。
 - **PostgREST + PostgreSQL**  
   提供统一检查（限流 + 缓存 + token 状态），仅支持 `custom-pg-rest` 模式。
 - **Cloudflare Rate Limiter**  
@@ -62,7 +62,7 @@ Worker 入口逻辑（`fetch`）顺序：
 1. 解析并解码 `path` / `sign`，检查 IPv4-only（`landing.ipv4Only`）。
 2. 可选 CF Rate Limiter（fail-open）。
 3. 从 controller 决策中提取 `captchaCombo`，解析成动作集合：  
-   `verify-altcha` / `verify-turn` / `verify-powdet` / `verify-powdet-randomx` / `pass-web` / `pass-server` / `pass-asis` / `pass-web-download` / `pass-decrypt` / `verify-web-download` / `verify-decrypt`。  
+   `verify-altcha` / `verify-turn` / `verify-powdet-argon2id` / `verify-powdet-argon2d` / `verify-powdet-randomx` / `pass-web` / `pass-server` / `pass-asis` / `pass-web-download` / `pass-decrypt` / `verify-web-download` / `verify-decrypt`。  
    这些动作决定是否强制验证、强制落地页/跳转、以及是否启用 webDownloader / client-decrypt。
 4. 若计算 `bindingStr` 时包含 `tls` 模式（`landing.captchaBinding`/`common.binding`/`decision.download.checkOriginMode`），要求 `request.cf` 中包含 `tlsClientExtensionsSha1` 与 `tlsClientCiphersSha1`，否则直接拒绝。
 5. **ALTCHA 校验**：  
@@ -75,7 +75,7 @@ Worker 入口逻辑（`fetch`）顺序：
    - 如启用 token binding，则要求 DB 可用并在 unified check 中验证/消费。
 7. **Powdet 校验**：  
    - `powdetSolutions` 为数组，元素包含 `alg/challenge/nonce/expireAt/randomStr/hmac/link`。  
-   - 需要的算法集合由 `captchaCombo` 决定（`verify-powdet`/`verify-powdet-randomx`），缺任意算法直接 403。  
+   - 需要的算法集合由 `captchaCombo` 决定（`verify-powdet-argon2id`/`verify-powdet-argon2d`/`verify-powdet-randomx`），缺任意算法直接 403。  
    - 验证 payload 时窗（expireAt + skew + maxWindow）。  
    - 按 `alg + bindingStr + expireAt + randomStr + challenge + link` 计算 HMAC；  
      HMAC 密钥使用 `common.tokenHmacKey`。  

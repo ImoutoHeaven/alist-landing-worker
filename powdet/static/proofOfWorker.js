@@ -1,4 +1,4 @@
-// Argon2id proof-of-work worker powered by hash-wasm
+// Argon2id/argon2d proof-of-work worker powered by hash-wasm
 (() => {
   try {
     importScripts("https://cdn.jsdelivr.net/npm/hash-wasm@4/dist/argon2.umd.min.js");
@@ -7,19 +7,25 @@
   }
 })();
 
+const POWDET_ALGO_ARGON2ID = "argon2id";
+const POWDET_ALGO_ARGON2D = "argon2d";
+
 let working = false;
 const batchSize = 8;
-let hashwasmReadyPromise = null;
+const hashwasmReadyPromises = {};
 
-function ensureHashWasmReady() {
-  if (!hashwasmReadyPromise) {
-    hashwasmReadyPromise = (async () => {
-      if (typeof hashwasm === "undefined" || typeof hashwasm.argon2id !== "function") {
-        throw new Error("hashwasm.argon2id is not available");
+function ensureHashWasmReady(alg) {
+  const normalizedAlg = typeof alg === "string" ? alg.toLowerCase() : POWDET_ALGO_ARGON2ID;
+  const key = normalizedAlg === POWDET_ALGO_ARGON2D ? POWDET_ALGO_ARGON2D : POWDET_ALGO_ARGON2ID;
+  if (!hashwasmReadyPromises[key]) {
+    hashwasmReadyPromises[key] = (async () => {
+      const fnName = key === POWDET_ALGO_ARGON2D ? "argon2d" : "argon2id";
+      if (typeof hashwasm === "undefined" || typeof hashwasm[fnName] !== "function") {
+        throw new Error(`hashwasm.${fnName} is not available`);
       }
     })();
   }
-  return hashwasmReadyPromise;
+  return hashwasmReadyPromises[key];
 }
 
 function base64ToBytes(str) {
@@ -44,7 +50,9 @@ function hexToBytes(hex) {
 }
 
 function normalizeChallenge(raw) {
+  const alg = typeof raw.alg === "string" ? raw.alg.toLowerCase() : POWDET_ALGO_ARGON2ID;
   return {
+    alg,
     memoryKiB: raw.m,
     iterations: raw.t,
     parallelism: raw.p,
@@ -55,10 +63,18 @@ function normalizeChallenge(raw) {
   };
 }
 
-async function argon2idHashHex(opts) {
+function getArgon2Hasher(alg) {
+  if (alg === POWDET_ALGO_ARGON2D) {
+    return hashwasm.argon2d;
+  }
+  return hashwasm.argon2id;
+}
+
+async function argon2HashHex(opts) {
   const { nonceHex, preimageBytes, challenge } = opts;
   const nonceBytes = hexToBytes(nonceHex);
-  return hashwasm.argon2id({
+  const hasher = getArgon2Hasher(challenge.alg);
+  return hasher({
     password: nonceBytes,
     salt: preimageBytes,
     parallelism: challenge.parallelism,
@@ -82,7 +98,7 @@ async function runSingleBatch(ctx) {
       nonceHex = `0${nonceHex}`;
     }
 
-    const hashHex = await argon2idHashHex({
+    const hashHex = await argon2HashHex({
       nonceHex,
       preimageBytes,
       challenge,
@@ -210,13 +226,13 @@ onmessage = function (e) {
     challenge,
   };
 
-  ensureHashWasmReady()
+  ensureHashWasmReady(challenge.alg)
     .then(() => runBatches(ctx))
     .catch((err) => {
       postMessage({
         type: "error",
         challenge: challengeBase64,
-        message: `argon2id init failed: ${err}`,
+        message: `${challenge.alg || "argon2"} init failed: ${err}`,
       });
     });
 };

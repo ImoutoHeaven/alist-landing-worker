@@ -5378,6 +5378,7 @@
   };
 
   const POWDET_ALGO_ARGON2ID = 'argon2id';
+  const POWDET_ALGO_ARGON2D = 'argon2d';
   const POWDET_ALGO_RANDOMX = 'randomx';
 
   const getPowdetChallenges = () =>
@@ -5870,6 +5871,9 @@
       return;
     }
     const alg = typeof powdetChallenge.alg === 'string' ? powdetChallenge.alg.trim() : POWDET_ALGO_ARGON2ID;
+    if (alg !== POWDET_ALGO_ARGON2ID && alg !== POWDET_ALGO_ARGON2D) {
+      return;
+    }
     const key = getPowdetChallengeKey(powdetChallenge);
     if (!key) {
       return;
@@ -6038,7 +6042,7 @@
       if (state.verification.powdetNonceByKey?.[key]) {
         continue;
       }
-      if (alg === POWDET_ALGO_ARGON2ID) {
+      if (alg === POWDET_ALGO_ARGON2ID || alg === POWDET_ALGO_ARGON2D) {
         startPowdetArgonSolver(challenge);
       } else if (alg === POWDET_ALGO_RANDOMX) {
         startPowdetRandomxSolver(challenge);

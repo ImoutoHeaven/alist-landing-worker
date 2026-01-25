@@ -1,6 +1,6 @@
 # Pow Bot Deterrent（多算法）后端
 
-本目录提供多算法 pow-bot-deterrent 后端及前端静态资源，用于 alist-landing-worker 的 PoW 验证（argon2id + randomx）。
+本目录提供多算法 pow-bot-deterrent 后端及前端静态资源，用于 alist-landing-worker 的 PoW 验证（argon2id/argon2d/randomx）。
 
 ## 目录内容
 
@@ -11,9 +11,9 @@
 
 ## 关键接口
 
-- `POST /GetChallenges?algo=argon2id|randomx&difficultyLevel=...`  
+- `POST /GetChallenges?algo=argon2id|argon2d|randomx&difficultyLevel=...`  
   生成挑战批次，需要 `Authorization: Bearer <token>`。
-- `POST /Verify?algo=argon2id|randomx&challenge=...&nonce=...`  
+- `POST /Verify?algo=argon2id|argon2d|randomx&challenge=...&nonce=...`  
   校验并消费挑战，需要 `Authorization: Bearer <token>`。
 
 `token` 必须是 32 位十六进制字符串，并存在于 `PoW_Bot_Deterrent_API_Tokens` 目录。
@@ -80,6 +80,13 @@
   "algorithms": {
     "argon2id": {
       "enabled": true,
+      "memoryKiB": 16384,
+      "iterations": 2,
+      "parallelism": 1,
+      "keyLength": 16
+    },
+    "argon2d": {
+      "enabled": false,
       "memoryKiB": 16384,
       "iterations": 2,
       "parallelism": 1,

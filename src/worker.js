@@ -37,7 +37,8 @@ const VALID_ACTIONS = [
   'block',
   'verify-altcha',
   'verify-turn',
-  'verify-powdet',
+  'verify-powdet-argon2id',
+  'verify-powdet-argon2d',
   'verify-powdet-randomx',
   'verify-web-download',
   'verify-decrypt',
@@ -68,6 +69,7 @@ const POWDET_DIFFICULTY_TABLE = 'POWDET_DIFFICULTY_STATE';
 const POWDET_DEFAULT_TABLE = 'POW_CHALLENGE_TICKET';
 const POWDET_DEFAULT_ALGO = 'argon2id';
 const POWDET_ALGO_ARGON2ID = 'argon2id';
+const POWDET_ALGO_ARGON2D = 'argon2d';
 const POWDET_ALGO_RANDOMX = 'randomx';
 const normalizePowdetAlgorithm = (value) =>
   typeof value === 'string' ? value.trim().toLowerCase() : '';
@@ -254,7 +256,13 @@ function parseVerificationNeeds(action, config) {
   let needTurnstile = defaults.needTurnstile;
   let powdetAlgorithms = defaults.powdetAlgorithms.slice();
 
-  const verifyTokens = ['verify-altcha', 'verify-turn', 'verify-powdet', 'verify-powdet-randomx'];
+  const verifyTokens = [
+    'verify-altcha',
+    'verify-turn',
+    'verify-powdet-argon2id',
+    'verify-powdet-argon2d',
+    'verify-powdet-randomx',
+  ];
   const hasVerifyToken = verifyTokens.some((t) => tokens.has(t));
 
   if (hasVerifyToken) {
@@ -269,8 +277,11 @@ function parseVerificationNeeds(action, config) {
   if (tokens.has('verify-turn')) {
     needTurnstile = true;
   }
-  if (tokens.has('verify-powdet')) {
+  if (tokens.has('verify-powdet-argon2id')) {
     powdetAlgorithms.push(POWDET_ALGO_ARGON2ID);
+  }
+  if (tokens.has('verify-powdet-argon2d')) {
+    powdetAlgorithms.push(POWDET_ALGO_ARGON2D);
   }
   if (tokens.has('verify-powdet-randomx')) {
     powdetAlgorithms.push(POWDET_ALGO_RANDOMX);
@@ -333,12 +344,12 @@ function ensureValidActionValue(action, contextLabel = 'ACTION') {
   for (const token of tokens) {
     if (token === 'verify') {
       throw new Error(
-        `Invalid ${contextLabel} value: "verify". Please use verify-altcha, verify-turn, verify-powdet, or verify-powdet-randomx.`
+        `Invalid ${contextLabel} value: "verify". Please use verify-altcha, verify-turn, verify-powdet-argon2id, verify-powdet-argon2d, or verify-powdet-randomx.`
       );
     }
     if (token === 'verify-pow' || token === 'verify-both') {
       throw new Error(
-        `Invalid ${contextLabel} value: "${token}". Please use verify-altcha, verify-turn, verify-powdet, or verify-powdet-randomx.`
+        `Invalid ${contextLabel} value: "${token}". Please use verify-altcha, verify-turn, verify-powdet-argon2id, verify-powdet-argon2d, or verify-powdet-randomx.`
       );
     }
     if (token === 'web-download') {

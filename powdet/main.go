@@ -45,12 +45,13 @@ const (
 
 const (
 	algoArgon2id = "argon2id"
+	algoArgon2d  = "argon2d"
 	algoRandomx  = "randomx"
 )
 
 type PowdetAlgorithmConfig struct {
 	Enabled bool `json:"enabled"`
-	// argon2id
+	// argon2id / argon2d
 	MemoryKiB   int `json:"memoryKiB"`
 	Iterations  int `json:"iterations"`
 	Parallelism int `json:"parallelism"`
@@ -437,7 +438,7 @@ func main() {
 				DifficultyLevel: difficultyLevel,
 			}
 			switch algo {
-			case algoArgon2id:
+			case algoArgon2id, algoArgon2d:
 				challenge.Argon2Parameters = &Argon2Parameters{
 					MemoryKiB:   algoCfg.MemoryKiB,
 					Iterations:  algoCfg.Iterations,
@@ -576,7 +577,7 @@ func main() {
 		}
 
 		switch challengeAlg {
-		case algoArgon2id:
+		case algoArgon2id, algoArgon2d:
 			if challenge.Argon2Parameters == nil {
 				metricsAdd("verify_bad_request")
 				http.Error(responseWriter, "400 argon2 challenge missing parameters", http.StatusBadRequest)
@@ -590,14 +591,26 @@ func main() {
 				return true
 			}
 
-			hash := argon2.IDKey(
-				nonceBytes,
-				preimageBytes,
-				uint32(challenge.Argon2Parameters.Iterations),
-				uint32(challenge.Argon2Parameters.MemoryKiB),
-				uint8(challenge.Argon2Parameters.Parallelism),
-				uint32(challenge.Argon2Parameters.KeyLength),
-			)
+			var hash []byte
+			if challengeAlg == algoArgon2d {
+				hash = argon2dKey(
+					nonceBytes,
+					preimageBytes,
+					uint32(challenge.Argon2Parameters.Iterations),
+					uint32(challenge.Argon2Parameters.MemoryKiB),
+					uint8(challenge.Argon2Parameters.Parallelism),
+					uint32(challenge.Argon2Parameters.KeyLength),
+				)
+			} else {
+				hash = argon2.IDKey(
+					nonceBytes,
+					preimageBytes,
+					uint32(challenge.Argon2Parameters.Iterations),
+					uint32(challenge.Argon2Parameters.MemoryKiB),
+					uint8(challenge.Argon2Parameters.Parallelism),
+					uint32(challenge.Argon2Parameters.KeyLength),
+				)
+			}
 			hashHex := hex.EncodeToString(hash)
 			ok, err := hashMeetsDifficulty(hashHex, challenge.Difficulty)
 			if err != nil {
@@ -1375,7 +1388,7 @@ func normalizeConfig(cfg Config) (Config, error) {
 			continue
 		}
 		switch key {
-		case algoArgon2id:
+		case algoArgon2id, algoArgon2d:
 			if algo.MemoryKiB <= 0 {
 				algo.MemoryKiB = defaultArgonMemoryKiB
 			}

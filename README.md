@@ -5,7 +5,7 @@ Cloudflare Workers 版 AList 下载落地网关。它位于 AList 与 download w
 ## 核心能力
 
 - 控制面驱动配置与路径决策（bootstrap + 动态 decision）。
-- Turnstile / ALTCHA / Powdet 多层验证（Powdet 支持 argon2id/randomx 多算法），支持 token binding 与跨验证 link 绑定。
+- Turnstile / ALTCHA / Powdet 多层验证（Powdet 支持 argon2id/argon2d/randomx 多算法），支持 token binding 与跨验证 link 绑定。
 - CF Rate Limiter + PostgREST 统一检查（限流 + token 消费 + 文件大小缓存）。
 - 生成 download worker 票据：`payload` / `payloadSign`（含 bindingStr）。
 - 快速 302、落地页模式、webDownloader 分段下载与客户端解密。
@@ -43,7 +43,7 @@ Cloudflare Workers 版 AList 下载落地网关。它位于 AList 与 download w
 - `src/frontend.js`：落地页脚本（验证流程、webDownloader、客户端解密）
 - `src/templates/`：落地页模板
 - `controller/`：控制面服务（bootstrap/decision/metrics）
-- `powdet/`：Powdet 多算法（argon2id/randomx）后端与静态资源
+- `powdet/`：Powdet 多算法（argon2id/argon2d/randomx）后端与静态资源
 - `snippets/`：Cloudflare Snippet（`sign.js`）
 - `init.sql`：PostgREST 所需表/函数
 - `wrangler.toml`：部署与绑定说明
@@ -63,7 +63,7 @@ npm run deploy
 
 - 现已将随机 `link` 纳入 Turnstile/ALTCHA/POWDET 的签名与校验，旧版前端若不透传 `link` 会直接 403。
 - 多验证同时启用时要求 `link` 一致，否则返回 463；若启用 Turnstile，需开启 binding（`turnstileCookieExpireSeconds > 0`）。
-- Powdet 为多算法时，前端需提交 `powdetSolutions` 数组并覆盖所有要求的算法（由 `verify-powdet` / `verify-powdet-randomx` 决定）。
+- Powdet 为多算法时，前端需提交 `powdetSolutions` 数组并覆盖所有要求的算法（由 `verify-powdet-argon2id` / `verify-powdet-argon2d` / `verify-powdet-randomx` 决定）。
 
 ## 相关项目
 

@@ -391,7 +391,7 @@ type LandingConfig struct {
 // PowdetServiceAlgorithmConfig describes a powdet algorithm config.
 type PowdetServiceAlgorithmConfig struct {
 	Enabled      bool `yaml:"enabled" json:"enabled"`
-	// argon2id
+	// argon2id / argon2d
 	MemoryKiB   int `yaml:"memoryKiB" json:"memoryKiB"`
 	Iterations  int `yaml:"iterations" json:"iterations"`
 	Parallelism int `yaml:"parallelism" json:"parallelism"`
@@ -1457,7 +1457,7 @@ func (p *PowdetServiceConfig) ensureDefaults(envName string) error {
 	hasEnabledAlgo := false
 	for name, algo := range p.Algorithms {
 		switch strings.ToLower(strings.TrimSpace(name)) {
-		case "argon2id":
+		case "argon2id", "argon2d":
 			if algo.MemoryKiB <= 0 {
 				algo.MemoryKiB = defaultPowdetArgonMemoryKiB
 			}

@@ -76,6 +76,45 @@ func TestArgon2HashMeetsDifficulty(t *testing.T) {
 	}
 }
 
+func TestArgon2dHashMeetsDifficulty(t *testing.T) {
+	preimage := []byte("preimage")
+	nonce := []byte{0x01, 0x23, 0x45, 0x67}
+	challenge := Challenge{
+		Alg:      algoArgon2d,
+		Preimage: base64.StdEncoding.EncodeToString(preimage),
+		Argon2Parameters: &Argon2Parameters{
+			MemoryKiB:   8,
+			Iterations:  1,
+			Parallelism: 1,
+			KeyLength:   16,
+		},
+	}
+
+	preimageBytes, err := decodeBase64Fixed(challenge.Preimage, 8)
+	if err != nil {
+		t.Fatalf("decode preimage failed: %v", err)
+	}
+
+	hash := argon2dKey(
+		nonce,
+		preimageBytes,
+		uint32(challenge.Argon2Parameters.Iterations),
+		uint32(challenge.Argon2Parameters.MemoryKiB),
+		uint8(challenge.Argon2Parameters.Parallelism),
+		uint32(challenge.Argon2Parameters.KeyLength),
+	)
+	hashHex := hex.EncodeToString(hash)
+	challenge.Difficulty = hashHex[len(hashHex)-2:]
+
+	ok, err := hashMeetsDifficulty(hashHex, challenge.Difficulty)
+	if err != nil {
+		t.Fatalf("hashMeetsDifficulty returned error: %v", err)
+	}
+	if !ok {
+		t.Fatal("argon2d hash should meet difficulty")
+	}
+}
+
 func TestRandomxHashMeetsDifficulty(t *testing.T) {
 	preimage := []byte("preimage")
 	seedKey := []byte("0123456789abcdef0123456789abcdef")
