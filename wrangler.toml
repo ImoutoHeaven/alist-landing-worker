@@ -40,7 +40,7 @@ persist = true
 # INNER_AUTH_SECRET="replace-with-inner-auth-secret"
 # ENABLE_CF_RATELIMITER="false"
 # CF_RATELIMITER_BINDING="CF_RATE_LIMITER"
-# 如需启用 CF 原生限流，请配置 [[rate_limit]] binding 名称与 CF_RATELIMITER_BINDING 一致。
+# 如需启用 CF 原生限流，请配置 [[ratelimits]] 的 name 与 CF_RATELIMITER_BINDING 一致。
 
 # Optional: D1 cache binding example
 # [[d1_databases]]
@@ -49,6 +49,7 @@ persist = true
 # database_id = "replace-with-id"
 
 # Optional: Cloudflare Rate Limiter binding example
-# [[rate_limit]]
-# binding = "CF_RATE_LIMITER"
-# simple = { period = 10, limit = 20 }
+# [[ratelimits]]
+# name = "CF_RATE_LIMITER"
+# namespace_id = "1001"
+# simple = { period = 60, limit = 100 }
