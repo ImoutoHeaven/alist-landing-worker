@@ -47,6 +47,7 @@ Cloudflare Workers 版 AList 下载落地网关。它位于 AList 与 download w
 - `snippets/`：Cloudflare Snippet（`sign.js`）
 - `init.sql`：PostgREST 所需表/函数
 - `wrangler.toml`：部署与绑定说明
+- `pages_entrance/`：Pages Functions 透明入口（Service Binding → Worker）
 
 ## 开发与部署
 
@@ -58,6 +59,15 @@ npm run deploy
 ```
 
 前端静态资源需单独托管，并在 controller 的 `landing.frontend.*` 指向相应 URL。
+
+### Pages 透明入口
+
+用于自定义域名入口，保持请求透明转发到 Worker（Service Binding）。入口构建与部署位于 `pages_entrance/`：
+
+```bash
+node pages_entrance/build.mjs
+wrangler pages deploy --config pages_entrance/wrangler.toml
+```
 
 ## 升级注意
 

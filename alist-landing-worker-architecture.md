@@ -18,6 +18,8 @@
   可选的无状态边缘限流。
 - **D1（仅用于 controller bootstrap 缓存）**  
   `BOOTSTRAP_CACHE_MODE=d1` 时缓存 controller 配置。
+- **Pages Entrance（可选）**  
+  透明转发入口（Service Binding → Worker），用于承载自定义域名；入口域名需加入 `common.landingWorkerAddresses` allowlist。
 
 ## 2. 配置来源与控制面
 

@@ -1,0 +1,7 @@
+name = "alist-landing-pages-entrance"
+pages_build_output_dir = "./dist"
+compatibility_date = "2024-01-01"
+
+[[services]]
+binding = "UPSTREAM"
+service = "alist-landing-worker"
