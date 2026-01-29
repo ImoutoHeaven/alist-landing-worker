@@ -5082,6 +5082,11 @@
     turnstileContainer.classList.remove('is-visible');
   };
 
+  const setTurnstileSectionVisible = (visible) => {
+    if (!turnstileSection) return;
+    turnstileSection.hidden = !visible;
+  };
+
   const syncTurnstileRenderMode = () => {
     if (!turnstileSection) return;
     if (state.security.turnstileRenderMode === 'invisible') {
@@ -5152,10 +5157,17 @@
       if (!state.verification.turnstileToken) {
         setTurnstileMessage('');
       }
+      setTurnstileSectionVisible(false);
       return;
     }
+    const hasToken = !!state.verification.turnstileToken;
+    setTurnstileSectionVisible(!hasToken);
     if (state.security.turnstileRenderMode === 'invisible') {
       hideTurnstileContainer();
+      if (hasToken) {
+        setTurnstileMessage('');
+        return;
+      }
     } else {
       showTurnstileContainer();
     }
@@ -5355,6 +5367,7 @@
         state.verification.turnstileReady = true;
         hideTurnstileContainer();
         setTurnstileMessage('');
+        syncTurnstilePrompt();
         fulfilTurnstileResolvers(state.verification.turnstileToken);
         updateButtonState();
         if (state.awaitingRetryUnlock) {
