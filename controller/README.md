@@ -27,7 +27,7 @@ Powdet 相关：`landing.powdet.algorithms` 控制可用算法（argon2id/argon2
 ## 决策逻辑（v0）
 
 - `role=landing`：产出 `captchaCombo/fastRedirect/autoRedirect` 等。
-- `role=download`：产出 `pathAction/checkOriginMode/fairQueueProfile/throttleProfile` 等。
+- `role=download`：产出 `pathAction/checkOriginMode/throttleProfile` 等。
 - 规则版本取自 `rulesVersion`，默认 TTL 为 60 秒。
 
 ## 运行

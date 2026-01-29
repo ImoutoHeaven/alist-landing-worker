@@ -87,11 +87,11 @@ const (
 	defaultSlotHandlerCleanupInt    = 1800
 	defaultSlotHandlerQueueDepthTTL = 20
 	defaultSlotHandlerCleanupDelay  = 5
-	defaultSlotHandlerThrottleFunc  = "download_check_throttle_protection"
-	defaultSlotHandlerRegisterFunc  = "download_register_fq_waiter"
-	defaultSlotHandlerReleaseWaiter = "download_release_fq_waiter"
-	defaultSlotHandlerTryAcquire    = "download_try_acquire_slot"
-	defaultSlotHandlerReleaseSlot   = "download_release_slot"
+	defaultSlotHandlerThrottleFunc  = "fq_check_throttle"
+	defaultSlotHandlerRegisterFunc  = "fq_register_waiter"
+	defaultSlotHandlerReleaseWaiter = "fq_release_waiter"
+	defaultSlotHandlerTryAcquire    = "fq_try_acquire_dual"
+	defaultSlotHandlerReleaseSlot   = "fq_release_dual"
 	defaultWeightedHotPendingFactor = 4
 	defaultWeightedHotPendingMin    = 16
 	defaultWeightedBaseWeight       = 1.0
@@ -101,6 +101,30 @@ const (
 
 func boolPtr(v bool) *bool {
 	return &v
+}
+
+func ensureIntPtr(ptr **int, fallback int) {
+	if *ptr == nil {
+		v := fallback
+		*ptr = &v
+		return
+	}
+	if **ptr < 0 {
+		v := 0
+		*ptr = &v
+	}
+}
+
+func ensureInt64Ptr(ptr **int64, fallback int64) {
+	if *ptr == nil {
+		v := fallback
+		*ptr = &v
+		return
+	}
+	if **ptr < 0 {
+		v := int64(0)
+		*ptr = &v
+	}
 }
 
 func normalizeAddressList(values []string) []string {
@@ -478,12 +502,10 @@ type DownloadThrottleProfile struct {
 	TableName             string   `yaml:"tableName" json:"tableName"`
 }
 
-// DownloadFairQueueProfile sets per-profile slot caps.
-type DownloadFairQueueProfile struct {
-	MaxWaitMs       int `yaml:"maxWaitMs" json:"maxWaitMs"`
-	MaxSlotPerHost  int `yaml:"maxSlotPerHost" json:"maxSlotPerHost"`
-	MaxSlotPerIP    int `yaml:"maxSlotPerIp" json:"maxSlotPerIp"`
-	MaxWaitersPerIP int `yaml:"maxWaitersPerIp" json:"maxWaitersPerIp"`
+// DownloadFairQueueSiteBucketConfig controls site bucket derivation.
+type DownloadFairQueueSiteBucketConfig struct {
+	Mode string `yaml:"mode" json:"mode"`
+	Hash string `yaml:"hash" json:"hash"`
 }
 
 // DownloadFairQueueConfig controls slot-handler integration.
@@ -497,7 +519,7 @@ type DownloadFairQueueConfig struct {
 	SlotHandlerTimeoutMs int                                 `yaml:"slotHandlerTimeoutMs" json:"slotHandlerTimeoutMs"`
 	PerRequestTimeoutMs  int                                 `yaml:"perRequestTimeoutMs" json:"perRequestTimeoutMs"`
 	MaxAttemptsCap       int                                 `yaml:"maxAttemptsCap" json:"maxAttemptsCap"`
-	Profiles             map[string]DownloadFairQueueProfile `yaml:"profiles" json:"profiles"`
+	SiteBucket           DownloadFairQueueSiteBucketConfig   `yaml:"siteBucket" json:"siteBucket"`
 	Extra                map[string]any                      `yaml:",inline" json:"-"`
 }
 
@@ -568,24 +590,36 @@ type SlotHandlerFairQueueCleanupConfig struct {
 
 // SlotHandlerFairQueueConfig matches slot-handler fair queue tuning.
 type SlotHandlerFairQueueConfig struct {
-	MaxWaitMs                  int64                              `yaml:"maxWaitMs" json:"maxWaitMs"`
 	PollIntervalMs             int64                              `yaml:"pollIntervalMs" json:"pollIntervalMs"`
 	PollWindowMs               int64                              `yaml:"pollWindowMs" json:"pollWindowMs"`
 	MinSlotHoldMs              int64                              `yaml:"minSlotHoldMs" json:"minSlotHoldMs"`
 	SmoothReleaseIntervalMs    *int64                             `yaml:"smoothReleaseIntervalMs" json:"smoothReleaseIntervalMs,omitempty"`
 	GlobalMaxWaiters           int                                `yaml:"globalMaxWaiters" json:"globalMaxWaiters"`
 	SessionIdleSeconds         int                                `yaml:"sessionIdleSeconds" json:"sessionIdleSeconds"`
-	MaxSlotPerHost             int                                `yaml:"maxSlotPerHost" json:"maxSlotPerHost"`
-	MaxSlotPerIP               int                                `yaml:"maxSlotPerIp" json:"maxSlotPerIp"`
-	MaxWaitersPerIP            int                                `yaml:"maxWaitersPerIp" json:"maxWaitersPerIp"`
-	MaxWaitersPerHost          int                                `yaml:"maxWaitersPerHost" json:"maxWaitersPerHost"`
 	ZombieTimeoutSeconds       int                                `yaml:"zombieTimeoutSeconds" json:"zombieTimeoutSeconds"`
 	IPCooldownSeconds          int                                `yaml:"ipCooldownSeconds" json:"ipCooldownSeconds"`
+	HostCaps                   SlotHandlerHostCapsConfig          `yaml:"hostCaps" json:"hostCaps"`
+	SiteCaps                   SlotHandlerSiteCapsConfig          `yaml:"siteCaps" json:"siteCaps"`
 	WeightedScheduler          SlotHandlerWeightedSchedulerConfig `yaml:"weightedScheduler" json:"weightedScheduler"`
 	RPC                        SlotHandlerRPCConfig               `yaml:"rpc" json:"rpc"`
 	Cleanup                    SlotHandlerFairQueueCleanupConfig  `yaml:"cleanup" json:"cleanup"`
 	DefaultGrantedCleanupDelay int                                `yaml:"defaultGrantedCleanupDelay" json:"defaultGrantedCleanupDelay"`
-	maxWaitersPerHostSet       bool                               `yaml:"-" json:"-"`
+}
+
+type SlotHandlerHostCapsConfig struct {
+	MaxWaitMs         *int64 `yaml:"maxWaitMs" json:"maxWaitMs,omitempty"`
+	MaxSlotPerHost    *int   `yaml:"maxSlotPerHost" json:"maxSlotPerHost,omitempty"`
+	MaxWaitersPerHost *int   `yaml:"maxWaitersPerHost" json:"maxWaitersPerHost,omitempty"`
+	MaxSlotPerIP      *int   `yaml:"maxSlotPerIp" json:"maxSlotPerIp,omitempty"`
+	MaxWaitersPerIP   *int   `yaml:"maxWaitersPerIp" json:"maxWaitersPerIp,omitempty"`
+}
+
+type SlotHandlerSiteCapsConfig struct {
+	MaxWaitMs         *int64 `yaml:"maxWaitMs" json:"maxWaitMs,omitempty"`
+	MaxSlotPerSite    *int   `yaml:"maxSlotPerSite" json:"maxSlotPerSite,omitempty"`
+	MaxWaitersPerSite *int   `yaml:"maxWaitersPerSite" json:"maxWaitersPerSite,omitempty"`
+	MaxSlotPerIP      *int   `yaml:"maxSlotPerIp" json:"maxSlotPerIp,omitempty"`
+	MaxWaitersPerIP   *int   `yaml:"maxWaitersPerIp" json:"maxWaitersPerIp,omitempty"`
 }
 
 type SlotHandlerWeightedSchedulerConfig struct {
@@ -624,24 +658,6 @@ func (c *SlotHandlerFairQueueCleanupConfig) UnmarshalYAML(value *yaml.Node) erro
 				c.enabledSet = true
 			case "intervalSeconds":
 				c.intervalSet = true
-			}
-		}
-	}
-	return nil
-}
-
-func (f *SlotHandlerFairQueueConfig) UnmarshalYAML(value *yaml.Node) error {
-	type raw SlotHandlerFairQueueConfig
-	var aux raw
-	if err := value.Decode(&aux); err != nil {
-		return err
-	}
-	*f = SlotHandlerFairQueueConfig(aux)
-	if value != nil && value.Kind == yaml.MappingNode {
-		for i := 0; i+1 < len(value.Content); i += 2 {
-			key := strings.TrimSpace(value.Content[i].Value)
-			if key == "maxWaitersPerHost" {
-				f.maxWaitersPerHostSet = true
 			}
 		}
 	}
@@ -1383,25 +1399,6 @@ func (p *DownloadThrottleProfile) ensureDefaults() {
 	}
 }
 
-func (f *DownloadFairQueueProfile) ensureDefaults(fallbackWait int) {
-	if f.MaxWaitMs <= 0 {
-		if fallbackWait > 0 {
-			f.MaxWaitMs = fallbackWait
-		} else {
-			f.MaxWaitMs = defaultFairQueueWaitMs
-		}
-	}
-	if f.MaxSlotPerHost <= 0 {
-		f.MaxSlotPerHost = 8
-	}
-	if f.MaxSlotPerIP <= 0 {
-		f.MaxSlotPerIP = 3
-	}
-	if f.MaxWaitersPerIP <= 0 {
-		f.MaxWaitersPerIP = 8
-	}
-}
-
 func (f *DownloadFairQueueConfig) ensureDefaults(envName string) error {
 	if f.QueueWaitTimeoutMs <= 0 {
 		f.QueueWaitTimeoutMs = defaultFairQueueWaitMs
@@ -1418,15 +1415,11 @@ func (f *DownloadFairQueueConfig) ensureDefaults(envName string) error {
 	if f.Backend == "" {
 		f.Backend = "slot-handler"
 	}
-	if f.Profiles == nil {
-		f.Profiles = map[string]DownloadFairQueueProfile{}
+	if strings.TrimSpace(f.SiteBucket.Mode) == "" {
+		f.SiteBucket.Mode = "sharepoint"
 	}
-	if _, ok := f.Profiles["default"]; !ok {
-		f.Profiles["default"] = DownloadFairQueueProfile{}
-	}
-	for name, profile := range f.Profiles {
-		profile.ensureDefaults(f.QueueWaitTimeoutMs)
-		f.Profiles[name] = profile
+	if strings.TrimSpace(f.SiteBucket.Hash) == "" {
+		f.SiteBucket.Hash = "sha256"
 	}
 
 	if f.Enabled {
@@ -1521,9 +1514,6 @@ func (c *SlotHandlerFairQueueCleanupConfig) ensureDefaults() {
 }
 
 func (f *SlotHandlerFairQueueConfig) ensureDefaults() error {
-	if f.MaxWaitMs <= 0 {
-		f.MaxWaitMs = defaultSlotHandlerMaxWaitMs
-	}
 	if f.PollIntervalMs <= 0 {
 		f.PollIntervalMs = defaultSlotHandlerPollInterval
 	}
@@ -1535,18 +1525,6 @@ func (f *SlotHandlerFairQueueConfig) ensureDefaults() error {
 	}
 	if f.MinSlotHoldMs < 0 {
 		f.MinSlotHoldMs = 0
-	}
-	if f.MaxSlotPerHost <= 0 {
-		f.MaxSlotPerHost = defaultSlotHandlerMaxSlotHost
-	}
-	if f.MaxSlotPerIP <= 0 {
-		f.MaxSlotPerIP = defaultSlotHandlerMaxSlotIP
-	}
-	if f.MaxWaitersPerIP < 0 {
-		f.MaxWaitersPerIP = 0
-	}
-	if !f.maxWaitersPerHostSet && f.MaxWaitersPerHost <= 0 {
-		f.MaxWaitersPerHost = defaultSlotHandlerMaxWaitHost
 	}
 	if f.SessionIdleSeconds <= 0 {
 		f.SessionIdleSeconds = defaultSlotHandlerSessionIdle
@@ -1560,6 +1538,18 @@ func (f *SlotHandlerFairQueueConfig) ensureDefaults() error {
 	if f.DefaultGrantedCleanupDelay <= 0 {
 		f.DefaultGrantedCleanupDelay = defaultSlotHandlerCleanupDelay
 	}
+
+	ensureInt64Ptr(&f.HostCaps.MaxWaitMs, defaultSlotHandlerMaxWaitMs)
+	ensureIntPtr(&f.HostCaps.MaxSlotPerHost, defaultSlotHandlerMaxSlotHost)
+	ensureIntPtr(&f.HostCaps.MaxWaitersPerHost, defaultSlotHandlerMaxWaitHost)
+	ensureIntPtr(&f.HostCaps.MaxSlotPerIP, defaultSlotHandlerMaxSlotIP)
+	ensureIntPtr(&f.HostCaps.MaxWaitersPerIP, 0)
+
+	ensureInt64Ptr(&f.SiteCaps.MaxWaitMs, defaultSlotHandlerMaxWaitMs)
+	ensureIntPtr(&f.SiteCaps.MaxSlotPerSite, defaultSlotHandlerMaxSlotHost)
+	ensureIntPtr(&f.SiteCaps.MaxWaitersPerSite, defaultSlotHandlerMaxWaitHost)
+	ensureIntPtr(&f.SiteCaps.MaxSlotPerIP, defaultSlotHandlerMaxSlotIP)
+	ensureIntPtr(&f.SiteCaps.MaxWaitersPerIP, 0)
 
 	f.WeightedScheduler.ensureDefaults(*f)
 
@@ -1605,9 +1595,9 @@ func (w *SlotHandlerWeightedSchedulerConfig) ensureDefaults(f SlotHandlerFairQue
 		w.HotAvgWaitMs = 3*pollMs + hold
 	}
 	if w.MaxProbesPerCycle <= 0 {
-		maxProbes := f.MaxSlotPerHost
-		if maxProbes <= 0 {
-			maxProbes = defaultSlotHandlerMaxSlotHost
+		maxProbes := defaultSlotHandlerMaxSlotHost
+		if f.HostCaps.MaxSlotPerHost != nil && *f.HostCaps.MaxSlotPerHost > 0 {
+			maxProbes = *f.HostCaps.MaxSlotPerHost
 		}
 		w.MaxProbesPerCycle = maxProbes
 	}
@@ -1720,10 +1710,7 @@ func generateDownloadPathConfig(cfg DownloadConfig) (PathGlobal, []PathProfile, 
 		Actions: map[string]any{
 			"pathAction":       []string{},
 			"checkOriginMode":  cfg.OriginBindingDefault,
-			"fairQueueProfile": "default",
 			"throttleProfile":  "default",
-			"maxSlotsPerIp":    nil,
-			"maxWaitersPerIp":  nil,
 			"blockReason":      nil,
 		},
 	})
@@ -1737,7 +1724,6 @@ func generateDownloadPathConfig(cfg DownloadConfig) (PathGlobal, []PathProfile, 
 				Actions: map[string]any{
 					"pathAction":       append([]string{}, rule.Action...),
 					"checkOriginMode":  cfg.OriginBindingDefault,
-					"fairQueueProfile": "default",
 					"throttleProfile":  "default",
 				},
 			})

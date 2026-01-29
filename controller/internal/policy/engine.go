@@ -151,7 +151,6 @@ func (e *Engine) evalDownloadDecision(ctx DecisionContext) (DownloadDecision, Me
 		PathAction:      []string{},
 		CheckOriginMode: dlCfg.OriginBindingDefault,
 		// Profile names can line up with controller config keys and be extended later.
-		FairQueueProfile: "default",
 		ThrottleProfile:  "default",
 	}
 	meta := MetaInfo{
@@ -244,17 +243,8 @@ func applyDownloadActions(profile config.PathProfile, base DownloadDecision) Dow
 	if s := toString(actions["checkOriginMode"]); s != "" {
 		base.CheckOriginMode = s
 	}
-	if s := toString(actions["fairQueueProfile"]); s != "" {
-		base.FairQueueProfile = s
-	}
 	if s := toString(actions["throttleProfile"]); s != "" {
 		base.ThrottleProfile = s
-	}
-	if v := toIntPointer(actions["maxSlotsPerIp"]); v != nil {
-		base.MaxSlotsPerIpOverride = v
-	}
-	if v := toIntPointer(actions["maxWaitersPerIp"]); v != nil {
-		base.MaxWaitersPerIpOverride = v
 	}
 	if s := toString(actions["blockReason"]); s != "" {
 		base.BlockReason = &s

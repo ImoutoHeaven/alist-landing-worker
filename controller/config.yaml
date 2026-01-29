@@ -261,17 +261,9 @@ envs:
         slotHandlerTimeoutMs: 20000 # Timeout for slot-handler RPC; ms >0
         perRequestTimeoutMs: 8000 # Timeout per slot-handler request; ms >0
         maxAttemptsCap: 35 # Max retry attempts for slot acquisition; >=1
-        profiles:
-          default:
-            maxWaitMs: 120000 # Max queue wait for default profile; ms >0
-            maxSlotPerHost: 8 # Slot cap per host; >=0
-            maxSlotPerIp: 3 # Slot cap per IP; >=0
-            maxWaitersPerIp: 8 # Queue depth per IP; >=0
-          strict:
-            maxWaitMs: 90000 # Stricter queue wait limit; ms >0
-            maxSlotPerHost: 4 # Stricter slot cap per host
-            maxSlotPerIp: 2 # Stricter slot cap per IP
-            maxWaitersPerIp: 4 # Stricter queue depth per IP
+        siteBucket:
+          mode: "sharepoint" # Derive site bucket by SharePoint path segments
+          hash: "sha256" # Hash algorithm for site bucket (fixed)
       throttleProfiles:
         default:
           hostPatterns: [] # Host patterns this throttle profile applies to; glob list
@@ -313,17 +305,13 @@ envs:
               #   "ip"                   → 单 IP 绑定；
               #   "country,asn"          → 国家 + ASN 绑定。
               checkOriginMode: "path,asn,country,iprange"
-              # fairQueueProfile：FQ 策略名称；必须出现在 download.fairQueue.profiles.* 中，例如：default|strict
-              fairQueueProfile: "default"
               # throttleProfile：Throttle 策略名称；必须出现在 download.throttleProfiles.* 中，例如：default
               throttleProfile: "default"
-              # maxSlotsPerIp / maxWaitersPerIp：可选覆盖值；>0 时覆盖对应 FQ profile 的 per-IP 限制
           - id: "download-block-admin"
             dynamic: false
             actions:
               pathAction: ["block"] # 管理路径全部阻断
               checkOriginMode: "path,asn,country,iprange"
-              fairQueueProfile: "default"
               throttleProfile: "default"
               blockReason: "blocked by rule block_admin" # 可选，供日志/前端提示使用
           - id: "download-public-share"
@@ -331,14 +319,12 @@ envs:
             actions:
               pathAction: [] # 公共分享路径保持默认行为
               checkOriginMode: "path,asn,country,iprange"
-              fairQueueProfile: "default"
               throttleProfile: "default"
           - id: "download-public-share-passthrough"
             dynamic: false
             actions:
               pathAction: ["asis"] # 公共分享中某些路径完全 passthrough
               checkOriginMode: "path,asn,country,iprange"
-              fairQueueProfile: "default"
               throttleProfile: "default"
         # pathRules：按 pattern → profileId 映射；priority 越大优先级越高，未设置时视为 0
         pathRules:
@@ -400,19 +386,26 @@ envs:
         postgres:
           dsn: "postgres://user:pass@host:5432/dbname?sslmode=disable" # Direct Postgres DSN (optional when using postgres mode)
       fairQueue:
-        maxWaitMs: 60000 # Max wait time before giving up; ms >0
         pollIntervalMs: 500 # Poll interval when waiting for slot; ms >0
         pollWindowMs: 6000 # Poll window length; ms >0
         minSlotHoldMs: 800 # Minimum slot hold duration before release; ms >0
         smoothReleaseIntervalMs: null # Interval for smooth release; null disables smoothing
         globalMaxWaiters: 500 # Max pending sessions accepted by slot-handler; <=0 uses default
         sessionIdleSeconds: 90 # Session idle timeout; seconds >=0
-        maxSlotPerHost: 5 # Slot cap per host; >=0
-        maxSlotPerIp: 1 # Slot cap per IP; >=0
-        maxWaitersPerIp: 3 # Max queued requests per IP; >=0
-        maxWaitersPerHost: 50 # Max queued requests per host; >=0
         zombieTimeoutSeconds: 30 # Timeout for zombie sessions; seconds >=0
         ipCooldownSeconds: 0 # Cooldown for IP after release; seconds >=0
+        hostCaps:
+          maxWaitMs: 60000 # Max wait time before giving up; ms >0 (0 = unlimited)
+          maxSlotPerHost: 5 # Slot cap per host; 0 = unlimited
+          maxWaitersPerHost: 50 # Max queued requests per host; 0 = unlimited
+          maxSlotPerIp: 1 # Slot cap per IP; 0 = unlimited
+          maxWaitersPerIp: 3 # Max queued requests per IP; 0 = unlimited
+        siteCaps:
+          maxWaitMs: 60000 # Max wait time before giving up; ms >0 (0 = unlimited)
+          maxSlotPerSite: 5 # Slot cap per site; 0 = unlimited
+          maxWaitersPerSite: 50 # Max queued requests per site; 0 = unlimited
+          maxSlotPerIp: 1 # Slot cap per IP; 0 = unlimited
+          maxWaitersPerIp: 3 # Max queued requests per IP; 0 = unlimited
         weightedScheduler:
           enabled: false # Toggle weighted scheduler; false keeps legacy behavior
           hotPendingFactor: 4 # hotspot pending threshold multiplier vs maxSlotPerHost
@@ -423,11 +416,11 @@ envs:
           baseWeight: 1.0 # base weight for weighted round-robin
           weightPerWait: 1.0 # weight increment per failed TryAcquire
         rpc:
-          throttleCheckFunc: "download_check_throttle_protection" # RPC name to check throttle
-          registerWaiterFunc: "download_register_fq_waiter" # RPC name to register waiter
-          releaseWaiterFunc: "download_release_fq_waiter" # RPC to mark waiter release
-          tryAcquireFunc: "download_try_acquire_slot" # RPC to attempt slot acquisition
-          releaseFunc: "download_release_slot" # RPC to release slot
+          throttleCheckFunc: "fq_check_throttle" # RPC name to check throttle
+          registerWaiterFunc: "fq_register_waiter" # RPC name to register waiter
+          releaseWaiterFunc: "fq_release_waiter" # RPC to mark waiter release
+          tryAcquireFunc: "fq_try_acquire_dual" # RPC to attempt slot acquisition
+          releaseFunc: "fq_release_dual" # RPC to release slot
         cleanup:
           enabled: true # Enable periodic cleanup; default=true
           intervalSeconds: 1800 # Interval for cleanup job; seconds >0
@@ -664,12 +657,9 @@ envs:
         slotHandlerTimeoutMs: 20000
         perRequestTimeoutMs: 8000
         maxAttemptsCap: 35
-        profiles:
-          default:
-            maxWaitMs: 120000
-            maxSlotPerHost: 8
-            maxSlotPerIp: 3
-            maxWaitersPerIp: 8
+        siteBucket:
+          mode: "sharepoint"
+          hash: "sha256"
       throttleProfiles:
         default:
           hostPatterns: []
@@ -698,14 +688,12 @@ envs:
             actions:
               pathAction: []
               checkOriginMode: "path,asn,country,iprange"
-              fairQueueProfile: "default"
               throttleProfile: "default"
           - id: "download-block-admin"
             dynamic: false
             actions:
               pathAction: ["block"]
               checkOriginMode: "path,asn,country,iprange"
-              fairQueueProfile: "default"
               throttleProfile: "default"
               blockReason: "blocked by rule block_admin"
           - id: "download-public-share"
@@ -713,14 +701,12 @@ envs:
             actions:
               pathAction: []
               checkOriginMode: "path,asn,country,iprange"
-              fairQueueProfile: "default"
               throttleProfile: "default"
           - id: "download-public-share-passthrough"
             dynamic: false
             actions:
               pathAction: ["asis"]
               checkOriginMode: "path,asn,country,iprange"
-              fairQueueProfile: "default"
               throttleProfile: "default"
         pathRules:
           - pattern: "/admin/**"
@@ -777,18 +763,25 @@ envs:
         postgres:
           dsn: "postgres://user:pass@host:5432/dbname?sslmode=disable"
       fairQueue:
-        maxWaitMs: 60000
         pollIntervalMs: 500
         pollWindowMs: 6000
         minSlotHoldMs: 800
         smoothReleaseIntervalMs: null
         sessionIdleSeconds: 90
-        maxSlotPerHost: 5
-        maxSlotPerIp: 1
-        maxWaitersPerIp: 3
-        maxWaitersPerHost: 50
         zombieTimeoutSeconds: 30
         ipCooldownSeconds: 0
+        hostCaps:
+          maxWaitMs: 60000
+          maxSlotPerHost: 5
+          maxWaitersPerHost: 50
+          maxSlotPerIp: 1
+          maxWaitersPerIp: 3
+        siteCaps:
+          maxWaitMs: 60000
+          maxSlotPerSite: 5
+          maxWaitersPerSite: 50
+          maxSlotPerIp: 1
+          maxWaitersPerIp: 3
         weightedScheduler:
           enabled: false # Toggle weighted scheduler; false keeps legacy behavior
           hotPendingFactor: 4 # hotspot pending threshold multiplier vs maxSlotPerHost
@@ -799,11 +792,11 @@ envs:
           baseWeight: 1.0 # base weight for weighted round-robin
           weightPerWait: 1.0 # weight increment per failed TryAcquire
         rpc:
-          throttleCheckFunc: "download_check_throttle_protection"
-          registerWaiterFunc: "download_register_fq_waiter"
-          releaseWaiterFunc: "download_release_fq_waiter"
-          tryAcquireFunc: "download_try_acquire_slot"
-          releaseFunc: "download_release_slot"
+          throttleCheckFunc: "fq_check_throttle"
+          registerWaiterFunc: "fq_register_waiter"
+          releaseWaiterFunc: "fq_release_waiter"
+          tryAcquireFunc: "fq_try_acquire_dual"
+          releaseFunc: "fq_release_dual"
         cleanup:
           enabled: true
           intervalSeconds: 1800

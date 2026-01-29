@@ -37,10 +37,7 @@ type LandingDecision struct {
 type DownloadDecision struct {
 	PathAction              []string `json:"pathAction"`
 	CheckOriginMode         string   `json:"checkOriginMode"`
-	FairQueueProfile        string   `json:"fairQueueProfile"`
 	ThrottleProfile         string   `json:"throttleProfile"`
-	MaxSlotsPerIpOverride   *int     `json:"maxSlotsPerIpOverride"`
-	MaxWaitersPerIpOverride *int     `json:"maxWaitersPerIpOverride"`
 	BlockReason             *string  `json:"blockReason"`
 }
 
