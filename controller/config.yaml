@@ -263,7 +263,6 @@ envs:
         maxAttemptsCap: 35 # Max retry attempts for slot acquisition; >=1
         siteBucket:
           mode: "sharepoint" # Derive site bucket by SharePoint path segments
-          hash: "sha256" # Hash algorithm for site bucket (fixed)
       throttleProfiles:
         default:
           hostPatterns: [] # Host patterns this throttle profile applies to; glob list
@@ -659,7 +658,6 @@ envs:
         maxAttemptsCap: 35
         siteBucket:
           mode: "sharepoint"
-          hash: "sha256"
       throttleProfiles:
         default:
           hostPatterns: []

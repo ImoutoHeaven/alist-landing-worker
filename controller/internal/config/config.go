@@ -505,7 +505,6 @@ type DownloadThrottleProfile struct {
 // DownloadFairQueueSiteBucketConfig controls site bucket derivation.
 type DownloadFairQueueSiteBucketConfig struct {
 	Mode string `yaml:"mode" json:"mode"`
-	Hash string `yaml:"hash" json:"hash"`
 }
 
 // DownloadFairQueueConfig controls slot-handler integration.
@@ -1417,9 +1416,6 @@ func (f *DownloadFairQueueConfig) ensureDefaults(envName string) error {
 	}
 	if strings.TrimSpace(f.SiteBucket.Mode) == "" {
 		f.SiteBucket.Mode = "sharepoint"
-	}
-	if strings.TrimSpace(f.SiteBucket.Hash) == "" {
-		f.SiteBucket.Hash = "sha256"
 	}
 
 	if f.Enabled {

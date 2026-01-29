@@ -912,8 +912,8 @@ $$ LANGUAGE plpgsql;
 -- ========================================
 -- Stored Procedure: Unified Check (Cache + Rate Limit + Token Binding)
 -- ========================================
--- PostgreSQL FOUND variable behavior is undefined after dynamic SQL execution (EXECUTE).
--- Instead of relying on FOUND, we check record fields for NULL values directly.
+-- PostgreSQL row count after dynamic SQL execution (EXECUTE) is unreliable.
+-- Instead of relying on implicit state, we check record fields for NULL values directly.
 
 CREATE OR REPLACE FUNCTION landing_unified_check(
   p_path_hash TEXT,
