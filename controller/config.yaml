@@ -42,6 +42,7 @@ envs:
         defaultCombo: ["verify-altcha"] # Ordered challenge pipeline; allowed: verify-altcha|verify-turn|verify-turnstile|verify-powdet-argon2id|verify-powdet-argon2d|verify-powdet-randomx|verify-none; empty array = no challenge
       turnstile:
         enabled: false # Enable Cloudflare Turnstile challenge (default=false)
+        renderMode: "visible" # Render mode: visible | invisible
         siteKey: "" # Turnstile site key used by frontend (required if enabled)
         secretKey: "" # Turnstile secret for server-side verification (required if enabled)
         tokenBinding: true # Whether to bind Turnstile token to device info; default=true
@@ -469,6 +470,7 @@ envs:
         defaultCombo: ["verify-altcha"] # Same enum as staging: verify-altcha|verify-turn|verify-turnstile|verify-powdet-argon2id|verify-powdet-argon2d|verify-powdet-randomx|verify-none; order defines pipeline
       turnstile:
         enabled: false
+        renderMode: "visible"
         siteKey: ""
         secretKey: ""
         tokenBinding: true

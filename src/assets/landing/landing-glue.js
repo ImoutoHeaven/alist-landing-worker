@@ -785,6 +785,7 @@
   const keygenOutputEl = $('keygenOutput');
   const keygenLoadingEl = $('keygenLoading');
   const logEl = $('log');
+  const turnstileSection = $('turnstileSection');
   const turnstileContainer = $('turnstileContainer');
   const turnstileMessage = $('turnstileMessage');
   const clientDecryptSection = $('clientDecryptSection');
@@ -2003,6 +2004,7 @@
       underAttack: false,
       siteKey: '',
       turnstileAction: 'download',
+      turnstileRenderMode: 'visible',
       altchaChallenge: null,
       turnstileBinding: null,
       powdetChallenges: [],
@@ -5080,6 +5082,15 @@
     turnstileContainer.classList.remove('is-visible');
   };
 
+  const syncTurnstileRenderMode = () => {
+    if (!turnstileSection) return;
+    if (state.security.turnstileRenderMode === 'invisible') {
+      turnstileSection.classList.add('is-invisible');
+    } else {
+      turnstileSection.classList.remove('is-invisible');
+    }
+  };
+
   const shouldEnforceTurnstile = () => state.verification.needTurnstile === true;
 
   const getTurnstileBindingStatus = () => {
@@ -5135,6 +5146,7 @@
   };
 
   const syncTurnstilePrompt = () => {
+    syncTurnstileRenderMode();
     if (!shouldEnforceTurnstile()) {
       hideTurnstileContainer();
       if (!state.verification.turnstileToken) {
@@ -5142,7 +5154,11 @@
       }
       return;
     }
-    showTurnstileContainer();
+    if (state.security.turnstileRenderMode === 'invisible') {
+      hideTurnstileContainer();
+    } else {
+      showTurnstileContainer();
+    }
     const status = getTurnstileBindingStatus();
     if (!status.valid) {
       if (status.reason === 'expired') {
@@ -5306,7 +5322,12 @@
     if (!window.turnstile || typeof window.turnstile.render !== 'function') {
       throw new Error('Turnstile 未初始化');
     }
-    showTurnstileContainer();
+    syncTurnstileRenderMode();
+    if (state.security.turnstileRenderMode === 'invisible') {
+      hideTurnstileContainer();
+    } else {
+      showTurnstileContainer();
+    }
     if (state.security.widgetId !== null) {
       return;
     }
@@ -6075,6 +6096,9 @@
       typeof security.turnstileAction === 'string' && security.turnstileAction.trim().length > 0
         ? security.turnstileAction.trim()
         : 'download';
+    const rawRenderMode =
+      typeof security.turnstileRenderMode === 'string' ? security.turnstileRenderMode.trim().toLowerCase() : '';
+    state.security.turnstileRenderMode = rawRenderMode === 'invisible' ? 'invisible' : 'visible';
     state.security.altchaChallenge =
       security.altchaChallenge && typeof security.altchaChallenge === 'object'
         ? security.altchaChallenge

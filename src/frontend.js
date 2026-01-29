@@ -165,11 +165,17 @@ const renderLandingPageHtml = (path, options = {}) => {
     typeof normalizedOptions.turnstileAction === 'string' && normalizedOptions.turnstileAction.trim().length > 0
       ? normalizedOptions.turnstileAction.trim()
       : 'download';
+  const rawTurnstileRenderMode =
+    typeof normalizedOptions.turnstileRenderMode === 'string'
+      ? normalizedOptions.turnstileRenderMode.trim().toLowerCase()
+      : '';
+  const turnstileRenderMode = rawTurnstileRenderMode === 'invisible' ? 'invisible' : 'visible';
   const securityConfig = {
     underAttack: normalizedOptions.underAttack === true,
     turnstileSiteKey:
       typeof normalizedOptions.turnstileSiteKey === 'string' ? normalizedOptions.turnstileSiteKey : '',
     turnstileAction,
+    turnstileRenderMode,
     altchaChallenge: normalizedAltchaChallenge,
     turnstileBinding: normalizedTurnstileBinding,
     powdetChallenges: normalizedPowdetChallenges,

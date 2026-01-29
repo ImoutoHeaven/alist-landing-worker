@@ -200,6 +200,7 @@ type LandingTurnstileConfig struct {
 	Enabled             bool     `yaml:"enabled" json:"enabled"`
 	SiteKey             string   `yaml:"siteKey" json:"siteKey"`
 	SecretKey           string   `yaml:"secretKey" json:"secretKey"`
+	RenderMode          string   `yaml:"renderMode" json:"renderMode"`
 	TokenBinding        bool     `yaml:"tokenBinding" json:"tokenBinding"`
 	TokenTTLSeconds     int      `yaml:"tokenTTLSeconds" json:"tokenTTLSeconds"`
 	TokenTable          string   `yaml:"tokenTable" json:"tokenTable"`
@@ -900,6 +901,14 @@ func (l *LandingConfig) ensureDefaults(envName string) error {
 	}
 	if l.Turnstile.ExpectedAction == "" {
 		l.Turnstile.ExpectedAction = "download"
+	}
+	turnstileMode := strings.ToLower(strings.TrimSpace(l.Turnstile.RenderMode))
+	if turnstileMode == "" {
+		l.Turnstile.RenderMode = "visible"
+	} else if turnstileMode == "visible" || turnstileMode == "invisible" {
+		l.Turnstile.RenderMode = turnstileMode
+	} else {
+		return fmt.Errorf("landing.turnstile.renderMode must be visible or invisible for env %s", envName)
 	}
 	if l.Turnstile.Enabled {
 		if l.Turnstile.SiteKey == "" || l.Turnstile.SecretKey == "" {

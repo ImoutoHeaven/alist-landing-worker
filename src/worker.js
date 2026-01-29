@@ -948,6 +948,9 @@ const resolveConfig = (env = {}, bootstrap = null) => {
   const underAttack = Boolean(turnstileConfig.enabled);
   const turnstileSiteKey = typeof turnstileConfig.siteKey === 'string' ? turnstileConfig.siteKey.trim() : '';
   const turnstileSecretKey = typeof turnstileConfig.secretKey === 'string' ? turnstileConfig.secretKey.trim() : '';
+  const rawTurnstileRenderMode =
+    typeof turnstileConfig.renderMode === 'string' ? turnstileConfig.renderMode.trim().toLowerCase() : '';
+  const turnstileRenderMode = rawTurnstileRenderMode === 'invisible' ? 'invisible' : 'visible';
   if (underAttack && (!turnstileSiteKey || !turnstileSecretKey)) {
     throw new Error('controller landing.turnstile.siteKey and secretKey are required when turnstile.enabled is true');
   }
@@ -1380,6 +1383,7 @@ const resolveConfig = (env = {}, bootstrap = null) => {
     frontendThemeCssUrl,
     turnstileSiteKey,
     turnstileSecretKey,
+    turnstileRenderMode,
     turnstileTokenBindingEnabled,
     turnstileTokenTTL,
     turnstileTokenTTLSeconds,
@@ -4777,6 +4781,7 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
     underAttack: needTurnstile,
     turnstileSiteKey: config.turnstileSiteKey,
     turnstileAction: config.turnstileExpectedAction,
+    turnstileRenderMode: config.turnstileRenderMode,
     altchaChallenge: altchaChallengePayload,
     turnstileBinding: turnstileBindingPayload,
     powdetChallenges,

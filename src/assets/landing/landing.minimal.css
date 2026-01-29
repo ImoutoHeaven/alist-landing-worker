@@ -82,6 +82,11 @@ header {
   color: #fbbf24;
 }
 
+.turnstile-section.is-invisible .turnstile-message {
+  background: rgba(251, 191, 36, 0.12);
+  border-color: rgba(251, 191, 36, 0.35);
+}
+
 /* ========== Buttons ========== */
 button {
   border: 1px solid rgba(255,255,255,0.1);
@@ -474,4 +479,3 @@ button:hover:not(:disabled) {
     background: rgba(var(--glow-r, 62), var(--glow-g, 110), var(--glow-b, 255), 0.3);
   }
 }
-
