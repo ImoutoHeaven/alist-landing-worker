@@ -147,32 +147,59 @@ main {
 /* ========== Turnstile Section ========== */
 .turnstile-section {
   margin: 1.5rem 0 0;
+  overflow: hidden;
+  transition: margin 0.15s ease, opacity 0.15s ease;
+}
+
+.turnstile-section.is-hidden {
+  margin-top: 0;
+  opacity: 0;
 }
 
 .turnstile-container {
-  display: none;
-  padding: 1rem;
+  display: block;
+  padding: 0;
   border-radius: 0.75rem;
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  transform: translateY(-6px);
+  transition: max-height 0.15s ease, opacity 0.15s ease, transform 0.15s ease, padding 0.15s ease;
+  pointer-events: none;
 }
 
 .turnstile-container.is-visible {
-  display: block;
+  max-height: 200px;
+  opacity: 1;
+  padding: 1rem;
+  transform: translateY(0);
+  pointer-events: auto;
 }
 
 .turnstile-message {
-  margin-top: 0.75rem;
+  margin-top: 0;
   font-size: 0.85rem;
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  transform: translateY(-6px);
+  padding: 0;
+  border: 0 solid transparent;
+  transition: max-height 0.15s ease, opacity 0.15s ease, transform 0.15s ease, margin-top 0.15s ease, padding 0.15s ease;
 }
 
-.turnstile-message[hidden] {
-  display: none;
+.turnstile-message.is-visible {
+  max-height: 120px;
+  opacity: 1;
+  margin-top: 0.75rem;
+  transform: translateY(0);
 }
 
 .turnstile-section.is-invisible .turnstile-container {
   display: none !important;
 }
 
-.turnstile-section.is-invisible .turnstile-message {
+.turnstile-section.is-invisible .turnstile-message.is-visible {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -183,7 +210,7 @@ main {
   background: rgba(251, 191, 36, 0.08);
 }
 
-.turnstile-section.is-invisible .turnstile-message::before {
+.turnstile-section.is-invisible .turnstile-message.is-visible::before {
   content: '!';
   display: inline-flex;
   align-items: center;

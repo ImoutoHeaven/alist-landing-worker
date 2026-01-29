@@ -5059,32 +5059,66 @@
     }
   };
 
+  const TURNSTILE_TRANSITION_MS = 150;
+  const clearHideTimer = (el) => {
+    if (el && el.__hideTimerId) {
+      clearTimeout(el.__hideTimerId);
+      el.__hideTimerId = null;
+    }
+  };
+  const setAnimatedVisibility = (el, visible) => {
+    if (!el) return;
+    clearHideTimer(el);
+    if (visible) {
+      el.hidden = false;
+      requestAnimationFrame(() => {
+        el.classList.add('is-visible');
+      });
+      return;
+    }
+    el.classList.remove('is-visible');
+    el.__hideTimerId = setTimeout(() => {
+      if (!el.classList.contains('is-visible')) {
+        el.hidden = true;
+      }
+    }, TURNSTILE_TRANSITION_MS);
+  };
   const setTurnstileMessage = (text) => {
     if (!turnstileMessage) return;
     if (text) {
       turnstileMessage.textContent = text;
-      turnstileMessage.hidden = false;
+      setAnimatedVisibility(turnstileMessage, true);
     } else {
-      turnstileMessage.textContent = '';
-      turnstileMessage.hidden = true;
+      setAnimatedVisibility(turnstileMessage, false);
     }
   };
 
   const showTurnstileContainer = () => {
     if (!turnstileContainer) return;
-    turnstileContainer.hidden = false;
-    turnstileContainer.classList.add('is-visible');
+    setAnimatedVisibility(turnstileContainer, true);
   };
 
   const hideTurnstileContainer = () => {
     if (!turnstileContainer) return;
-    turnstileContainer.hidden = true;
-    turnstileContainer.classList.remove('is-visible');
+    setAnimatedVisibility(turnstileContainer, false);
   };
 
   const setTurnstileSectionVisible = (visible) => {
     if (!turnstileSection) return;
-    turnstileSection.hidden = !visible;
+    clearHideTimer(turnstileSection);
+    if (visible) {
+      turnstileSection.hidden = false;
+      requestAnimationFrame(() => {
+        turnstileSection.classList.remove('is-hidden');
+      });
+      return;
+    }
+    turnstileSection.classList.add('is-hidden');
+    turnstileSection.__hideTimerId = setTimeout(() => {
+      if (turnstileSection.classList.contains('is-hidden')) {
+        turnstileSection.hidden = true;
+      }
+    }, TURNSTILE_TRANSITION_MS);
   };
 
   const syncTurnstileRenderMode = () => {
