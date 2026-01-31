@@ -203,6 +203,7 @@ main {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  transition: opacity 0.15s ease, transform 0.15s ease;
 }
 
 .turnstile-section.is-invisible .turnstile-message.is-visible {
