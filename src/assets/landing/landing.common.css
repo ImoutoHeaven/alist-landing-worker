@@ -203,6 +203,12 @@ main {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  max-height: 120px;
+  margin-top: 0;
+  padding: 0.85rem 1rem;
+  border-radius: 0.75rem;
+  border: 1px solid rgba(251, 191, 36, 0.25);
+  background: rgba(251, 191, 36, 0.08);
   transition: opacity 0.15s ease, transform 0.15s ease;
 }
 
