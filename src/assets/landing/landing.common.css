@@ -185,7 +185,9 @@ main {
   transform: translateY(-6px);
   padding: 0;
   border: 0 solid transparent;
-  transition: max-height 0.15s ease, opacity 0.15s ease, transform 0.15s ease, margin-top 0.15s ease, padding 0.15s ease;
+  transition: max-height 0.15s ease, opacity 0.15s ease, transform 0.15s ease,
+    margin-top 0.15s ease, padding 0.15s ease,
+    color 0.2s ease, background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 .turnstile-message.is-visible {
@@ -208,16 +210,17 @@ main {
   padding: 0.85rem 1rem;
   border-radius: 0.75rem;
   border: 1px solid rgba(251, 191, 36, 0.25);
-  background: rgba(251, 191, 36, 0.08);
-  transition: opacity 0.15s ease, transform 0.15s ease;
+  background-color: rgba(251, 191, 36, 0.08);
+  transition: opacity 0.15s ease, transform 0.15s ease,
+    color 0.2s ease, background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 .turnstile-section.is-invisible .turnstile-message.is-visible {
   margin-top: 0;
   padding: 0.85rem 1rem;
   border-radius: 0.75rem;
-  border: 1px solid rgba(251, 191, 36, 0.25);
-  background: rgba(251, 191, 36, 0.08);
+  border-color: rgba(251, 191, 36, 0.25);
+  background-color: rgba(251, 191, 36, 0.08);
 }
 
 .turnstile-section.is-invisible .turnstile-message.is-visible::before {

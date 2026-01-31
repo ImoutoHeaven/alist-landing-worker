@@ -5060,6 +5060,9 @@
   };
 
   const TURNSTILE_TRANSITION_MS = 150;
+  const TURNSTILE_SUCCESS_HINT_MS = 1200;
+  const TURNSTILE_FAILURE_RETRY_MS = 2000;
+  let turnstileResultTimer = null;
   const clearHideTimer = (el) => {
     if (el && el.__hideTimerId) {
       clearTimeout(el.__hideTimerId);
@@ -5072,6 +5075,12 @@
         cancelAnimationFrame(el.__showFrameId);
       }
       el.__showFrameId = null;
+    }
+  };
+  const clearTurnstileResultTimer = () => {
+    if (turnstileResultTimer) {
+      clearTimeout(turnstileResultTimer);
+      turnstileResultTimer = null;
     }
   };
   const setAnimatedVisibility = (el, visible) => {
@@ -5093,14 +5102,53 @@
       }
     }, TURNSTILE_TRANSITION_MS);
   };
-  const setTurnstileMessage = (text) => {
+  const setTurnstileMessage = (text, variant = 'warning') => {
     if (!turnstileMessage) return;
+    clearTurnstileResultTimer();
+    turnstileMessage.classList.remove('is-success', 'is-error');
+    if (variant === 'success') {
+      turnstileMessage.classList.add('is-success');
+    } else if (variant === 'error') {
+      turnstileMessage.classList.add('is-error');
+    }
     if (text) {
       turnstileMessage.textContent = text;
       setAnimatedVisibility(turnstileMessage, true);
-    } else {
-      setAnimatedVisibility(turnstileMessage, false);
+      return;
     }
+    turnstileMessage.textContent = '';
+    setAnimatedVisibility(turnstileMessage, false);
+  };
+
+  const showTurnstileSuccessHint = () => {
+    if (!turnstileMessage) return;
+    if (state.security.turnstileRenderMode !== 'invisible') {
+      setTurnstileMessage('');
+      return;
+    }
+    setTurnstileSectionVisible(true);
+    setTurnstileMessage('验证成功', 'success');
+    turnstileResultTimer = setTimeout(() => {
+      turnstileResultTimer = null;
+      setTurnstileMessage('');
+      syncTurnstilePrompt();
+    }, TURNSTILE_SUCCESS_HINT_MS);
+  };
+
+  const showTurnstileFailureHint = (text) => {
+    if (!turnstileMessage) return;
+    if (state.security.turnstileRenderMode !== 'invisible') {
+      setTurnstileMessage(text || '验证失败，请重试');
+      return;
+    }
+    setTurnstileSectionVisible(true);
+    setTurnstileMessage(text || '验证失败，正在重试', 'error');
+    turnstileResultTimer = setTimeout(() => {
+      turnstileResultTimer = null;
+      refreshTurnstileWidget().catch((error) => {
+        console.warn('Turnstile 重新刷新失败', error);
+      });
+    }, TURNSTILE_FAILURE_RETRY_MS);
   };
 
   const showTurnstileContainer = () => {
@@ -5412,8 +5460,12 @@
         state.verification.turnstileIssuedAt = Date.now();
         state.verification.turnstileReady = true;
         hideTurnstileContainer();
-        setTurnstileMessage('');
-        syncTurnstilePrompt();
+        if (state.security.turnstileRenderMode === 'invisible') {
+          showTurnstileSuccessHint();
+        } else {
+          setTurnstileMessage('');
+          syncTurnstilePrompt();
+        }
         fulfilTurnstileResolvers(state.verification.turnstileToken);
         updateButtonState();
         if (state.awaitingRetryUnlock) {
@@ -5423,10 +5475,18 @@
       },
       'expired-callback': () => {
         clearTurnstileToken();
-        setTurnstileMessage('验证已过期，请重新验证');
+        if (state.security.turnstileRenderMode === 'invisible') {
+          showTurnstileFailureHint('验证已过期，正在重新验证');
+        } else {
+          setTurnstileMessage('验证已过期，请重新验证');
+        }
       },
       'error-callback': () => {
         clearTurnstileToken();
+        if (state.security.turnstileRenderMode === 'invisible') {
+          showTurnstileFailureHint('验证失败，正在重试');
+          return;
+        }
         setTurnstileMessage('验证失败，请重试');
         if (typeof window.turnstile.reset === 'function' && state.security.widgetId !== null) {
           try {
@@ -5437,6 +5497,32 @@
         }
       },
     });
+  };
+
+  const refreshTurnstileWidget = async () => {
+    if (!shouldEnforceTurnstile()) {
+      syncTurnstilePrompt();
+      return;
+    }
+    clearTurnstileToken();
+    let resetOk = false;
+    if (typeof window.turnstile?.reset === 'function' && state.security.widgetId !== null) {
+      try {
+        window.turnstile.reset(state.security.widgetId);
+        resetOk = true;
+      } catch (error) {
+        console.warn('Turnstile reset 失败', error);
+      }
+    }
+    if (!resetOk) {
+      state.security.widgetId = null;
+      try {
+        await renderTurnstileWidget();
+      } catch (error) {
+        console.warn('Turnstile 重新渲染失败', error);
+      }
+    }
+    syncTurnstilePrompt();
   };
 
   const waitForTurnstileToken = async () => {

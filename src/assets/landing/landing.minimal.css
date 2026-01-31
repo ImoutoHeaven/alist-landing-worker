@@ -83,8 +83,26 @@ header {
 }
 
 .turnstile-section.is-invisible .turnstile-message.is-visible {
-  background: rgba(251, 191, 36, 0.12);
+  background-color: rgba(251, 191, 36, 0.12);
   border-color: rgba(251, 191, 36, 0.35);
+}
+
+.turnstile-message.is-success {
+  color: #34d399;
+}
+
+.turnstile-message.is-error {
+  color: #f87171;
+}
+
+.turnstile-section.is-invisible .turnstile-message.is-visible.is-success {
+  background-color: rgba(52, 211, 153, 0.12);
+  border-color: rgba(52, 211, 153, 0.35);
+}
+
+.turnstile-section.is-invisible .turnstile-message.is-visible.is-error {
+  background-color: rgba(248, 113, 113, 0.12);
+  border-color: rgba(248, 113, 113, 0.35);
 }
 
 /* ========== Buttons ========== */
