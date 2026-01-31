@@ -5461,7 +5461,13 @@
         state.verification.turnstileReady = true;
         hideTurnstileContainer();
         if (state.security.turnstileRenderMode === 'invisible') {
-          showTurnstileSuccessHint();
+          const shouldShowSuccess = !!turnstileMessage && turnstileMessage.classList.contains('is-visible');
+          if (shouldShowSuccess) {
+            showTurnstileSuccessHint();
+          } else {
+            setTurnstileMessage('');
+            syncTurnstilePrompt();
+          }
         } else {
           setTurnstileMessage('');
           syncTurnstilePrompt();
