@@ -199,10 +199,13 @@ main {
   display: none !important;
 }
 
-.turnstile-section.is-invisible .turnstile-message.is-visible {
+.turnstile-section.is-invisible .turnstile-message {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+}
+
+.turnstile-section.is-invisible .turnstile-message.is-visible {
   margin-top: 0;
   padding: 0.85rem 1rem;
   border-radius: 0.75rem;

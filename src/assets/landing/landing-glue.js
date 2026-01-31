@@ -5066,12 +5066,22 @@
       el.__hideTimerId = null;
     }
   };
+  const clearShowFrame = (el) => {
+    if (el && el.__showFrameId) {
+      if (typeof cancelAnimationFrame === 'function') {
+        cancelAnimationFrame(el.__showFrameId);
+      }
+      el.__showFrameId = null;
+    }
+  };
   const setAnimatedVisibility = (el, visible) => {
     if (!el) return;
     clearHideTimer(el);
+    clearShowFrame(el);
     if (visible) {
       el.hidden = false;
-      requestAnimationFrame(() => {
+      el.__showFrameId = requestAnimationFrame(() => {
+        el.__showFrameId = null;
         el.classList.add('is-visible');
       });
       return;
@@ -5106,9 +5116,11 @@
   const setTurnstileSectionVisible = (visible) => {
     if (!turnstileSection) return;
     clearHideTimer(turnstileSection);
+    clearShowFrame(turnstileSection);
     if (visible) {
       turnstileSection.hidden = false;
-      requestAnimationFrame(() => {
+      turnstileSection.__showFrameId = requestAnimationFrame(() => {
+        turnstileSection.__showFrameId = null;
         turnstileSection.classList.remove('is-hidden');
       });
       return;
