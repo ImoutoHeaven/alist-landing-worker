@@ -2018,18 +2018,19 @@
         needPowdet: false,
         altchaReady: false,
         turnstileReady: false,
-      powdetReady: false,
-      altchaSolution: null,
-      turnstileToken: null,
-      powdetNonceByKey: {},
-      powdetActiveKey: '',
-      powdetWorkers: {},
-      altchaIssuedAt: 0,
-      turnstileIssuedAt: 0,
-      tokenResolvers: [],
-      powdetResolvers: [],
-      powReadyAnnounced: false,
-    },
+        powdetReady: false,
+        altchaSolution: null,
+        turnstileToken: null,
+        powdetNonceByKey: {},
+        powdetActiveKey: '',
+        powdetWorkers: {},
+        altchaIssuedAt: 0,
+        turnstileIssuedAt: 0,
+        tokenResolvers: [],
+        powdetResolvers: [],
+        powReadyAnnounced: false,
+        turnstileFrozen: false,
+      },
       clientDecrypt: {
         enabled: clientDecryptSupported,
         ready: false,
@@ -5122,6 +5123,7 @@
 
   const showTurnstileSuccessHint = () => {
     if (!turnstileMessage) return;
+    if (shouldFreezeTurnstilePrompt()) return;
     if (state.security.turnstileRenderMode !== 'invisible') {
       setTurnstileMessage('');
       return;
@@ -5137,6 +5139,7 @@
 
   const showTurnstileFailureHint = (text) => {
     if (!turnstileMessage) return;
+    if (shouldFreezeTurnstilePrompt()) return;
     if (state.security.turnstileRenderMode !== 'invisible') {
       setTurnstileMessage(text || '验证失败，请重试');
       return;
@@ -5191,6 +5194,7 @@
   };
 
   const shouldEnforceTurnstile = () => state.verification.needTurnstile === true;
+  const shouldFreezeTurnstilePrompt = () => state.verification.turnstileFrozen === true;
 
   const getTurnstileBindingStatus = () => {
     const binding = state.security.turnstileBinding;
@@ -5246,6 +5250,12 @@
 
   const syncTurnstilePrompt = () => {
     syncTurnstileRenderMode();
+    if (shouldFreezeTurnstilePrompt()) {
+      hideTurnstileContainer();
+      setTurnstileMessage('');
+      setTurnstileSectionVisible(false);
+      return;
+    }
     if (!shouldEnforceTurnstile()) {
       hideTurnstileContainer();
       if (!state.verification.turnstileToken) {
@@ -5459,6 +5469,11 @@
         state.verification.turnstileToken = token || '';
         state.verification.turnstileIssuedAt = Date.now();
         state.verification.turnstileReady = true;
+        if (shouldFreezeTurnstilePrompt()) {
+          fulfilTurnstileResolvers(state.verification.turnstileToken);
+          updateButtonState();
+          return;
+        }
         hideTurnstileContainer();
         if (state.security.turnstileRenderMode === 'invisible') {
           const shouldShowSuccess = !!turnstileMessage && turnstileMessage.classList.contains('is-visible');
@@ -5481,6 +5496,9 @@
       },
       'expired-callback': () => {
         clearTurnstileToken();
+        if (shouldFreezeTurnstilePrompt()) {
+          return;
+        }
         if (state.security.turnstileRenderMode === 'invisible') {
           showTurnstileFailureHint('验证已过期，正在重新验证');
         } else {
@@ -5489,6 +5507,9 @@
       },
       'error-callback': () => {
         clearTurnstileToken();
+        if (shouldFreezeTurnstilePrompt()) {
+          return;
+        }
         if (state.security.turnstileRenderMode === 'invisible') {
           showTurnstileFailureHint('验证失败，正在重试');
           return;
@@ -6335,6 +6356,7 @@
     state.verification.needTurnstile =
       state.security.underAttack && typeof state.security.siteKey === 'string' && state.security.siteKey.length > 0;
     state.verification.needPowdet = state.security.powdetChallenges.length > 0;
+    state.verification.turnstileFrozen = false;
     if (!state.verification.needTurnstile) {
       state.security.underAttack = false;
     }
@@ -6495,6 +6517,7 @@
     syncBodyModeClasses();
     state.infoReady = false;
     state.infoError = false;
+    state.verification.turnstileFrozen = false;
     clientDecryptUiState.ready = false;
     clientDecryptUiState.running = false;
     clientDecryptUiState.completed = false;
@@ -6664,6 +6687,8 @@
       syncBodyModeClasses();
       state.infoReady = true;
       state.fetchingInfo = false;
+      state.verification.turnstileFrozen = true;
+      syncTurnstilePrompt();
       notifyAutoRedirectForWeb();
       return;
     }
@@ -6705,6 +6730,8 @@
       syncBodyModeClasses();
       state.infoReady = true;
       state.fetchingInfo = false;
+      state.verification.turnstileFrozen = true;
+      syncTurnstilePrompt();
       state.downloadURL = downloadURL;
       state.downloadBtnMode = 'download';
       downloadBtn.disabled = false;
@@ -6739,6 +6766,8 @@
     state.downloadURL = downloadURL;
     state.infoReady = true;
     state.fetchingInfo = false;
+    state.verification.turnstileFrozen = true;
+    syncTurnstilePrompt();
 
     // Update page title to filename after verification
     try {
