@@ -478,6 +478,7 @@ type DownloadDBConfig struct {
 	PostgrestURL       string                  `yaml:"postgrestUrl" json:"postgrestUrl"`
 	VerifyHeader       []string                `yaml:"verifyHeader" json:"verifyHeader"`
 	VerifySecret       []string                `yaml:"verifySecret" json:"verifySecret"`
+	CacheEnabled       *bool                   `yaml:"cacheEnabled" json:"cacheEnabled"`
 	CacheTable         string                  `yaml:"cacheTable" json:"cacheTable"`
 	LinkTTLSeconds     int                     `yaml:"linkTTLSeconds" json:"linkTTLSeconds"`
 	CleanupPercentage  float64                 `yaml:"cleanupPercentage" json:"cleanupPercentage"`
@@ -1329,6 +1330,9 @@ func (d *DownloadDBConfig) ensureDefaults(envName string) error {
 		}
 		if len(d.VerifyHeader) != len(d.VerifySecret) {
 			return fmt.Errorf("download.db.verifyHeader and verifySecret must have the same length for env %s", envName)
+		}
+		if d.CacheEnabled == nil {
+			return fmt.Errorf("download.db.cacheEnabled is required for env %s", envName)
 		}
 
 		if d.RateLimit.Enabled && (d.RateLimit.Limit <= 0 || d.RateLimit.WindowSeconds <= 0) {

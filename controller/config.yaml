@@ -236,6 +236,7 @@ envs:
         postgrestUrl: "https://postgrest-staging.example.com" # PostgREST endpoint for download tables; required if mode set
         verifyHeader: ["X-Postgrest-Auth"] # Headers carrying PostgREST auth; length must match verifySecret
         verifySecret: ["replace-with-postgrest-secret"] # Values for PostgREST auth headers
+        cacheEnabled: true # Explicitly enable download cache; required when mode=custom-pg-rest
         cacheTable: "DOWNLOAD_CACHE_TABLE" # Table storing download cache entries (must match init2.sql)
         linkTTLSeconds: 1800 # TTL for cached download links; seconds >0
         cleanupPercentage: 1 # Chance (0-100) of running cache cleanup per request
@@ -631,6 +632,7 @@ envs:
         postgrestUrl: "https://postgrest.example.com"
         verifyHeader: ["X-Postgrest-Auth"]
         verifySecret: ["replace-with-postgrest-secret"]
+        cacheEnabled: true
         cacheTable: "DOWNLOAD_CACHE_TABLE"
         linkTTLSeconds: 1800
         cleanupPercentage: 1
