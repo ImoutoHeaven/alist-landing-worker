@@ -57,7 +57,11 @@ const (
 	defaultThrottleFastSampleCount  = 4
 	defaultThrottleErrorRatioPct    = 20
 	defaultThrottleFastErrorRatio   = 60
-	defaultFairQueueWaitMs          = 15000
+	defaultSlotHandlerGraceMs       = 4000
+	defaultSlotHandlerUtilWindowSec = 10
+	defaultSlotHandlerMaxBatch      = 8
+	defaultSlotHandlerMaxProbePar   = 4
+	defaultSlotHandlerMaxProbeQps   = 20
 	defaultSlotHandlerTimeoutMs     = 20000
 	defaultSlotHandlerPerReqTimeout = 8000
 	defaultSlotHandlerAttemptsCap   = 35
@@ -75,27 +79,14 @@ const (
 	defaultLandingHrwMaxSize        = "500MB"
 	defaultSlotHandlerListen        = ":8080"
 	defaultSlotHandlerAuthHeader    = "X-FQ-Auth"
-	defaultSlotHandlerMaxWaitMs     = 20000
 	defaultSlotHandlerPollInterval  = 500
 	defaultSlotHandlerPollWindow    = 6000
 	defaultSlotHandlerMaxSlotHost   = 5
 	defaultSlotHandlerMaxSlotIP     = 1
-	defaultSlotHandlerMaxWaitHost   = 50
-	defaultSlotHandlerGlobalWaiters = 500
-	defaultSlotHandlerSessionIdle   = 90
 	defaultSlotHandlerZombieTimeout = 30
 	defaultSlotHandlerCleanupInt    = 1800
-	defaultSlotHandlerQueueDepthTTL = 20
-	defaultSlotHandlerCleanupDelay  = 5
-	defaultSlotHandlerThrottleFunc  = "fq_check_throttle"
-	defaultSlotHandlerRegisterFunc  = "fq_register_waiter"
-	defaultSlotHandlerReleaseWaiter = "fq_release_waiter"
-	defaultSlotHandlerTryAcquire    = "fq_try_acquire_dual"
+	defaultSlotHandlerTryAcquire    = "fq_try_acquire_batch"
 	defaultSlotHandlerReleaseSlot   = "fq_release_dual"
-	defaultWeightedHotPendingFactor = 4
-	defaultWeightedHotPendingMin    = 16
-	defaultWeightedBaseWeight       = 1.0
-	defaultWeightedPerWait          = 1.0
 	defaultControllerListenAddr     = ":8080"
 )
 
@@ -262,25 +253,25 @@ type LandingPowdetDynamicConfig struct {
 
 // LandingPowdetAlgorithmConfig describes a single powdet algorithm config.
 type LandingPowdetAlgorithmConfig struct {
-	Enabled         bool                      `yaml:"enabled" json:"enabled"`
-	StaticLevel     *int                      `yaml:"staticLevel" json:"staticLevel"`
+	Enabled         bool                        `yaml:"enabled" json:"enabled"`
+	StaticLevel     *int                        `yaml:"staticLevel" json:"staticLevel"`
 	Dynamic         *LandingPowdetDynamicConfig `yaml:"dynamic" json:"dynamic"`
-	DifficultyTable string                    `yaml:"difficultyTable" json:"difficultyTable"`
-	StaticBaseURL   string                    `yaml:"staticBaseUrl" json:"staticBaseUrl"`
+	DifficultyTable string                      `yaml:"difficultyTable" json:"difficultyTable"`
+	StaticBaseURL   string                      `yaml:"staticBaseUrl" json:"staticBaseUrl"`
 }
 
 // LandingPowdetConfig holds powdet integration config.
 type LandingPowdetConfig struct {
-	Enabled          bool                             `yaml:"enabled" json:"enabled"`
-	BaseURL          string                           `yaml:"baseUrl" json:"baseUrl"`
-	StaticBaseURL    string                           `yaml:"staticBaseUrl" json:"staticBaseUrl"`
-	Token            string                           `yaml:"token" json:"token"`
-	Table            string                           `yaml:"table" json:"table"`
-	DifficultyTable  string                           `yaml:"difficultyTable" json:"difficultyTable"`
+	Enabled          bool                                    `yaml:"enabled" json:"enabled"`
+	BaseURL          string                                  `yaml:"baseUrl" json:"baseUrl"`
+	StaticBaseURL    string                                  `yaml:"staticBaseUrl" json:"staticBaseUrl"`
+	Token            string                                  `yaml:"token" json:"token"`
+	Table            string                                  `yaml:"table" json:"table"`
+	DifficultyTable  string                                  `yaml:"difficultyTable" json:"difficultyTable"`
 	Algorithms       map[string]LandingPowdetAlgorithmConfig `yaml:"algorithms" json:"algorithms"`
-	ExpireSeconds    int                              `yaml:"expireSeconds" json:"expireSeconds"`
-	ClockSkewSeconds int                              `yaml:"clockSkewSeconds" json:"clockSkewSeconds"`
-	MaxWindowSeconds int                              `yaml:"maxWindowSeconds" json:"maxWindowSeconds"`
+	ExpireSeconds    int                                     `yaml:"expireSeconds" json:"expireSeconds"`
+	ClockSkewSeconds int                                     `yaml:"clockSkewSeconds" json:"clockSkewSeconds"`
+	MaxWindowSeconds int                                     `yaml:"maxWindowSeconds" json:"maxWindowSeconds"`
 }
 
 // LandingCacheConfig controls filesize cache settings.
@@ -382,40 +373,40 @@ type LandingPayloadConfig struct {
 
 // LandingFrontendConfig describes landing page asset locations.
 type LandingFrontendConfig struct {
-	GlueUrl       string         `yaml:"glueUrl" json:"glueUrl"`
-	HtmlUrl       string         `yaml:"htmlUrl" json:"htmlUrl"`
-	CommonCssUrl  string         `yaml:"commonCssUrl" json:"commonCssUrl"`
-	ThemeCssUrl   string         `yaml:"themeCssUrl" json:"themeCssUrl"`
-	Extra         map[string]any `yaml:",inline" json:"-"`
+	GlueUrl      string         `yaml:"glueUrl" json:"glueUrl"`
+	HtmlUrl      string         `yaml:"htmlUrl" json:"htmlUrl"`
+	CommonCssUrl string         `yaml:"commonCssUrl" json:"commonCssUrl"`
+	ThemeCssUrl  string         `yaml:"themeCssUrl" json:"themeCssUrl"`
+	Extra        map[string]any `yaml:",inline" json:"-"`
 }
 
 // LandingConfig describes landing-side static configuration.
 type LandingConfig struct {
-	PageSecret            string                     `yaml:"pageSecret" json:"pageSecret"`
-	Frontend              LandingFrontendConfig      `yaml:"frontend" json:"frontend"`
-	Captcha               LandingCaptchaConfig       `yaml:"captcha" json:"captcha"`
-	CaptchaBinding        *BindingConfig             `yaml:"captchaBinding,omitempty" json:"captchaBinding,omitempty"`
-	Turnstile             LandingTurnstileConfig     `yaml:"turnstile" json:"turnstile"`
-	Altcha                LandingAltchaConfig        `yaml:"altcha" json:"altcha"`
-	Powdet                LandingPowdetConfig        `yaml:"powdet" json:"powdet"`
-	PathRules             DownloadPathRules          `yaml:"pathRules" json:"pathRules"`
-	Paths                 PathConfig                 `yaml:"paths" json:"paths"`
-	FastRedirect          bool                       `yaml:"fastRedirect" json:"fastRedirect"`
-	AutoRedirect          bool                       `yaml:"autoRedirect" json:"autoRedirect"`
-	IPv4Only              bool                       `yaml:"ipv4Only" json:"ipv4Only"`
-	DownloadWorkerHrw     bool                       `yaml:"downloadWorkerHrwEnabled" json:"downloadWorkerHrwEnabled"`
-	DownloadWorkerHrwMax  string                     `yaml:"downloadWorkerHrwMaxSize" json:"downloadWorkerHrwMaxSize"`
-	DB                    LandingDBConfig            `yaml:"db" json:"db"`
-	Crypt                 LandingCryptConfig         `yaml:"crypt" json:"crypt"`
-	WebDownloader         LandingWebDownloaderConfig `yaml:"webDownloader" json:"webDownloader"`
-	ClientDecryptEnabled  bool                       `yaml:"clientDecryptEnabled" json:"clientDecryptEnabled"`
-	Payload               LandingPayloadConfig       `yaml:"payload" json:"payload"`
-	Extra                 map[string]any             `yaml:",inline" json:"-"`
+	PageSecret           string                     `yaml:"pageSecret" json:"pageSecret"`
+	Frontend             LandingFrontendConfig      `yaml:"frontend" json:"frontend"`
+	Captcha              LandingCaptchaConfig       `yaml:"captcha" json:"captcha"`
+	CaptchaBinding       *BindingConfig             `yaml:"captchaBinding,omitempty" json:"captchaBinding,omitempty"`
+	Turnstile            LandingTurnstileConfig     `yaml:"turnstile" json:"turnstile"`
+	Altcha               LandingAltchaConfig        `yaml:"altcha" json:"altcha"`
+	Powdet               LandingPowdetConfig        `yaml:"powdet" json:"powdet"`
+	PathRules            DownloadPathRules          `yaml:"pathRules" json:"pathRules"`
+	Paths                PathConfig                 `yaml:"paths" json:"paths"`
+	FastRedirect         bool                       `yaml:"fastRedirect" json:"fastRedirect"`
+	AutoRedirect         bool                       `yaml:"autoRedirect" json:"autoRedirect"`
+	IPv4Only             bool                       `yaml:"ipv4Only" json:"ipv4Only"`
+	DownloadWorkerHrw    bool                       `yaml:"downloadWorkerHrwEnabled" json:"downloadWorkerHrwEnabled"`
+	DownloadWorkerHrwMax string                     `yaml:"downloadWorkerHrwMaxSize" json:"downloadWorkerHrwMaxSize"`
+	DB                   LandingDBConfig            `yaml:"db" json:"db"`
+	Crypt                LandingCryptConfig         `yaml:"crypt" json:"crypt"`
+	WebDownloader        LandingWebDownloaderConfig `yaml:"webDownloader" json:"webDownloader"`
+	ClientDecryptEnabled bool                       `yaml:"clientDecryptEnabled" json:"clientDecryptEnabled"`
+	Payload              LandingPayloadConfig       `yaml:"payload" json:"payload"`
+	Extra                map[string]any             `yaml:",inline" json:"-"`
 }
 
 // PowdetServiceAlgorithmConfig describes a powdet algorithm config.
 type PowdetServiceAlgorithmConfig struct {
-	Enabled      bool `yaml:"enabled" json:"enabled"`
+	Enabled bool `yaml:"enabled" json:"enabled"`
 	// argon2id / argon2d
 	MemoryKiB   int `yaml:"memoryKiB" json:"memoryKiB"`
 	Iterations  int `yaml:"iterations" json:"iterations"`
@@ -433,13 +424,13 @@ type PowdetServiceAlgorithmConfig struct {
 
 // PowdetServiceConfig holds controller-managed powdet settings.
 type PowdetServiceConfig struct {
-	Enabled               bool                               `yaml:"enabled" json:"enabled"`
-	ListenPort            int                                `yaml:"listenPort" json:"listenPort"`
-	BatchSize             int                                `yaml:"batchSize" json:"batchSize"`
-	DeprecateAfterBatches int                                `yaml:"deprecateAfterBatches" json:"deprecateAfterBatches"`
+	Enabled               bool                                    `yaml:"enabled" json:"enabled"`
+	ListenPort            int                                     `yaml:"listenPort" json:"listenPort"`
+	BatchSize             int                                     `yaml:"batchSize" json:"batchSize"`
+	DeprecateAfterBatches int                                     `yaml:"deprecateAfterBatches" json:"deprecateAfterBatches"`
 	Algorithms            map[string]PowdetServiceAlgorithmConfig `yaml:"algorithms" json:"algorithms"`
-	AdminAPIToken         string                             `yaml:"adminApiToken" json:"adminApiToken"`
-	Extra                 map[string]any                     `yaml:",inline" json:"-"`
+	AdminAPIToken         string                                  `yaml:"adminApiToken" json:"adminApiToken"`
+	Extra                 map[string]any                          `yaml:",inline" json:"-"`
 }
 
 // DownloadPathRule describes a single path rule.
@@ -510,17 +501,16 @@ type DownloadFairQueueSiteBucketConfig struct {
 
 // DownloadFairQueueConfig controls slot-handler integration.
 type DownloadFairQueueConfig struct {
-	Enabled              bool                                `yaml:"enabled" json:"enabled"`
-	Backend              string                              `yaml:"backend" json:"backend"`
-	HostPatterns         []string                            `yaml:"hostPatterns" json:"hostPatterns"`
-	SlotHandlerURL       string                              `yaml:"slotHandlerUrl" json:"slotHandlerUrl"`
-	SlotHandlerAuthKey   string                              `yaml:"slotHandlerAuthKey" json:"slotHandlerAuthKey"`
-	QueueWaitTimeoutMs   int                                 `yaml:"queueWaitTimeoutMs" json:"queueWaitTimeoutMs"`
-	SlotHandlerTimeoutMs int                                 `yaml:"slotHandlerTimeoutMs" json:"slotHandlerTimeoutMs"`
-	PerRequestTimeoutMs  int                                 `yaml:"perRequestTimeoutMs" json:"perRequestTimeoutMs"`
-	MaxAttemptsCap       int                                 `yaml:"maxAttemptsCap" json:"maxAttemptsCap"`
-	SiteBucket           DownloadFairQueueSiteBucketConfig   `yaml:"siteBucket" json:"siteBucket"`
-	Extra                map[string]any                      `yaml:",inline" json:"-"`
+	Enabled              bool                              `yaml:"enabled" json:"enabled"`
+	Backend              string                            `yaml:"backend" json:"backend"`
+	HostPatterns         []string                          `yaml:"hostPatterns" json:"hostPatterns"`
+	SlotHandlerURL       string                            `yaml:"slotHandlerUrl" json:"slotHandlerUrl"`
+	SlotHandlerAuthKey   string                            `yaml:"slotHandlerAuthKey" json:"slotHandlerAuthKey"`
+	SlotHandlerTimeoutMs int                               `yaml:"slotHandlerTimeoutMs" json:"slotHandlerTimeoutMs"`
+	PerRequestTimeoutMs  int                               `yaml:"perRequestTimeoutMs" json:"perRequestTimeoutMs"`
+	MaxAttemptsCap       int                               `yaml:"maxAttemptsCap" json:"maxAttemptsCap"`
+	SiteBucket           DownloadFairQueueSiteBucketConfig `yaml:"siteBucket" json:"siteBucket"`
+	Extra                map[string]any                    `yaml:",inline" json:"-"`
 }
 
 // DownloadAuthConfig controls request integrity checks.
@@ -572,65 +562,45 @@ type SlotHandlerBackendConfig struct {
 
 // SlotHandlerRPCConfig names fair queue RPC functions.
 type SlotHandlerRPCConfig struct {
-	ThrottleCheckFunc  string `yaml:"throttleCheckFunc" json:"throttleCheckFunc"`
-	RegisterWaiterFunc string `yaml:"registerWaiterFunc" json:"registerWaiterFunc"`
-	ReleaseWaiterFunc  string `yaml:"releaseWaiterFunc" json:"releaseWaiterFunc"`
-	TryAcquireFunc     string `yaml:"tryAcquireFunc" json:"tryAcquireFunc"`
-	ReleaseFunc        string `yaml:"releaseFunc" json:"releaseFunc"`
+	TryAcquireFunc string `yaml:"tryAcquireFunc" json:"tryAcquireFunc"`
+	ReleaseFunc    string `yaml:"releaseFunc" json:"releaseFunc"`
 }
 
 // SlotHandlerFairQueueCleanupConfig controls cleanup cadence.
 type SlotHandlerFairQueueCleanupConfig struct {
-	Enabled                    bool `yaml:"enabled" json:"enabled"`
-	IntervalSeconds            int  `yaml:"intervalSeconds" json:"intervalSeconds"`
-	QueueDepthZombieTtlSeconds int  `yaml:"queueDepthZombieTtlSeconds" json:"queueDepthZombieTtlSeconds"`
-	enabledSet                 bool `yaml:"-" json:"-"`
-	intervalSet                bool `yaml:"-" json:"-"`
+	Enabled         bool `yaml:"enabled" json:"enabled"`
+	IntervalSeconds int  `yaml:"intervalSeconds" json:"intervalSeconds"`
+	enabledSet      bool `yaml:"-" json:"-"`
+	intervalSet     bool `yaml:"-" json:"-"`
 }
 
 // SlotHandlerFairQueueConfig matches slot-handler fair queue tuning.
 type SlotHandlerFairQueueConfig struct {
-	PollIntervalMs             int64                              `yaml:"pollIntervalMs" json:"pollIntervalMs"`
-	PollWindowMs               int64                              `yaml:"pollWindowMs" json:"pollWindowMs"`
-	MinSlotHoldMs              int64                              `yaml:"minSlotHoldMs" json:"minSlotHoldMs"`
-	SmoothReleaseIntervalMs    *int64                             `yaml:"smoothReleaseIntervalMs" json:"smoothReleaseIntervalMs,omitempty"`
-	GlobalMaxWaiters           int                                `yaml:"globalMaxWaiters" json:"globalMaxWaiters"`
-	SessionIdleSeconds         int                                `yaml:"sessionIdleSeconds" json:"sessionIdleSeconds"`
-	ZombieTimeoutSeconds       int                                `yaml:"zombieTimeoutSeconds" json:"zombieTimeoutSeconds"`
-	IPCooldownSeconds          int                                `yaml:"ipCooldownSeconds" json:"ipCooldownSeconds"`
-	HostCaps                   SlotHandlerHostCapsConfig          `yaml:"hostCaps" json:"hostCaps"`
-	SiteCaps                   SlotHandlerSiteCapsConfig          `yaml:"siteCaps" json:"siteCaps"`
-	WeightedScheduler          SlotHandlerWeightedSchedulerConfig `yaml:"weightedScheduler" json:"weightedScheduler"`
-	RPC                        SlotHandlerRPCConfig               `yaml:"rpc" json:"rpc"`
-	Cleanup                    SlotHandlerFairQueueCleanupConfig  `yaml:"cleanup" json:"cleanup"`
-	DefaultGrantedCleanupDelay int                                `yaml:"defaultGrantedCleanupDelay" json:"defaultGrantedCleanupDelay"`
+	PollIntervalMs          int64                             `yaml:"pollIntervalMs" json:"pollIntervalMs"`
+	PollWindowMs            int64                             `yaml:"pollWindowMs" json:"pollWindowMs"`
+	MinSlotHoldMs           int64                             `yaml:"minSlotHoldMs" json:"minSlotHoldMs"`
+	SmoothReleaseIntervalMs *int64                            `yaml:"smoothReleaseIntervalMs" json:"smoothReleaseIntervalMs,omitempty"`
+	GraceMs                 int64                             `yaml:"graceMs" json:"graceMs"`
+	UtilWindowSec           int                               `yaml:"utilWindowSec" json:"utilWindowSec"`
+	MaxBatch                int                               `yaml:"maxBatch" json:"maxBatch"`
+	MaxProbeParallel        int                               `yaml:"maxProbeParallel" json:"maxProbeParallel"`
+	MaxProbeQpsPerHost      int                               `yaml:"maxProbeQpsPerHost" json:"maxProbeQpsPerHost"`
+	ZombieTimeoutSeconds    int                               `yaml:"zombieTimeoutSeconds" json:"zombieTimeoutSeconds"`
+	IPCooldownSeconds       int                               `yaml:"ipCooldownSeconds" json:"ipCooldownSeconds"`
+	HostCaps                SlotHandlerHostCapsConfig         `yaml:"hostCaps" json:"hostCaps"`
+	SiteCaps                SlotHandlerSiteCapsConfig         `yaml:"siteCaps" json:"siteCaps"`
+	RPC                     SlotHandlerRPCConfig              `yaml:"rpc" json:"rpc"`
+	Cleanup                 SlotHandlerFairQueueCleanupConfig `yaml:"cleanup" json:"cleanup"`
 }
 
 type SlotHandlerHostCapsConfig struct {
-	MaxWaitMs         *int64 `yaml:"maxWaitMs" json:"maxWaitMs,omitempty"`
-	MaxSlotPerHost    *int   `yaml:"maxSlotPerHost" json:"maxSlotPerHost,omitempty"`
-	MaxWaitersPerHost *int   `yaml:"maxWaitersPerHost" json:"maxWaitersPerHost,omitempty"`
-	MaxSlotPerIP      *int   `yaml:"maxSlotPerIp" json:"maxSlotPerIp,omitempty"`
-	MaxWaitersPerIP   *int   `yaml:"maxWaitersPerIp" json:"maxWaitersPerIp,omitempty"`
+	MaxSlotPerHost *int `yaml:"maxSlotPerHost" json:"maxSlotPerHost,omitempty"`
+	MaxSlotPerIP   *int `yaml:"maxSlotPerIp" json:"maxSlotPerIp,omitempty"`
 }
 
 type SlotHandlerSiteCapsConfig struct {
-	MaxWaitMs         *int64 `yaml:"maxWaitMs" json:"maxWaitMs,omitempty"`
-	MaxSlotPerSite    *int   `yaml:"maxSlotPerSite" json:"maxSlotPerSite,omitempty"`
-	MaxWaitersPerSite *int   `yaml:"maxWaitersPerSite" json:"maxWaitersPerSite,omitempty"`
-	MaxSlotPerIP      *int   `yaml:"maxSlotPerIp" json:"maxSlotPerIp,omitempty"`
-	MaxWaitersPerIP   *int   `yaml:"maxWaitersPerIp" json:"maxWaitersPerIp,omitempty"`
-}
-
-type SlotHandlerWeightedSchedulerConfig struct {
-	Enabled           bool    `yaml:"enabled" json:"enabled"`
-	HotPendingFactor  int     `yaml:"hotPendingFactor" json:"hotPendingFactor"`
-	HotPendingMin     int     `yaml:"hotPendingMin" json:"hotPendingMin"`
-	ColdAvgWaitMs     int64   `yaml:"coldAvgWaitMs" json:"coldAvgWaitMs"`
-	HotAvgWaitMs      int64   `yaml:"hotAvgWaitMs" json:"hotAvgWaitMs"`
-	MaxProbesPerCycle int     `yaml:"maxProbesPerCycle" json:"maxProbesPerCycle"`
-	BaseWeight        float64 `yaml:"baseWeight" json:"baseWeight"`
-	WeightPerWait     float64 `yaml:"weightPerWait" json:"weightPerWait"`
+	MaxSlotPerSite *int `yaml:"maxSlotPerSite" json:"maxSlotPerSite,omitempty"`
+	MaxSlotPerIP   *int `yaml:"maxSlotPerIp" json:"maxSlotPerIp,omitempty"`
 }
 
 // SlotHandlerConfig is the slot-handler bootstrap payload.
@@ -717,6 +687,7 @@ func (c *RootConfig) Validate() error {
 		if err := envCfg.validate(name); err != nil {
 			return err
 		}
+		c.Envs[name] = envCfg
 	}
 
 	return nil
@@ -1403,9 +1374,6 @@ func (p *DownloadThrottleProfile) ensureDefaults() {
 }
 
 func (f *DownloadFairQueueConfig) ensureDefaults(envName string) error {
-	if f.QueueWaitTimeoutMs <= 0 {
-		f.QueueWaitTimeoutMs = defaultFairQueueWaitMs
-	}
 	if f.SlotHandlerTimeoutMs <= 0 {
 		f.SlotHandlerTimeoutMs = defaultSlotHandlerTimeoutMs
 	}
@@ -1505,9 +1473,6 @@ func (c *SlotHandlerFairQueueCleanupConfig) ensureDefaults() {
 	if !c.intervalSet || c.IntervalSeconds == 0 {
 		c.IntervalSeconds = defaultSlotHandlerCleanupInt
 	}
-	if c.QueueDepthZombieTtlSeconds <= 0 {
-		c.QueueDepthZombieTtlSeconds = defaultSlotHandlerQueueDepthTTL
-	}
 	if !c.enabledSet {
 		c.Enabled = true
 	}
@@ -1520,14 +1485,23 @@ func (f *SlotHandlerFairQueueConfig) ensureDefaults() error {
 	if f.PollWindowMs <= 0 {
 		f.PollWindowMs = defaultSlotHandlerPollWindow
 	}
-	if f.GlobalMaxWaiters <= 0 {
-		f.GlobalMaxWaiters = defaultSlotHandlerGlobalWaiters
+	if f.GraceMs <= 0 {
+		f.GraceMs = defaultSlotHandlerGraceMs
+	}
+	if f.UtilWindowSec <= 0 {
+		f.UtilWindowSec = defaultSlotHandlerUtilWindowSec
+	}
+	if f.MaxBatch <= 0 {
+		f.MaxBatch = defaultSlotHandlerMaxBatch
+	}
+	if f.MaxProbeParallel <= 0 {
+		f.MaxProbeParallel = defaultSlotHandlerMaxProbePar
+	}
+	if f.MaxProbeQpsPerHost <= 0 {
+		f.MaxProbeQpsPerHost = defaultSlotHandlerMaxProbeQps
 	}
 	if f.MinSlotHoldMs < 0 {
 		f.MinSlotHoldMs = 0
-	}
-	if f.SessionIdleSeconds <= 0 {
-		f.SessionIdleSeconds = defaultSlotHandlerSessionIdle
 	}
 	if f.ZombieTimeoutSeconds <= 0 {
 		f.ZombieTimeoutSeconds = defaultSlotHandlerZombieTimeout
@@ -1535,33 +1509,12 @@ func (f *SlotHandlerFairQueueConfig) ensureDefaults() error {
 	if f.IPCooldownSeconds < 0 {
 		f.IPCooldownSeconds = 0
 	}
-	if f.DefaultGrantedCleanupDelay <= 0 {
-		f.DefaultGrantedCleanupDelay = defaultSlotHandlerCleanupDelay
-	}
 
-	ensureInt64Ptr(&f.HostCaps.MaxWaitMs, defaultSlotHandlerMaxWaitMs)
 	ensureIntPtr(&f.HostCaps.MaxSlotPerHost, defaultSlotHandlerMaxSlotHost)
-	ensureIntPtr(&f.HostCaps.MaxWaitersPerHost, defaultSlotHandlerMaxWaitHost)
 	ensureIntPtr(&f.HostCaps.MaxSlotPerIP, defaultSlotHandlerMaxSlotIP)
-	ensureIntPtr(&f.HostCaps.MaxWaitersPerIP, 0)
 
-	ensureInt64Ptr(&f.SiteCaps.MaxWaitMs, defaultSlotHandlerMaxWaitMs)
 	ensureIntPtr(&f.SiteCaps.MaxSlotPerSite, defaultSlotHandlerMaxSlotHost)
-	ensureIntPtr(&f.SiteCaps.MaxWaitersPerSite, defaultSlotHandlerMaxWaitHost)
 	ensureIntPtr(&f.SiteCaps.MaxSlotPerIP, defaultSlotHandlerMaxSlotIP)
-	ensureIntPtr(&f.SiteCaps.MaxWaitersPerIP, 0)
-
-	f.WeightedScheduler.ensureDefaults(*f)
-
-	if f.RPC.ThrottleCheckFunc == "" {
-		f.RPC.ThrottleCheckFunc = defaultSlotHandlerThrottleFunc
-	}
-	if f.RPC.RegisterWaiterFunc == "" {
-		f.RPC.RegisterWaiterFunc = defaultSlotHandlerRegisterFunc
-	}
-	if f.RPC.ReleaseWaiterFunc == "" {
-		f.RPC.ReleaseWaiterFunc = defaultSlotHandlerReleaseWaiter
-	}
 	if f.RPC.TryAcquireFunc == "" {
 		f.RPC.TryAcquireFunc = defaultSlotHandlerTryAcquire
 	}
@@ -1571,42 +1524,6 @@ func (f *SlotHandlerFairQueueConfig) ensureDefaults() error {
 
 	f.Cleanup.ensureDefaults()
 	return nil
-}
-
-func (w *SlotHandlerWeightedSchedulerConfig) ensureDefaults(f SlotHandlerFairQueueConfig) {
-	if w.HotPendingFactor <= 0 {
-		w.HotPendingFactor = defaultWeightedHotPendingFactor
-	}
-	if w.HotPendingMin <= 0 {
-		w.HotPendingMin = defaultWeightedHotPendingMin
-	}
-	pollMs := f.PollIntervalMs
-	if pollMs <= 0 {
-		pollMs = defaultSlotHandlerPollInterval
-	}
-	if w.ColdAvgWaitMs <= 0 {
-		w.ColdAvgWaitMs = pollMs
-	}
-	if w.HotAvgWaitMs <= 0 {
-		hold := f.MinSlotHoldMs
-		if hold < 0 {
-			hold = 0
-		}
-		w.HotAvgWaitMs = 3*pollMs + hold
-	}
-	if w.MaxProbesPerCycle <= 0 {
-		maxProbes := defaultSlotHandlerMaxSlotHost
-		if f.HostCaps.MaxSlotPerHost != nil && *f.HostCaps.MaxSlotPerHost > 0 {
-			maxProbes = *f.HostCaps.MaxSlotPerHost
-		}
-		w.MaxProbesPerCycle = maxProbes
-	}
-	if w.BaseWeight <= 0 {
-		w.BaseWeight = defaultWeightedBaseWeight
-	}
-	if w.WeightPerWait <= 0 {
-		w.WeightPerWait = defaultWeightedPerWait
-	}
 }
 
 func (b *SlotHandlerBackendConfig) ensureDefaults() error {
@@ -1708,10 +1625,10 @@ func generateDownloadPathConfig(cfg DownloadConfig) (PathGlobal, []PathProfile, 
 		ID:      defaultProfileID,
 		Dynamic: false,
 		Actions: map[string]any{
-			"pathAction":       []string{},
-			"checkOriginMode":  cfg.OriginBindingDefault,
-			"throttleProfile":  "default",
-			"blockReason":      nil,
+			"pathAction":      []string{},
+			"checkOriginMode": cfg.OriginBindingDefault,
+			"throttleProfile": "default",
+			"blockReason":     nil,
 		},
 	})
 
@@ -1722,9 +1639,9 @@ func generateDownloadPathConfig(cfg DownloadConfig) (PathGlobal, []PathProfile, 
 				ID:      profileID,
 				Dynamic: false,
 				Actions: map[string]any{
-					"pathAction":       append([]string{}, rule.Action...),
-					"checkOriginMode":  cfg.OriginBindingDefault,
-					"throttleProfile":  "default",
+					"pathAction":      append([]string{}, rule.Action...),
+					"checkOriginMode": cfg.OriginBindingDefault,
+					"throttleProfile": "default",
 				},
 			})
 

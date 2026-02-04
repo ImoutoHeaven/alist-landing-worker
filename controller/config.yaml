@@ -258,8 +258,7 @@ envs:
         hostPatterns: ["*.sharepoint.com"] # Hosts controlled by slot-handler; glob list
         slotHandlerUrl: "https://slot-handler-staging.example.com" # slot-handler endpoint; required if enabled
         slotHandlerAuthKey: "replace-with-slot-handler-key" # Auth key sent to slot-handler; required if enabled
-        queueWaitTimeoutMs: 120000 # Max time to wait in queue overall; ms >0
-        slotHandlerTimeoutMs: 20000 # Timeout for slot-handler RPC; ms >0
+        slotHandlerTimeoutMs: 20000 # Total wait budget before giving up; ms >0
         perRequestTimeoutMs: 8000 # Timeout per slot-handler request; ms >0
         maxAttemptsCap: 35 # Max retry attempts for slot acquisition; >=1
         siteBucket:
@@ -388,44 +387,27 @@ envs:
       fairQueue:
         pollIntervalMs: 500 # Poll interval when waiting for slot; ms >0
         pollWindowMs: 6000 # Poll window length; ms >0
-        minSlotHoldMs: 800 # Minimum slot hold duration before release; ms >0
-        smoothReleaseIntervalMs: null # Interval for smooth release; null disables smoothing
-        globalMaxWaiters: 500 # Max pending sessions accepted by slot-handler; <=0 uses default
-        sessionIdleSeconds: 90 # Session idle timeout; seconds >=0
+        minSlotHoldMs: 800 # Minimum hold time after grant before release; ms >=0
+        smoothReleaseIntervalMs: null # Interval for gradual release smoothing; null disables
+        graceMs: 4000 # Grace window for recent grants before utilization; ms >0
+        utilWindowSec: 10 # Utilization window length used by scheduler; seconds >0; source: simple-alist-cf-proxy@845175d/slot-handler/main.go utilWindowSeconds() (current implementation clips >30 to 30)
+        maxBatch: 8 # Max number of acquire requests per batch; >=1
+        maxProbeParallel: 4 # Max parallel probe calls per host; >=1
+        maxProbeQpsPerHost: 20 # Max probe QPS per host; >=1
         zombieTimeoutSeconds: 30 # Timeout for zombie sessions; seconds >=0
         ipCooldownSeconds: 0 # Cooldown for IP after release; seconds >=0
         hostCaps:
-          maxWaitMs: 60000 # Max wait time before giving up; ms >0 (0 = unlimited)
           maxSlotPerHost: 5 # Slot cap per host; 0 = unlimited
-          maxWaitersPerHost: 50 # Max queued requests per host; 0 = unlimited
           maxSlotPerIp: 1 # Slot cap per IP; 0 = unlimited
-          maxWaitersPerIp: 3 # Max queued requests per IP; 0 = unlimited
         siteCaps:
-          maxWaitMs: 60000 # Max wait time before giving up; ms >0 (0 = unlimited)
           maxSlotPerSite: 5 # Slot cap per site; 0 = unlimited
-          maxWaitersPerSite: 50 # Max queued requests per site; 0 = unlimited
           maxSlotPerIp: 1 # Slot cap per IP; 0 = unlimited
-          maxWaitersPerIp: 3 # Max queued requests per IP; 0 = unlimited
-        weightedScheduler:
-          enabled: false # Toggle weighted scheduler; false keeps legacy behavior
-          hotPendingFactor: 4 # hotspot pending threshold multiplier vs maxSlotPerHost
-          hotPendingMin: 16 # minimum pending to consider a host hot
-          coldAvgWaitMs: 500 # avg wait (ms) below which host is treated cold
-          hotAvgWaitMs: 2300 # avg wait (ms) above which host is hot (≈3*pollInterval+minSlotHold)
-          maxProbesPerCycle: 5 # max TryAcquire attempts per poll cycle per host
-          baseWeight: 1.0 # base weight for weighted round-robin
-          weightPerWait: 1.0 # weight increment per failed TryAcquire
         rpc:
-          throttleCheckFunc: "fq_check_throttle" # RPC name to check throttle
-          registerWaiterFunc: "fq_register_waiter" # RPC name to register waiter
-          releaseWaiterFunc: "fq_release_waiter" # RPC to mark waiter release
-          tryAcquireFunc: "fq_try_acquire_dual" # RPC to attempt slot acquisition
+          tryAcquireFunc: "fq_try_acquire_batch" # Batch RPC to attempt slot acquisition
           releaseFunc: "fq_release_dual" # RPC to release slot
         cleanup:
           enabled: true # Enable periodic cleanup; default=true
           intervalSeconds: 1800 # Interval for cleanup job; seconds >0
-          queueDepthZombieTtlSeconds: 20 # TTL before zombie queue depth entry is purged; seconds >=0
-        defaultGrantedCleanupDelay: 5 # Delay before cleaning granted sessions; seconds >=0
 
   prod: # Production environment (same schema as staging; see staging comments for ranges/enums and fill real values)
     common:
@@ -654,7 +636,6 @@ envs:
         hostPatterns: ["*.sharepoint.com"]
         slotHandlerUrl: "https://slot-handler.example.com"
         slotHandlerAuthKey: "replace-with-slot-handler-key"
-        queueWaitTimeoutMs: 120000
         slotHandlerTimeoutMs: 20000
         perRequestTimeoutMs: 8000
         maxAttemptsCap: 35
@@ -767,38 +748,22 @@ envs:
         pollWindowMs: 6000
         minSlotHoldMs: 800
         smoothReleaseIntervalMs: null
-        sessionIdleSeconds: 90
+        graceMs: 4000
+        utilWindowSec: 10 # Utilization window length used by scheduler; seconds >0; source: simple-alist-cf-proxy@845175d/slot-handler/main.go utilWindowSeconds() (current implementation clips >30 to 30)
+        maxBatch: 8
+        maxProbeParallel: 4
+        maxProbeQpsPerHost: 20
         zombieTimeoutSeconds: 30
         ipCooldownSeconds: 0
         hostCaps:
-          maxWaitMs: 60000
           maxSlotPerHost: 5
-          maxWaitersPerHost: 50
           maxSlotPerIp: 1
-          maxWaitersPerIp: 3
         siteCaps:
-          maxWaitMs: 60000
           maxSlotPerSite: 5
-          maxWaitersPerSite: 50
           maxSlotPerIp: 1
-          maxWaitersPerIp: 3
-        weightedScheduler:
-          enabled: false # Toggle weighted scheduler; false keeps legacy behavior
-          hotPendingFactor: 4 # hotspot pending threshold multiplier vs maxSlotPerHost
-          hotPendingMin: 16 # minimum pending to consider a host hot
-          coldAvgWaitMs: 500 # avg wait (ms) below which host is treated cold
-          hotAvgWaitMs: 2300 # avg wait (ms) above which host is hot (≈3*pollInterval+minSlotHold)
-          maxProbesPerCycle: 5 # max TryAcquire attempts per poll cycle per host
-          baseWeight: 1.0 # base weight for weighted round-robin
-          weightPerWait: 1.0 # weight increment per failed TryAcquire
         rpc:
-          throttleCheckFunc: "fq_check_throttle"
-          registerWaiterFunc: "fq_register_waiter"
-          releaseWaiterFunc: "fq_release_waiter"
-          tryAcquireFunc: "fq_try_acquire_dual"
+          tryAcquireFunc: "fq_try_acquire_batch"
           releaseFunc: "fq_release_dual"
         cleanup:
           enabled: true
           intervalSeconds: 1800
-          queueDepthZombieTtlSeconds: 20
-        defaultGrantedCleanupDelay: 5

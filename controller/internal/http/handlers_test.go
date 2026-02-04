@@ -36,7 +36,7 @@ func TestHandleMetricsAcceptsSlotHandlerPayload(t *testing.T) {
 				"ts":            "1732646400123",
 				"configVersion": "cfg-1",
 				"counts":        map[string]any{"granted": 3, "timeout": 1},
-				"sessions":      map[string]any{"total": 2, "pending": 1},
+				"flows":         map[string]any{"total": 2, "inflight": 1, "detached": 1, "grace": 0},
 				"smoothHosts":   4,
 				"appName":       "slot-handler",
 				"appVersion":    "v1",
@@ -88,12 +88,12 @@ func TestHandleMetricsAcceptsSlotHandlerPayload(t *testing.T) {
 	if _, ok := counts["granted"]; !ok {
 		t.Fatalf("counts.granted missing: %#v", counts)
 	}
-	sessions, ok := ev.Data["sessions"].(map[string]any)
+	flows, ok := ev.Data["flows"].(map[string]any)
 	if !ok {
-		t.Fatalf("sessions not preserved: %#v", ev.Data["sessions"])
+		t.Fatalf("flows not preserved: %#v", ev.Data["flows"])
 	}
-	if toString(sessions["total"]) != "2" || toString(sessions["pending"]) != "1" {
-		t.Fatalf("sessions values not preserved: %#v", sessions)
+	if toString(flows["total"]) != "2" || toString(flows["inflight"]) != "1" || toString(flows["detached"]) != "1" || toString(flows["grace"]) != "0" {
+		t.Fatalf("flows values not preserved: %#v", flows)
 	}
 }
 

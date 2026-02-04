@@ -21,8 +21,21 @@
 
 路径规则以 `paths.*` 为准（`paths.global`、`paths.pathProfiles`、`paths.pathRules`）。
 `landing.pathRules` 与 `download.pathRules` 仍保留在结构里，但当前决策只读取 `paths.*`，避免混用。
+注意：若旧字段已移除，旧版组件可能无法识别新的 `paths.*` 结构；升级需与 landing/download 组件版本联动，并在发布说明中标注为不兼容变更。
 
 Powdet 相关：`landing.powdet.algorithms` 控制可用算法（argon2id/argon2d/randomx），`captchaCombo` 可用 `verify-powdet-argon2id`/`verify-powdet-argon2d`/`verify-powdet-randomx` 指定实际启用算法。
+
+slot-handler 相关：
+
+- `slotHandler.fairQueue.minSlotHoldMs`：最小持有时间，避免刚授予就释放。
+- `slotHandler.fairQueue.smoothReleaseIntervalMs`：平滑释放间隔，`null` 表示禁用。
+- `slotHandler.fairQueue.graceMs`：授予后宽限窗口，用于延迟利用率计算。
+- `slotHandler.fairQueue.utilWindowSec`：利用率统计窗口长度；来源：simple-alist-cf-proxy@845175d/slot-handler/main.go utilWindowSeconds()（当前实现将 >30 裁剪到 30）。
+- `slotHandler.fairQueue.maxBatch`：batch tryAcquire 每批最多条目数。
+- `slotHandler.fairQueue.maxProbeParallel`：每 host 并行 probe 上限。
+- `slotHandler.fairQueue.maxProbeQpsPerHost`：每 host probe QPS 上限。
+- `slotHandler.fairQueue.rpc.tryAcquireFunc`：默认 `fq_try_acquire_batch`，批量尝试获取 slot。
+- `slotHandler.fairQueue.rpc.releaseFunc`：释放 slot 的 RPC。
 
 ## 决策逻辑（v0）
 

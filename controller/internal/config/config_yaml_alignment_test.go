@@ -60,4 +60,21 @@ func TestSampleConfigAlignment(t *testing.T) {
 	if argon2d.Dynamic.WindowSeconds == 0 || argon2d.Dynamic.ResetSeconds == 0 || argon2d.Dynamic.LevelStep == 0 {
 		t.Fatalf("powdet argon2d dynamic fields incomplete: %+v", argon2d.Dynamic)
 	}
+
+	fairQueue := staging.SlotHandler.FairQueue
+	if fairQueue.GraceMs != 4000 {
+		t.Fatalf("slotHandler fairQueue graceMs not aligned: %d", fairQueue.GraceMs)
+	}
+	if fairQueue.UtilWindowSec != 10 {
+		t.Fatalf("slotHandler fairQueue utilWindowSec not aligned: %d", fairQueue.UtilWindowSec)
+	}
+	if fairQueue.MaxBatch != 8 {
+		t.Fatalf("slotHandler fairQueue maxBatch not aligned: %d", fairQueue.MaxBatch)
+	}
+	if fairQueue.MaxProbeParallel != 4 {
+		t.Fatalf("slotHandler fairQueue maxProbeParallel not aligned: %d", fairQueue.MaxProbeParallel)
+	}
+	if fairQueue.MaxProbeQpsPerHost != 20 {
+		t.Fatalf("slotHandler fairQueue maxProbeQpsPerHost not aligned: %d", fairQueue.MaxProbeQpsPerHost)
+	}
 }
