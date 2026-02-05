@@ -12,82 +12,86 @@ import (
 )
 
 const (
-	defaultAltchaDifficulty         = 250000
-	defaultAltchaTokenExpireSeconds = 180
-	defaultAltchaDifficultyWindow   = 30
-	defaultAltchaDifficultyReset    = 120
-	defaultAltchaMaxBlockSeconds    = 120
-	defaultAltchaMaxExponent        = 10
-	defaultAltchaMinUpgradeExponent = 3
-	defaultPowdetExpireSeconds      = 180
-	defaultPowdetClockSkewSeconds   = 60
-	defaultPowdetMaxWindowSeconds   = 600
-	defaultPowdetLevelStep          = 1
-	defaultPowdetBaseLevelMin       = 12
-	defaultPowdetBaseLevelMax       = 20
-	defaultPowdetMaxLevel           = 4
-	defaultPowdetDifficultyTable    = "POWDET_DIFFICULTY_STATE"
-	defaultPowdetTicketTable        = "POW_CHALLENGE_TICKET"
-	defaultPowdetListenPort         = 2370
-	defaultPowdetBatchSize          = 1000
-	defaultPowdetDeprecateBatches   = 10
-	defaultPowdetArgonMemoryKiB     = 16384
-	defaultPowdetArgonIterations    = 2
-	defaultPowdetArgonParallelism   = 1
-	defaultPowdetArgonKeyLength     = 16
-	defaultPowdetRandomxSeedLen     = 32
-	defaultPowdetRandomxCacheLRU    = 128
-	defaultPowdetRandomxCacheTTL    = 600
-	defaultAltchaTokenBindingTable  = "ALTCHA_TOKEN_LIST"
-	defaultDownloadLinkTTLSeconds   = 1800
-	defaultDownloadCleanupPercent   = 1.0
-	defaultDownloadIdleTimeout      = 0
-	defaultDownloadCacheOverrideMax = "500MB"
-	defaultRateLimitIPv4Suffix      = "/32"
-	defaultRateLimitIPv6Suffix      = "/60"
-	defaultBindingVersion           = 1
-	defaultBindingModes             = "path,asn,country,iprange"
-	defaultBindingIPv4Suffix        = "/32"
-	defaultBindingIPv6Suffix        = "/60"
-	defaultRateLimitBlockSeconds    = 600
-	defaultThrottleObserveWindow    = 60
-	defaultThrottleWindowSeconds    = 60
-	defaultThrottleConsecutive      = 4
-	defaultThrottleMinSampleCount   = 8
-	defaultThrottleFastSampleCount  = 4
-	defaultThrottleErrorRatioPct    = 20
-	defaultThrottleFastErrorRatio   = 60
-	defaultSlotHandlerGraceMs       = 4000
-	defaultSlotHandlerUtilWindowSec = 10
-	defaultSlotHandlerMaxBatch      = 8
-	defaultSlotHandlerMaxProbePar   = 4
-	defaultSlotHandlerMaxProbeQps   = 20
-	defaultSlotHandlerTimeoutMs     = 20000
-	defaultSlotHandlerPerReqTimeout = 8000
-	defaultSlotHandlerAttemptsCap   = 35
-	defaultLandingCleanupPercent    = 5.0
-	defaultLandingCacheTTLSeconds   = 86400
-	defaultLandingFileWindowSeconds = 60
-	defaultLandingFileBlockSeconds  = 240
-	defaultLandingIdleTimeout       = 0
-	defaultLandingCryptFileHeader   = 32
-	defaultLandingCryptBlockHeader  = 16
-	defaultLandingCryptBlockData    = 64 * 1024
-	defaultLandingWebMaxConn        = 16
-	defaultLandingMinBandwidthMbps  = 10
-	defaultLandingMinDurationSec    = 3600
-	defaultLandingHrwMaxSize        = "500MB"
-	defaultSlotHandlerListen        = ":8080"
-	defaultSlotHandlerAuthHeader    = "X-FQ-Auth"
-	defaultSlotHandlerPollInterval  = 500
-	defaultSlotHandlerPollWindow    = 6000
-	defaultSlotHandlerMaxSlotHost   = 5
-	defaultSlotHandlerMaxSlotIP     = 1
-	defaultSlotHandlerZombieTimeout = 30
-	defaultSlotHandlerCleanupInt    = 1800
-	defaultSlotHandlerTryAcquire    = "fq_try_acquire_batch"
-	defaultSlotHandlerReleaseSlot   = "fq_release_dual"
-	defaultControllerListenAddr     = ":8080"
+	defaultAltchaDifficulty             = 250000
+	defaultAltchaTokenExpireSeconds     = 180
+	defaultAltchaDifficultyWindow       = 30
+	defaultAltchaDifficultyReset        = 120
+	defaultAltchaMaxBlockSeconds        = 120
+	defaultAltchaMaxExponent            = 10
+	defaultAltchaMinUpgradeExponent     = 3
+	defaultPowdetExpireSeconds          = 180
+	defaultPowdetClockSkewSeconds       = 60
+	defaultPowdetMaxWindowSeconds       = 600
+	defaultPowdetLevelStep              = 1
+	defaultPowdetBaseLevelMin           = 12
+	defaultPowdetBaseLevelMax           = 20
+	defaultPowdetMaxLevel               = 4
+	defaultPowdetDifficultyTable        = "POWDET_DIFFICULTY_STATE"
+	defaultPowdetTicketTable            = "POW_CHALLENGE_TICKET"
+	defaultPowdetListenPort             = 2370
+	defaultPowdetBatchSize              = 1000
+	defaultPowdetDeprecateBatches       = 10
+	defaultPowdetArgonMemoryKiB         = 16384
+	defaultPowdetArgonIterations        = 2
+	defaultPowdetArgonParallelism       = 1
+	defaultPowdetArgonKeyLength         = 16
+	defaultPowdetRandomxSeedLen         = 32
+	defaultPowdetRandomxCacheLRU        = 128
+	defaultPowdetRandomxCacheTTL        = 600
+	defaultAltchaTokenBindingTable      = "ALTCHA_TOKEN_LIST"
+	defaultDownloadLinkTTLSeconds       = 1800
+	defaultDownloadCleanupPercent       = 1.0
+	defaultDownloadIdleTimeout          = 0
+	defaultDownloadCacheOverrideMax     = "500MB"
+	defaultRateLimitIPv4Suffix          = "/32"
+	defaultRateLimitIPv6Suffix          = "/60"
+	defaultBindingVersion               = 1
+	defaultBindingModes                 = "path,asn,country,iprange"
+	defaultBindingIPv4Suffix            = "/32"
+	defaultBindingIPv6Suffix            = "/60"
+	defaultRateLimitBlockSeconds        = 600
+	defaultThrottleObserveWindow        = 60
+	defaultThrottleWindowSeconds        = 60
+	defaultThrottleConsecutive          = 4
+	defaultThrottleMinSampleCount       = 8
+	defaultThrottleFastSampleCount      = 4
+	defaultThrottleErrorRatioPct        = 20
+	defaultThrottleFastErrorRatio       = 60
+	defaultSlotHandlerGraceMs           = 4000
+	defaultSlotHandlerUtilWindowSec     = 10
+	defaultSlotHandlerMaxBatch          = 8
+	defaultSlotHandlerMaxProbePar       = 4
+	defaultSlotHandlerMaxProbeQps       = 20
+	defaultSlotHandlerMaxInFlightGlobal = 300
+	defaultSlotHandlerMaxInFlightHost   = 100
+	defaultSlotHandlerMaxInFlightSite   = 50
+	defaultSlotHandlerMaxInFlightIP     = 10
+	defaultSlotHandlerTimeoutMs         = 20000
+	defaultSlotHandlerPerReqTimeout     = 8000
+	defaultSlotHandlerAttemptsCap       = 35
+	defaultLandingCleanupPercent        = 5.0
+	defaultLandingCacheTTLSeconds       = 86400
+	defaultLandingFileWindowSeconds     = 60
+	defaultLandingFileBlockSeconds      = 240
+	defaultLandingIdleTimeout           = 0
+	defaultLandingCryptFileHeader       = 32
+	defaultLandingCryptBlockHeader      = 16
+	defaultLandingCryptBlockData        = 64 * 1024
+	defaultLandingWebMaxConn            = 16
+	defaultLandingMinBandwidthMbps      = 10
+	defaultLandingMinDurationSec        = 3600
+	defaultLandingHrwMaxSize            = "500MB"
+	defaultSlotHandlerListen            = ":8080"
+	defaultSlotHandlerAuthHeader        = "X-FQ-Auth"
+	defaultSlotHandlerPollInterval      = 500
+	defaultSlotHandlerPollWindow        = 6000
+	defaultSlotHandlerMaxSlotHost       = 5
+	defaultSlotHandlerMaxSlotIP         = 1
+	defaultSlotHandlerZombieTimeout     = 30
+	defaultSlotHandlerCleanupInt        = 1800
+	defaultSlotHandlerTryAcquire        = "fq_try_acquire_batch"
+	defaultSlotHandlerReleaseSlot       = "fq_release_dual"
+	defaultControllerListenAddr         = ":8080"
 )
 
 func boolPtr(v bool) *bool {
@@ -585,6 +589,10 @@ type SlotHandlerFairQueueConfig struct {
 	MaxBatch                int                               `yaml:"maxBatch" json:"maxBatch"`
 	MaxProbeParallel        int                               `yaml:"maxProbeParallel" json:"maxProbeParallel"`
 	MaxProbeQpsPerHost      int                               `yaml:"maxProbeQpsPerHost" json:"maxProbeQpsPerHost"`
+	GlobalMaxInFlightFlow   *int                              `yaml:"globalMaxInFlightFlow" json:"globalMaxInFlightFlow,omitempty"`
+	HostMaxInFlightFlow     *int                              `yaml:"hostMaxInFlightFlow" json:"hostMaxInFlightFlow,omitempty"`
+	SiteMaxInFlightFlow     *int                              `yaml:"siteMaxInFlightFlow" json:"siteMaxInFlightFlow,omitempty"`
+	IPBucketMaxInFlightFlow *int                              `yaml:"ipBucketMaxInFlightFlow" json:"ipBucketMaxInFlightFlow,omitempty"`
 	ZombieTimeoutSeconds    int                               `yaml:"zombieTimeoutSeconds" json:"zombieTimeoutSeconds"`
 	IPCooldownSeconds       int                               `yaml:"ipCooldownSeconds" json:"ipCooldownSeconds"`
 	HostCaps                SlotHandlerHostCapsConfig         `yaml:"hostCaps" json:"hostCaps"`
@@ -1509,6 +1517,11 @@ func (f *SlotHandlerFairQueueConfig) ensureDefaults() error {
 	if f.IPCooldownSeconds < 0 {
 		f.IPCooldownSeconds = 0
 	}
+
+	ensureIntPtr(&f.GlobalMaxInFlightFlow, defaultSlotHandlerMaxInFlightGlobal)
+	ensureIntPtr(&f.HostMaxInFlightFlow, defaultSlotHandlerMaxInFlightHost)
+	ensureIntPtr(&f.SiteMaxInFlightFlow, defaultSlotHandlerMaxInFlightSite)
+	ensureIntPtr(&f.IPBucketMaxInFlightFlow, defaultSlotHandlerMaxInFlightIP)
 
 	ensureIntPtr(&f.HostCaps.MaxSlotPerHost, defaultSlotHandlerMaxSlotHost)
 	ensureIntPtr(&f.HostCaps.MaxSlotPerIP, defaultSlotHandlerMaxSlotIP)

@@ -8,6 +8,12 @@ import (
 
 // ensureSampleConfig decodes with all dynamic fields present (ALTCHA/Powdet).
 func TestSampleConfigAlignment(t *testing.T) {
+	assertIntPtrEq := func(name string, got *int, want int) {
+		if got == nil || *got != want {
+			t.Fatalf("slotHandler fairQueue %s not aligned: %v", name, got)
+		}
+	}
+
 	_, file, _, _ := runtime.Caller(0)
 	cfgPath := filepath.Join(filepath.Dir(file), "..", "..", "config.yaml")
 
@@ -77,4 +83,8 @@ func TestSampleConfigAlignment(t *testing.T) {
 	if fairQueue.MaxProbeQpsPerHost != 20 {
 		t.Fatalf("slotHandler fairQueue maxProbeQpsPerHost not aligned: %d", fairQueue.MaxProbeQpsPerHost)
 	}
+	assertIntPtrEq("globalMaxInFlightFlow", fairQueue.GlobalMaxInFlightFlow, 300)
+	assertIntPtrEq("hostMaxInFlightFlow", fairQueue.HostMaxInFlightFlow, 100)
+	assertIntPtrEq("siteMaxInFlightFlow", fairQueue.SiteMaxInFlightFlow, 50)
+	assertIntPtrEq("ipBucketMaxInFlightFlow", fairQueue.IPBucketMaxInFlightFlow, 10)
 }

@@ -33,6 +33,8 @@ Worker 启动后会从 controller 拉取 `bootstrap`，并基于 `paths.*` 匹�
 - `common`：`tokenHmacKey`、`signSecret`、`workerAddresses`、`landingWorkerAddresses`、`binding`、`alistBaseUrl`、`alistAuthHeaders`
 - `landing`：`pageSecret`、`frontend.*`、`turnstile/altcha/powdet`、`paths.*`、`db`、`crypt`、`webDownloader`、`payload`、`captchaBinding`
 
+`slotHandler.fairQueue.globalMaxInFlightFlow` / `slotHandler.fairQueue.hostMaxInFlightFlow` / `slotHandler.fairQueue.siteMaxInFlightFlow` / `slotHandler.fairQueue.ipBucketMaxInFlightFlow` 属于 slot-handler in-flight limits 配置，landing worker 不解析该字段。
+
 没有 controller 或 bootstrap/decision 获取失败时，Worker 会返回 503。
 
 ### 2.2 Worker 环境变量（infra 级）

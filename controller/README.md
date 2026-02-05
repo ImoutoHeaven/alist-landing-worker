@@ -34,8 +34,11 @@ slot-handler 相关：
 - `slotHandler.fairQueue.maxBatch`：batch tryAcquire 每批最多条目数。
 - `slotHandler.fairQueue.maxProbeParallel`：每 host 并行 probe 上限。
 - `slotHandler.fairQueue.maxProbeQpsPerHost`：每 host probe QPS 上限。
+- `slotHandler.fairQueue.globalMaxInFlightFlow` / `hostMaxInFlightFlow` / `siteMaxInFlightFlow` / `ipBucketMaxInFlightFlow`：in-flight acquire 上限（0 表示禁用该层限制，超限返回 `overloaded`；若字段缺省，controller 下发默认值与 slot-handler 内部默认一致：global/host/site/ip=300/100/50/10）。
 - `slotHandler.fairQueue.rpc.tryAcquireFunc`：默认 `fq_try_acquire_batch`，批量尝试获取 slot。
 - `slotHandler.fairQueue.rpc.releaseFunc`：释放 slot 的 RPC。
+
+行为说明（非配置字段）：`overloaded` 表示 slot-handler 拒绝/繁忙；调用方在自身超时预算内退避重试，可能由 in-flight 限制或其他保护触发。
 
 ## 决策逻辑（v0）
 

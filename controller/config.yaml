@@ -394,6 +394,10 @@ envs:
         maxBatch: 8 # Max number of acquire requests per batch; >=1
         maxProbeParallel: 4 # Max parallel probe calls per host; >=1
         maxProbeQpsPerHost: 20 # Max probe QPS per host; >=1
+        globalMaxInFlightFlow: 300 # in-flight 上限（0 表示禁用该层限制）
+        hostMaxInFlightFlow: 100 # in-flight 上限（0 表示禁用该层限制）
+        siteMaxInFlightFlow: 50 # in-flight 上限（0 表示禁用该层限制）
+        ipBucketMaxInFlightFlow: 10 # in-flight 上限（0 表示禁用该层限制）
         zombieTimeoutSeconds: 30 # Timeout for zombie sessions; seconds >=0
         ipCooldownSeconds: 0 # Cooldown for IP after release; seconds >=0
         hostCaps:
@@ -753,6 +757,10 @@ envs:
         maxBatch: 8
         maxProbeParallel: 4
         maxProbeQpsPerHost: 20
+        globalMaxInFlightFlow: 300 # in-flight 上限（0 表示禁用该层限制）
+        hostMaxInFlightFlow: 100 # in-flight 上限（0 表示禁用该层限制）
+        siteMaxInFlightFlow: 50 # in-flight 上限（0 表示禁用该层限制）
+        ipBucketMaxInFlightFlow: 10 # in-flight 上限（0 表示禁用该层限制）
         zombieTimeoutSeconds: 30
         ipCooldownSeconds: 0
         hostCaps:
