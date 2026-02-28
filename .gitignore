@@ -12,3 +12,4 @@ powdet/powdet
 powdet/*.exe
 powdet/proofOfWorker_CrossOrigin.js
 .worktrees/
+docs/plans/
