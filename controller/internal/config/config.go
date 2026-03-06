@@ -133,6 +133,14 @@ func normalizeAddressList(values []string) []string {
 	return cleaned
 }
 
+func normalizeSlotHandlerAuthHeaderName(value string) string {
+	header := strings.TrimSpace(value)
+	if strings.EqualFold(header, defaultSlotHandlerAuthHeader) {
+		return defaultSlotHandlerAuthHeader
+	}
+	return header
+}
+
 func (b *BindingConfig) ensureDefaults() {
 	if b.Version <= 0 {
 		b.Version = defaultBindingVersion
@@ -505,16 +513,17 @@ type DownloadFairQueueSiteBucketConfig struct {
 
 // DownloadFairQueueConfig controls slot-handler integration.
 type DownloadFairQueueConfig struct {
-	Enabled              bool                              `yaml:"enabled" json:"enabled"`
-	Backend              string                            `yaml:"backend" json:"backend"`
-	HostPatterns         []string                          `yaml:"hostPatterns" json:"hostPatterns"`
-	SlotHandlerURL       string                            `yaml:"slotHandlerUrl" json:"slotHandlerUrl"`
-	SlotHandlerAuthKey   string                            `yaml:"slotHandlerAuthKey" json:"slotHandlerAuthKey"`
-	SlotHandlerTimeoutMs int                               `yaml:"slotHandlerTimeoutMs" json:"slotHandlerTimeoutMs"`
-	PerRequestTimeoutMs  int                               `yaml:"perRequestTimeoutMs" json:"perRequestTimeoutMs"`
-	MaxAttemptsCap       int                               `yaml:"maxAttemptsCap" json:"maxAttemptsCap"`
-	SiteBucket           DownloadFairQueueSiteBucketConfig `yaml:"siteBucket" json:"siteBucket"`
-	Extra                map[string]any                    `yaml:",inline" json:"-"`
+	Enabled               bool                              `yaml:"enabled" json:"enabled"`
+	Backend               string                            `yaml:"backend" json:"backend"`
+	HostPatterns          []string                          `yaml:"hostPatterns" json:"hostPatterns"`
+	SlotHandlerURL        string                            `yaml:"slotHandlerUrl" json:"slotHandlerUrl"`
+	SlotHandlerAuthKey    string                            `yaml:"slotHandlerAuthKey" json:"slotHandlerAuthKey"`
+	SlotHandlerAuthHeader string                            `yaml:"slotHandlerAuthHeader" json:"slotHandlerAuthHeader"`
+	SlotHandlerTimeoutMs  int                               `yaml:"slotHandlerTimeoutMs" json:"slotHandlerTimeoutMs"`
+	PerRequestTimeoutMs   int                               `yaml:"perRequestTimeoutMs" json:"perRequestTimeoutMs"`
+	MaxAttemptsCap        int                               `yaml:"maxAttemptsCap" json:"maxAttemptsCap"`
+	SiteBucket            DownloadFairQueueSiteBucketConfig `yaml:"siteBucket" json:"siteBucket"`
+	Extra                 map[string]any                    `yaml:",inline" json:"-"`
 }
 
 // DownloadAuthConfig controls request integrity checks.
@@ -749,6 +758,9 @@ func (e *EnvConfig) validate(envName string) error {
 		}
 		if strings.TrimSpace(e.Download.FairQueue.SlotHandlerAuthKey) != strings.TrimSpace(e.SlotHandler.Auth.Token) {
 			return fmt.Errorf("slotHandler.auth.token must match download.fairQueue.slotHandlerAuthKey for env %s", envName)
+		}
+		if !strings.EqualFold(e.Download.FairQueue.SlotHandlerAuthHeader, e.SlotHandler.Auth.Header) {
+			return fmt.Errorf("slotHandler.auth.header must match download.fairQueue.slotHandlerAuthHeader for env %s", envName)
 		}
 	}
 
@@ -1394,6 +1406,10 @@ func (f *DownloadFairQueueConfig) ensureDefaults(envName string) error {
 	if f.Backend == "" {
 		f.Backend = "slot-handler"
 	}
+	f.SlotHandlerAuthHeader = normalizeSlotHandlerAuthHeaderName(f.SlotHandlerAuthHeader)
+	if f.SlotHandlerAuthHeader == "" {
+		f.SlotHandlerAuthHeader = defaultSlotHandlerAuthHeader
+	}
 	if strings.TrimSpace(f.SiteBucket.Mode) == "" {
 		f.SiteBucket.Mode = "sharepoint"
 	}
@@ -1567,6 +1583,7 @@ func (c *SlotHandlerConfig) ensureDefaults(envName string) error {
 	if c.LogLevel == "" {
 		c.LogLevel = "info"
 	}
+	c.Auth.Header = normalizeSlotHandlerAuthHeaderName(c.Auth.Header)
 	if c.Auth.Header == "" {
 		c.Auth.Header = defaultSlotHandlerAuthHeader
 	}

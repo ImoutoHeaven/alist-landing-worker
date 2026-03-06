@@ -258,6 +258,7 @@ envs:
         hostPatterns: ["*.sharepoint.com"] # Hosts controlled by slot-handler; glob list
         slotHandlerUrl: "https://slot-handler-staging.example.com" # slot-handler endpoint; required if enabled
         slotHandlerAuthKey: "replace-with-slot-handler-key" # Auth key sent to slot-handler; required if enabled
+        slotHandlerAuthHeader: "X-FQ-Auth" # Header name sent to slot-handler; must match slotHandler.auth.header
         slotHandlerTimeoutMs: 20000 # Total wait budget before giving up; ms >0
         perRequestTimeoutMs: 8000 # Timeout per slot-handler request; ms >0
         maxAttemptsCap: 35 # Max retry attempts for slot acquisition; >=1
@@ -640,6 +641,7 @@ envs:
         hostPatterns: ["*.sharepoint.com"]
         slotHandlerUrl: "https://slot-handler.example.com"
         slotHandlerAuthKey: "replace-with-slot-handler-key"
+        slotHandlerAuthHeader: "X-FQ-Auth"
         slotHandlerTimeoutMs: 20000
         perRequestTimeoutMs: 8000
         maxAttemptsCap: 35

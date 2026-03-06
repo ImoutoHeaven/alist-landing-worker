@@ -27,6 +27,7 @@ Powdet 相关：`landing.powdet.algorithms` 控制可用算法（argon2id/argon2
 
 slot-handler 相关：
 
+- `download.fairQueue.slotHandlerAuthHeader`：download bootstrap 下发给 worker 的 slot-handler 认证请求头名；默认 `X-FQ-Auth`，启用 Fair Queue 时必须与 `slotHandler.auth.header` 保持一致。
 - `slotHandler.fairQueue.minSlotHoldMs`：最小持有时间，避免刚授予就释放。
 - `slotHandler.fairQueue.smoothReleaseIntervalMs`：平滑释放间隔，`null` 表示禁用。
 - `slotHandler.fairQueue.graceMs`：授予后宽限窗口，用于延迟利用率计算。

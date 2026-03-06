@@ -1,8 +1,10 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -87,4 +89,58 @@ func TestSampleConfigAlignment(t *testing.T) {
 	assertIntPtrEq("hostMaxInFlightFlow", fairQueue.HostMaxInFlightFlow, 100)
 	assertIntPtrEq("siteMaxInFlightFlow", fairQueue.SiteMaxInFlightFlow, 50)
 	assertIntPtrEq("ipBucketMaxInFlightFlow", fairQueue.IPBucketMaxInFlightFlow, 10)
+	if staging.Download.FairQueue.SlotHandlerAuthHeader != "X-FQ-Auth" {
+		t.Fatalf("download fairQueue slotHandlerAuthHeader not aligned: %q", staging.Download.FairQueue.SlotHandlerAuthHeader)
+	}
+	if staging.Download.FairQueue.SlotHandlerAuthHeader != staging.SlotHandler.Auth.Header {
+		t.Fatalf("download fairQueue slotHandlerAuthHeader must match slotHandler auth header")
+	}
+
+	prod, ok := cfg.Envs["prod"]
+	if !ok {
+		t.Fatalf("prod env missing in config.yaml")
+	}
+	if prod.Download.FairQueue.SlotHandlerAuthHeader != "X-FQ-Auth" {
+		t.Fatalf("prod download fairQueue slotHandlerAuthHeader not aligned: %q", prod.Download.FairQueue.SlotHandlerAuthHeader)
+	}
+	if prod.Download.FairQueue.SlotHandlerAuthHeader != prod.SlotHandler.Auth.Header {
+		t.Fatalf("prod download fairQueue slotHandlerAuthHeader must match slotHandler auth header")
+	}
+}
+
+func TestLoadAllowsCaseInsensitiveSlotHandlerAuthHeaderMatch(t *testing.T) {
+	_, file, _, _ := runtime.Caller(0)
+	cfgPath := filepath.Join(filepath.Dir(file), "..", "..", "config.yaml")
+
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read config.yaml: %v", err)
+	}
+
+	original := string(data)
+	mutated := strings.Replace(original, `slotHandlerAuthHeader: "X-FQ-Auth"`, `slotHandlerAuthHeader: "x-fq-auth"`, 1)
+	if mutated == original {
+		t.Fatalf("failed to mutate slotHandlerAuthHeader casing in config.yaml")
+	}
+
+	tmpPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(tmpPath, []byte(mutated), 0o600); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+
+	cfg, err := Load(tmpPath)
+	if err != nil {
+		t.Fatalf("expected case-insensitive slot-handler auth header match, got %v", err)
+	}
+
+	staging, ok := cfg.Envs["staging"]
+	if !ok {
+		t.Fatalf("staging env missing in config.yaml")
+	}
+	if staging.Download.FairQueue.SlotHandlerAuthHeader != "X-FQ-Auth" {
+		t.Fatalf("expected normalized download fairQueue auth header, got %q", staging.Download.FairQueue.SlotHandlerAuthHeader)
+	}
+	if staging.SlotHandler.Auth.Header != "X-FQ-Auth" {
+		t.Fatalf("expected normalized slotHandler auth header, got %q", staging.SlotHandler.Auth.Header)
+	}
 }
