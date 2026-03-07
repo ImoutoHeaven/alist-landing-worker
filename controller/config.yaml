@@ -1,6 +1,6 @@
 # Example controller config with inline notes. Replace placeholder secrets
 # before deploying to real environments.
-# NOTE: controller-overhaul 只消费 paths.*（global/pathProfiles/pathRules）；下面的 legacy pathRules 字段仅为兼容文档占位，实际会被忽略。
+# NOTE: controller 只消费 paths.*（global/pathProfiles/pathRules）；示例配置已按最终 schema 收敛。
 apiToken: "replace-with-controller-api-token" # Required Bearer token protecting all controller HTTP APIs; keep non-empty
 bootstrapVersion: "bootstrap-2025-11-25" # Version string echoed in /bootstrap responses for cache invalidation; bump to force refresh
 rulesVersion: "decision-2025-11-25" # Version tag for /decision payloads; bump to invalidate decision cache
@@ -69,11 +69,7 @@ envs:
       ipv4Only: false # Force IPv4-only traffic handling on landing; default=false
       downloadWorkerHrwEnabled: false # Use HRW to select download worker for small files; default=false
       downloadWorkerHrwMaxSize: "500MB" # HRW applies when filesize <= this size; supports <number>[B|KB|MB|GB]
-      pathRules: # Ignored by controller-overhaul; kept only as legacy placeholder (controller 仅看 paths.*)
-        blacklist: []
-        whitelist: []
-        except: []
-      paths: # New landing path profile/rule schema（优先于 pathRules）；将原来的 pathAction 合并进 bootstrap
+      paths: # Landing path profile/rule schema；将静态动作收敛进 bootstrap
         global:
           # defaultProfileId：未命中任何规则时使用的 profileId；必须出现在 pathProfiles[].id 中
           defaultProfileId: "landing-default"
@@ -267,21 +263,12 @@ envs:
       throttleProfiles:
         default:
           hostPatterns: [] # Host patterns this throttle profile applies to; glob list
-          windowSeconds: 60 # Throttle protection window (how long host stays protected before resume); seconds >0
-          observeWindowSeconds: 60 # Observation window for smoothing; seconds >0
-          errorRatioPercent: 6 # Error ratio threshold (%) to trip throttle; 0-100
-          consecutiveThreshold: 2 # Consecutive errors needed to trip; >=0
-          minSampleCount: 50 # Minimum samples before evaluating; >=0
-          fastErrorRatioPercent: 60 # Immediate trip ratio for small samples; 0-100
-          fastMinSampleCount: 4 # Sample size for fast path evaluation; >=0
+          openCapSeconds: 60 # Max open duration or numeric Retry-After cap applied by the worker; seconds >0
+          openThresholdPercent: 20 # Breaker open threshold for EWMA error score; percent >0
+          ewmaSpan: 8 # EWMA smoothing span used by the breaker state machine; >0
+          consecutiveThreshold: 4 # Consecutive protected responses that can trip quickly; >=1
           protectHttpCodes: [429, 499, 500, 502, 503, 504] # Status codes considered errors; list of ints
-          cleanupPercentage: 1 # Chance (0-100) to clean throttle table
-          tableName: "THROTTLE_PROTECTION" # Table storing throttle state (must match init2.sql)
       originBindingDefault: "path,asn,country,iprange" # Default binding mode; allowed tokens: ip|iprange|country|continent|region|city|asn|tls|path (comma-separated); empty string disables binding
-      pathRules: # Ignored by controller-overhaul; kept only as legacy placeholder (controller 仅看 paths.*)
-        blacklist: []
-        whitelist: []
-        except: []
       paths: # Download 侧 path profile/rule schema；决定 pathAction / FQ profile / throttle profile 等
         global:
           # defaultProfileId：未命中任何规则时使用的 profileId；必须出现在 pathProfiles[].id 中
@@ -294,7 +281,7 @@ envs:
             actions:
               # pathAction：下载路径行为列表；枚举值：
               # - block        ：直接阻断
-              # - asis         ：保持默认行为（与 pathRules 时代 "asis" 含义一致）
+               # - asis         ：保持默认行为
               # 组合规则：
               # - "block" 和 "asis" 互斥；出现其中之一时应单独使用。
               pathAction: []
@@ -477,10 +464,6 @@ envs:
       ipv4Only: false
       downloadWorkerHrwEnabled: false
       downloadWorkerHrwMaxSize: "500MB"
-      pathRules: # Ignored by controller-overhaul; kept only as legacy placeholder (controller 仅看 paths.*)
-        blacklist: []
-        whitelist: []
-        except: []
       paths:
         global:
           defaultProfileId: "landing-default"
@@ -650,21 +633,12 @@ envs:
       throttleProfiles:
         default:
           hostPatterns: []
-          windowSeconds: 60
-          observeWindowSeconds: 60
-          errorRatioPercent: 6
-          consecutiveThreshold: 2
-          minSampleCount: 50
-          fastErrorRatioPercent: 60
-          fastMinSampleCount: 4
+          openCapSeconds: 60
+          openThresholdPercent: 20
+          ewmaSpan: 8
+          consecutiveThreshold: 4
           protectHttpCodes: [429, 499, 500, 502, 503, 504]
-          cleanupPercentage: 1
-          tableName: "THROTTLE_PROTECTION"
       originBindingDefault: "path,asn,country,iprange" # Default binding mode; allowed tokens: ip|iprange|country|continent|region|city|asn|tls|path; empty string disables binding
-      pathRules: # Ignored by controller-overhaul; kept only as legacy placeholder (controller 仅看 paths.*)
-        blacklist: []
-        whitelist: []
-        except: []
       paths:
         global:
           defaultProfileId: "download-default"

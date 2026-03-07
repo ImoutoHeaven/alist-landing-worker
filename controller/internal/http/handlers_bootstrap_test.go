@@ -7,10 +7,70 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"controller/internal/config"
 )
+
+func bootstrapBodyForRole(t *testing.T, role string) string {
+	t.Helper()
+
+	_, file, _, _ := runtime.Caller(0)
+	cfgPath := filepath.Join(filepath.Dir(file), "..", "..", "config.yaml")
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load(%s) failed: %v", cfgPath, err)
+	}
+
+	ctrl := &Controller{Cfg: cfg}
+	req := httptest.NewRequest(http.MethodPost, "/api/v0/bootstrap", bytes.NewBufferString(`{"role":"`+role+`","env":"staging"}`))
+	w := httptest.NewRecorder()
+
+	ctrl.HandleBootstrap(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, w.Code)
+	}
+
+	return w.Body.String()
+}
+
+func TestBootstrapOmitsLegacyThrottleFields(t *testing.T) {
+	body := bootstrapBodyForRole(t, "download")
+
+	var resp map[string]any
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		t.Fatalf("decode bootstrap body: %v", err)
+	}
+	download, ok := resp["download"].(map[string]any)
+	if !ok {
+		t.Fatalf("bootstrap missing download payload: %s", body)
+	}
+	throttleProfiles, ok := download["throttleProfiles"]
+	if !ok {
+		t.Fatalf("bootstrap missing download.throttleProfiles: %s", body)
+	}
+	encoded, err := json.Marshal(throttleProfiles)
+	if err != nil {
+		t.Fatalf("encode throttle profiles: %v", err)
+	}
+	throttleBody := string(encoded)
+
+	if strings.Contains(throttleBody, "observeWindowSeconds") ||
+		strings.Contains(throttleBody, "fastErrorRatioPercent") ||
+		strings.Contains(throttleBody, "fastMinSampleCount") ||
+		strings.Contains(throttleBody, "cleanupPercentage") ||
+		strings.Contains(throttleBody, "tableName") {
+		t.Fatalf("legacy throttle fields leaked into bootstrap: %s", throttleBody)
+	}
+	if !strings.Contains(throttleBody, "openCapSeconds") ||
+		!strings.Contains(throttleBody, "openThresholdPercent") ||
+		!strings.Contains(throttleBody, "ewmaSpan") {
+		t.Fatalf("missing minimal breaker fields in bootstrap: %s", throttleBody)
+	}
+}
 
 func TestHandleBootstrapDownloadIncludesSlotHandlerAuthHeader(t *testing.T) {
 	_, file, _, _ := runtime.Caller(0)

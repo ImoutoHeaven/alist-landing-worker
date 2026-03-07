@@ -50,13 +50,10 @@ const (
 	defaultBindingIPv4Suffix            = "/32"
 	defaultBindingIPv6Suffix            = "/60"
 	defaultRateLimitBlockSeconds        = 600
-	defaultThrottleObserveWindow        = 60
-	defaultThrottleWindowSeconds        = 60
+	defaultThrottleOpenCapSeconds       = 60
+	defaultThrottleOpenThresholdPercent = 20
+	defaultThrottleEwmaSpan             = 8
 	defaultThrottleConsecutive          = 4
-	defaultThrottleMinSampleCount       = 8
-	defaultThrottleFastSampleCount      = 4
-	defaultThrottleErrorRatioPct        = 20
-	defaultThrottleFastErrorRatio       = 60
 	defaultSlotHandlerGraceMs           = 4000
 	defaultSlotHandlerUtilWindowSec     = 10
 	defaultSlotHandlerMaxBatch          = 8
@@ -168,17 +165,46 @@ type PathProfile struct {
 }
 
 // PathRule maps an incoming path to a PathProfile.
-// Pattern follows glob-like semantics, while legacy prefix/includes fields allow
-// backward-compatible matching when present.
+// Pattern follows glob-like semantics; legacy prefix/includes matching is not supported.
 type PathRule struct {
-	Pattern      string         `yaml:"pattern" json:"pattern"`
-	ProfileID    string         `yaml:"profileId" json:"profileId"`
-	Priority     int            `yaml:"priority,omitempty" json:"priority,omitempty"`
-	Prefix       []string       `yaml:"prefix,omitempty" json:"prefix,omitempty"`
-	DirIncludes  []string       `yaml:"dirIncludes,omitempty" json:"dirIncludes,omitempty"`
-	NameIncludes []string       `yaml:"nameIncludes,omitempty" json:"nameIncludes,omitempty"`
-	PathIncludes []string       `yaml:"pathIncludes,omitempty" json:"pathIncludes,omitempty"`
-	Extra        map[string]any `yaml:",inline" json:"-"`
+	Pattern   string         `yaml:"pattern" json:"pattern"`
+	ProfileID string         `yaml:"profileId" json:"profileId"`
+	Priority  int            `yaml:"priority,omitempty" json:"priority,omitempty"`
+	Extra     map[string]any `yaml:",inline" json:"-"`
+}
+
+func (r *PathRule) UnmarshalYAML(value *yaml.Node) error {
+	type raw PathRule
+	var aux raw
+
+	resolved, err := resolveYAMLNodeAliases(value)
+	if err != nil {
+		return err
+	}
+
+	if resolved != nil && resolved.Kind == yaml.MappingNode {
+		allowed := map[string]struct{}{
+			"pattern":   {},
+			"profileId": {},
+			"priority":  {},
+		}
+		for i := 0; i+1 < len(resolved.Content); i += 2 {
+			key := strings.TrimSpace(resolved.Content[i].Value)
+			if _, ok := allowed[key]; !ok {
+				return fmt.Errorf("unknown path rule field %q", key)
+			}
+		}
+	}
+
+	if resolved == nil {
+		return errors.New("path rule cannot be nil")
+	}
+	if err := resolved.Decode(&aux); err != nil {
+		return err
+	}
+
+	*r = PathRule(aux)
+	return nil
 }
 
 // PathGlobal carries path-level defaults.
@@ -401,7 +427,6 @@ type LandingConfig struct {
 	Turnstile            LandingTurnstileConfig     `yaml:"turnstile" json:"turnstile"`
 	Altcha               LandingAltchaConfig        `yaml:"altcha" json:"altcha"`
 	Powdet               LandingPowdetConfig        `yaml:"powdet" json:"powdet"`
-	PathRules            DownloadPathRules          `yaml:"pathRules" json:"pathRules"`
 	Paths                PathConfig                 `yaml:"paths" json:"paths"`
 	FastRedirect         bool                       `yaml:"fastRedirect" json:"fastRedirect"`
 	AutoRedirect         bool                       `yaml:"autoRedirect" json:"autoRedirect"`
@@ -414,6 +439,33 @@ type LandingConfig struct {
 	ClientDecryptEnabled bool                       `yaml:"clientDecryptEnabled" json:"clientDecryptEnabled"`
 	Payload              LandingPayloadConfig       `yaml:"payload" json:"payload"`
 	Extra                map[string]any             `yaml:",inline" json:"-"`
+}
+
+func (l *LandingConfig) UnmarshalYAML(value *yaml.Node) error {
+	type raw LandingConfig
+	var aux raw
+
+	hasLegacyPathRules, err := hasYAMLMappingKey(value, "pathRules")
+	if err != nil {
+		return err
+	}
+	if hasLegacyPathRules {
+		return errors.New("landing.pathRules is not supported; use landing.paths.pathRules")
+	}
+
+	resolved, err := resolveYAMLNodeAliases(value)
+	if err != nil {
+		return err
+	}
+	if resolved == nil {
+		return errors.New("landing config cannot be nil")
+	}
+	if err := resolved.Decode(&aux); err != nil {
+		return err
+	}
+
+	*l = LandingConfig(aux)
+	return nil
 }
 
 // PowdetServiceAlgorithmConfig describes a powdet algorithm config.
@@ -445,23 +497,6 @@ type PowdetServiceConfig struct {
 	Extra                 map[string]any                          `yaml:",inline" json:"-"`
 }
 
-// DownloadPathRule describes a single path rule.
-type DownloadPathRule struct {
-	Name         string   `yaml:"name" json:"name"`
-	Prefix       []string `yaml:"prefix" json:"prefix"`
-	DirIncludes  []string `yaml:"dirIncludes" json:"dirIncludes"`
-	NameIncludes []string `yaml:"nameIncludes" json:"nameIncludes"`
-	PathIncludes []string `yaml:"pathIncludes" json:"pathIncludes"`
-	Action       []string `yaml:"action" json:"action"`
-}
-
-// DownloadPathRules groups blacklist/whitelist/except lists.
-type DownloadPathRules struct {
-	Blacklist []DownloadPathRule `yaml:"blacklist" json:"blacklist"`
-	Whitelist []DownloadPathRule `yaml:"whitelist" json:"whitelist"`
-	Except    []DownloadPathRule `yaml:"except" json:"except"`
-}
-
 // DownloadRateLimitConfig describes database-backed rate limit settings.
 type DownloadRateLimitConfig struct {
 	Enabled           bool    `yaml:"enabled" json:"enabled"`
@@ -491,19 +526,85 @@ type DownloadDBConfig struct {
 	Extra              map[string]any          `yaml:",inline" json:"-"`
 }
 
-// DownloadThrottleProfile defines throttle v2 parameters.
+// DownloadThrottleProfile defines the minimal breaker profile contract.
 type DownloadThrottleProfile struct {
-	HostPatterns          []string `yaml:"hostPatterns" json:"hostPatterns"`
-	WindowSeconds         int      `yaml:"windowSeconds" json:"windowSeconds"`
-	ObserveWindowSeconds  int      `yaml:"observeWindowSeconds" json:"observeWindowSeconds"`
-	ErrorRatioPercent     int      `yaml:"errorRatioPercent" json:"errorRatioPercent"`
-	ConsecutiveThreshold  int      `yaml:"consecutiveThreshold" json:"consecutiveThreshold"`
-	MinSampleCount        int      `yaml:"minSampleCount" json:"minSampleCount"`
-	FastErrorRatioPercent int      `yaml:"fastErrorRatioPercent" json:"fastErrorRatioPercent"`
-	FastMinSampleCount    int      `yaml:"fastMinSampleCount" json:"fastMinSampleCount"`
-	ProtectHTTPCodes      []int    `yaml:"protectHttpCodes" json:"protectHttpCodes"`
-	CleanupPercentage     float64  `yaml:"cleanupPercentage" json:"cleanupPercentage"`
-	TableName             string   `yaml:"tableName" json:"tableName"`
+	HostPatterns         []string `yaml:"hostPatterns" json:"hostPatterns"`
+	OpenCapSeconds       int      `yaml:"openCapSeconds" json:"openCapSeconds"`
+	OpenThresholdPercent int      `yaml:"openThresholdPercent" json:"openThresholdPercent"`
+	EwmaSpan             int      `yaml:"ewmaSpan" json:"ewmaSpan"`
+	ConsecutiveThreshold int      `yaml:"consecutiveThreshold" json:"consecutiveThreshold"`
+	ProtectHTTPCodes     []int    `yaml:"protectHttpCodes" json:"protectHttpCodes"`
+}
+
+func (p *DownloadThrottleProfile) UnmarshalYAML(value *yaml.Node) error {
+	type raw DownloadThrottleProfile
+	var aux raw
+
+	resolved, err := resolveYAMLNodeAliases(value)
+	if err != nil {
+		return err
+	}
+
+	if resolved != nil && resolved.Kind == yaml.MappingNode {
+		allowed := map[string]struct{}{
+			"hostPatterns":         {},
+			"openCapSeconds":       {},
+			"openThresholdPercent": {},
+			"ewmaSpan":             {},
+			"consecutiveThreshold": {},
+			"protectHttpCodes":     {},
+		}
+		for i := 0; i+1 < len(resolved.Content); i += 2 {
+			key := strings.TrimSpace(resolved.Content[i].Value)
+			if _, ok := allowed[key]; !ok {
+				return fmt.Errorf("unknown download throttle profile field %q", key)
+			}
+		}
+	}
+
+	if resolved == nil {
+		return errors.New("download throttle profile cannot be nil")
+	}
+	if err := resolved.Decode(&aux); err != nil {
+		return err
+	}
+
+	*p = DownloadThrottleProfile(aux)
+	return nil
+}
+
+func resolveYAMLNodeAliases(value *yaml.Node) (*yaml.Node, error) {
+	seen := map[*yaml.Node]struct{}{}
+	current := value
+	for current != nil && current.Kind == yaml.AliasNode {
+		if current.Alias == nil {
+			return nil, errors.New("yaml alias missing target")
+		}
+		if _, ok := seen[current]; ok {
+			return nil, errors.New("yaml alias cycle")
+		}
+		seen[current] = struct{}{}
+		current = current.Alias
+	}
+	return current, nil
+}
+
+func hasYAMLMappingKey(value *yaml.Node, key string) (bool, error) {
+	resolved, err := resolveYAMLNodeAliases(value)
+	if err != nil {
+		return false, err
+	}
+	if resolved == nil || resolved.Kind != yaml.MappingNode {
+		return false, nil
+	}
+
+	for i := 0; i+1 < len(resolved.Content); i += 2 {
+		if strings.TrimSpace(resolved.Content[i].Value) == key {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
 
 // DownloadFairQueueSiteBucketConfig controls site bucket derivation.
@@ -541,10 +642,36 @@ type DownloadConfig struct {
 	OverrideCacheControl bool                               `yaml:"override-cache-control" json:"overrideCacheControl"`
 	CacheOverrideTime    string                             `yaml:"cache-override-time" json:"cacheOverrideTime"`
 	CacheOverrideMaxSize string                             `yaml:"cache-override-max-size" json:"cacheOverrideMaxSize"`
-	PathRules            DownloadPathRules                  `yaml:"pathRules" json:"pathRules"`
 	Paths                PathConfig                         `yaml:"paths" json:"paths"`
 	Auth                 DownloadAuthConfig                 `yaml:"auth" json:"auth"`
 	Extra                map[string]interface{}             `yaml:",inline" json:"-"`
+}
+
+func (d *DownloadConfig) UnmarshalYAML(value *yaml.Node) error {
+	type raw DownloadConfig
+	var aux raw
+
+	hasLegacyPathRules, err := hasYAMLMappingKey(value, "pathRules")
+	if err != nil {
+		return err
+	}
+	if hasLegacyPathRules {
+		return errors.New("download.pathRules is not supported; use download.paths.pathRules")
+	}
+
+	resolved, err := resolveYAMLNodeAliases(value)
+	if err != nil {
+		return err
+	}
+	if resolved == nil {
+		return errors.New("download config cannot be nil")
+	}
+	if err := resolved.Decode(&aux); err != nil {
+		return err
+	}
+
+	*d = DownloadConfig(aux)
+	return nil
 }
 
 // SlotHandlerAuthConfig guards slot-handler API.
@@ -896,6 +1023,9 @@ func (l *LandingConfig) ensureDefaults(envName string) error {
 	if len(l.Paths.Rules) == 0 {
 		return fmt.Errorf("landing.paths.rules must not be empty for env %s", envName)
 	}
+	if err := validatePathConfig("landing", &l.Paths); err != nil {
+		return fmt.Errorf("%w for env %s", err, envName)
+	}
 
 	if l.Turnstile.TokenTTLSeconds <= 0 {
 		l.Turnstile.TokenTTLSeconds = 600
@@ -1228,12 +1358,15 @@ func (d *DownloadConfig) ensureDefaults(common CommonConfig, envName string) err
 	if len(d.Paths.Rules) == 0 {
 		return fmt.Errorf("download.paths.rules must not be empty for env %s", envName)
 	}
+	if err := validatePathConfig("download", &d.Paths); err != nil {
+		return fmt.Errorf("%w for env %s", err, envName)
+	}
 
 	if err := d.DB.ensureDefaults(envName); err != nil {
 		return err
 	}
 
-	if err := d.ensureThrottleProfiles(); err != nil {
+	if err := d.ensureThrottleProfiles(envName); err != nil {
 		return err
 	}
 
@@ -1266,18 +1399,60 @@ func (d *DownloadConfig) ensureDefaults(common CommonConfig, envName string) err
 	return nil
 }
 
-func (d *DownloadConfig) ensureThrottleProfiles() error {
+func (d *DownloadConfig) ensureThrottleProfiles(envName string) error {
 	if d.ThrottleProfiles == nil {
-		d.ThrottleProfiles = map[string]DownloadThrottleProfile{}
+		return fmt.Errorf("download.throttleProfiles.default is required for env %s", envName)
 	}
 
 	if _, ok := d.ThrottleProfiles["default"]; !ok {
-		d.ThrottleProfiles["default"] = DownloadThrottleProfile{}
+		return fmt.Errorf("download.throttleProfiles.default is required for env %s", envName)
 	}
 
 	for name, profile := range d.ThrottleProfiles {
 		profile.ensureDefaults()
+		if err := profile.validate(name); err != nil {
+			return fmt.Errorf("download throttle profile %q invalid for env %s: %w", name, envName, err)
+		}
 		d.ThrottleProfiles[name] = profile
+	}
+
+	if err := d.validateThrottleProfileReferences(d.Paths.Profiles); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (d *DownloadConfig) validateThrottleProfileReferences(profiles []PathProfile) error {
+	for _, profile := range profiles {
+		if err := d.validateThrottleProfileReference(profile.ID, profile.Actions); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (d *DownloadConfig) validateThrottleProfileReference(profileID string, actions map[string]any) error {
+	if actions == nil {
+		return nil
+	}
+
+	raw, ok := actions["throttleProfile"]
+	if !ok || raw == nil {
+		return nil
+	}
+
+	name, ok := raw.(string)
+	if !ok {
+		return fmt.Errorf("download path profile %q throttleProfile must be a string", profileID)
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("download path profile %q throttleProfile must not be empty", profileID)
+	}
+	if _, ok := d.ThrottleProfiles[name]; !ok {
+		return fmt.Errorf("unknown throttleProfile %q in download path profile %q", name, profileID)
 	}
 
 	return nil
@@ -1358,39 +1533,31 @@ func (r *DownloadRateLimitConfig) ensureDefaults() {
 }
 
 func (p *DownloadThrottleProfile) ensureDefaults() {
-	if p.WindowSeconds <= 0 {
-		p.WindowSeconds = defaultThrottleWindowSeconds
+	if p.OpenCapSeconds <= 0 {
+		p.OpenCapSeconds = defaultThrottleOpenCapSeconds
 	}
-	if p.ObserveWindowSeconds <= 0 {
-		p.ObserveWindowSeconds = defaultThrottleObserveWindow
+	if p.OpenThresholdPercent <= 0 {
+		p.OpenThresholdPercent = defaultThrottleOpenThresholdPercent
 	}
-	if p.ErrorRatioPercent <= 0 {
-		p.ErrorRatioPercent = defaultThrottleErrorRatioPct
-	}
-	if p.FastErrorRatioPercent <= 0 {
-		p.FastErrorRatioPercent = defaultThrottleFastErrorRatio
-	}
-	if p.FastErrorRatioPercent < p.ErrorRatioPercent {
-		p.FastErrorRatioPercent = p.ErrorRatioPercent
+	if p.EwmaSpan <= 0 {
+		p.EwmaSpan = defaultThrottleEwmaSpan
 	}
 	if p.ConsecutiveThreshold <= 0 {
 		p.ConsecutiveThreshold = defaultThrottleConsecutive
 	}
-	if p.MinSampleCount <= 0 {
-		p.MinSampleCount = defaultThrottleMinSampleCount
-	}
-	if p.FastMinSampleCount < 0 {
-		p.FastMinSampleCount = defaultThrottleFastSampleCount
-	}
 	if len(p.ProtectHTTPCodes) == 0 {
 		p.ProtectHTTPCodes = []int{429, 499, 500, 502, 503, 504}
 	}
-	if p.CleanupPercentage < 0 {
-		p.CleanupPercentage = defaultDownloadCleanupPercent
+}
+
+func (p DownloadThrottleProfile) validate(name string) error {
+	for idx, code := range p.ProtectHTTPCodes {
+		if code < 100 || code > 599 {
+			return fmt.Errorf("protectHttpCodes[%d] must be between 100 and 599, got %d", idx, code)
+		}
 	}
-	if p.TableName == "" {
-		p.TableName = "THROTTLE_PROTECTION"
-	}
+
+	return nil
 }
 
 func (f *DownloadFairQueueConfig) ensureDefaults(envName string) error {
@@ -1601,216 +1768,59 @@ func (c *SlotHandlerConfig) ensureDefaults(envName string) error {
 	return nil
 }
 
-func ensurePathGlobal(global PathGlobal, profiles []PathProfile) PathGlobal {
-	if strings.TrimSpace(global.DefaultProfileID) == "" {
-		if len(profiles) > 0 && strings.TrimSpace(profiles[0].ID) != "" {
-			global.DefaultProfileID = profiles[0].ID
-		} else {
-			global.DefaultProfileID = "default"
+func validatePathConfig(scope string, cfg *PathConfig) error {
+	if cfg == nil {
+		return fmt.Errorf("%s.paths is required", scope)
+	}
+
+	cfg.Global.DefaultProfileID = strings.TrimSpace(cfg.Global.DefaultProfileID)
+	if cfg.Global.DefaultProfileID == "" {
+		return fmt.Errorf("%s.paths.global.defaultProfileId is required", scope)
+	}
+
+	profileIDs := make(map[string]struct{}, len(cfg.Profiles))
+	for i := range cfg.Profiles {
+		cfg.Profiles[i].ID = strings.TrimSpace(cfg.Profiles[i].ID)
+		if cfg.Profiles[i].ID == "" {
+			return fmt.Errorf("%s.paths.pathProfiles[%d].id is required", scope, i)
+		}
+		if _, exists := profileIDs[cfg.Profiles[i].ID]; exists {
+			return fmt.Errorf("%s.paths.pathProfiles[%d].id duplicates %q", scope, i, cfg.Profiles[i].ID)
+		}
+		profileIDs[cfg.Profiles[i].ID] = struct{}{}
+	}
+
+	if _, ok := profileIDs[cfg.Global.DefaultProfileID]; !ok {
+		return fmt.Errorf("%s.paths.global.defaultProfileId %q does not match any pathProfiles[].id", scope, cfg.Global.DefaultProfileID)
+	}
+
+	for i := range cfg.Rules {
+		cfg.Rules[i].ProfileID = strings.TrimSpace(cfg.Rules[i].ProfileID)
+		if cfg.Rules[i].ProfileID == "" {
+			return fmt.Errorf("%s.paths.pathRules[%d].profileId is required", scope, i)
+		}
+		if _, ok := profileIDs[cfg.Rules[i].ProfileID]; !ok {
+			return fmt.Errorf("%s.paths.pathRules[%d].profileId %q does not match any pathProfiles[].id", scope, i, cfg.Rules[i].ProfileID)
 		}
 	}
+
+	return nil
+}
+
+func ensurePathGlobal(global PathGlobal) PathGlobal {
+	global.DefaultProfileID = strings.TrimSpace(global.DefaultProfileID)
 	return global
 }
 
-func uniqueProfileID(base string, seen map[string]int) string {
-	key := strings.TrimSpace(base)
-	if key == "" {
-		key = "profile"
-	}
-	if count, ok := seen[key]; ok {
-		seen[key] = count + 1
-		return fmt.Sprintf("%s_%d", key, count+1)
-	}
-	seen[key] = 1
-	return key
-}
-
-func normalizePatternPrefix(prefix string) string {
-	if prefix == "" {
-		return "/**"
-	}
-	p := prefix
-	if !strings.HasPrefix(p, "/") {
-		p = "/" + p
-	}
-	if strings.HasSuffix(p, "/**") {
-		return p
-	}
-	if strings.HasSuffix(p, "/") {
-		return p + "**"
-	}
-	if strings.HasSuffix(p, "*") {
-		return p
-	}
-	return p + "/**"
-}
-
-func generateDownloadPathConfig(cfg DownloadConfig) (PathGlobal, []PathProfile, []PathRule) {
-	profiles := []PathProfile{}
-	rules := []PathRule{}
-	seen := map[string]int{}
-
-	defaultProfileID := "default"
-	profiles = append(profiles, PathProfile{
-		ID:      defaultProfileID,
-		Dynamic: false,
-		Actions: map[string]any{
-			"pathAction":      []string{},
-			"checkOriginMode": cfg.OriginBindingDefault,
-			"throttleProfile": "default",
-			"blockReason":     nil,
-		},
-	})
-
-	appendRules := func(list []DownloadPathRule, priority int) {
-		for _, rule := range list {
-			profileID := uniqueProfileID(rule.Name, seen)
-			profiles = append(profiles, PathProfile{
-				ID:      profileID,
-				Dynamic: false,
-				Actions: map[string]any{
-					"pathAction":      append([]string{}, rule.Action...),
-					"checkOriginMode": cfg.OriginBindingDefault,
-					"throttleProfile": "default",
-				},
-			})
-
-			if len(rule.Prefix) == 0 {
-				rules = append(rules, PathRule{
-					Pattern:      "/**",
-					ProfileID:    profileID,
-					Priority:     priority,
-					Prefix:       append([]string{}, rule.Prefix...),
-					DirIncludes:  append([]string{}, rule.DirIncludes...),
-					NameIncludes: append([]string{}, rule.NameIncludes...),
-					PathIncludes: append([]string{}, rule.PathIncludes...),
-				})
-				continue
-			}
-
-			for _, prefix := range rule.Prefix {
-				rules = append(rules, PathRule{
-					Pattern:      normalizePatternPrefix(prefix),
-					ProfileID:    profileID,
-					Priority:     priority,
-					Prefix:       append([]string{}, rule.Prefix...),
-					DirIncludes:  append([]string{}, rule.DirIncludes...),
-					NameIncludes: append([]string{}, rule.NameIncludes...),
-					PathIncludes: append([]string{}, rule.PathIncludes...),
-				})
-			}
-		}
-	}
-
-	appendRules(cfg.PathRules.Blacklist, 300)
-	appendRules(cfg.PathRules.Whitelist, 200)
-	appendRules(cfg.PathRules.Except, 100)
-
-	global := ensurePathGlobal(cfg.Paths.Global, profiles)
-	if global.DefaultProfileID == "" {
-		global.DefaultProfileID = defaultProfileID
-	}
-
-	return global, profiles, rules
-}
-
-func containsActionToken(actions []string, target string) bool {
-	if target == "" {
-		return false
-	}
-	for _, action := range actions {
-		if strings.EqualFold(strings.TrimSpace(action), target) {
-			return true
-		}
-	}
-	return false
-}
-
-func generateLandingPathConfig(cfg LandingConfig) (PathGlobal, []PathProfile, []PathRule) {
-	profiles := []PathProfile{}
-	rules := []PathRule{}
-	seen := map[string]int{}
-
-	defaultProfileID := "default"
-	defaultCombo := cfg.Captcha.DefaultCombo
-	if len(defaultCombo) == 0 {
-		defaultCombo = []string{"verify-altcha"}
-	}
-	profiles = append(profiles, PathProfile{
-		ID:      defaultProfileID,
-		Dynamic: false,
-		Actions: map[string]any{
-			"captchaCombo": defaultCombo,
-			"fastRedirect": cfg.FastRedirect,
-			"autoRedirect": cfg.AutoRedirect,
-		},
-	})
-
-	appendRules := func(list []DownloadPathRule, priority int) {
-		for _, rule := range list {
-			profileID := uniqueProfileID(rule.Name, seen)
-			actions := map[string]any{
-				"captchaCombo": append([]string{}, rule.Action...),
-				"fastRedirect": cfg.FastRedirect,
-				"autoRedirect": cfg.AutoRedirect,
-			}
-			if containsActionToken(rule.Action, "block") {
-				actions["blockReason"] = "blocked by rule " + rule.Name
-			}
-			profiles = append(profiles, PathProfile{
-				ID:      profileID,
-				Dynamic: false,
-				Actions: actions,
-			})
-
-			if len(rule.Prefix) == 0 {
-				rules = append(rules, PathRule{
-					Pattern:      "/**",
-					ProfileID:    profileID,
-					Priority:     priority,
-					Prefix:       append([]string{}, rule.Prefix...),
-					DirIncludes:  append([]string{}, rule.DirIncludes...),
-					NameIncludes: append([]string{}, rule.NameIncludes...),
-					PathIncludes: append([]string{}, rule.PathIncludes...),
-				})
-				continue
-			}
-
-			for _, prefix := range rule.Prefix {
-				rules = append(rules, PathRule{
-					Pattern:      normalizePatternPrefix(prefix),
-					ProfileID:    profileID,
-					Priority:     priority,
-					Prefix:       append([]string{}, rule.Prefix...),
-					DirIncludes:  append([]string{}, rule.DirIncludes...),
-					NameIncludes: append([]string{}, rule.NameIncludes...),
-					PathIncludes: append([]string{}, rule.PathIncludes...),
-				})
-			}
-		}
-	}
-
-	appendRules(cfg.PathRules.Blacklist, 300)
-	appendRules(cfg.PathRules.Whitelist, 200)
-	appendRules(cfg.PathRules.Except, 100)
-
-	global := ensurePathGlobal(cfg.Paths.Global, profiles)
-	if global.DefaultProfileID == "" {
-		global.DefaultProfileID = defaultProfileID
-	}
-
-	return global, profiles, rules
-}
-
 // BuildPathSet returns global defaults, profiles, and rules for the given role.
-// Only paths.* is honored; legacy pathRules are ignored to avoid hybrid behavior.
+// Only paths.* is supported.
 func BuildPathSet(envCfg EnvConfig, role string) (PathGlobal, []PathProfile, []PathRule) {
 	switch role {
 	case "landing":
-		global := ensurePathGlobal(envCfg.Landing.Paths.Global, envCfg.Landing.Paths.Profiles)
+		global := ensurePathGlobal(envCfg.Landing.Paths.Global)
 		return global, envCfg.Landing.Paths.Profiles, envCfg.Landing.Paths.Rules
 	case "download":
-		global := ensurePathGlobal(envCfg.Download.Paths.Global, envCfg.Download.Paths.Profiles)
+		global := ensurePathGlobal(envCfg.Download.Paths.Global)
 		return global, envCfg.Download.Paths.Profiles, envCfg.Download.Paths.Rules
 	default:
 		return PathGlobal{}, nil, nil
