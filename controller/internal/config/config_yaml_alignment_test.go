@@ -96,6 +96,20 @@ func TestSampleConfigAlignment(t *testing.T) {
 		t.Fatalf("download fairQueue slotHandlerAuthHeader must match slotHandler auth header")
 	}
 
+	stagingThrottle, ok := staging.Download.ThrottleProfiles["default"]
+	if !ok {
+		t.Fatalf("staging download default throttle profile missing")
+	}
+	if stagingThrottle.OpenCapSeconds != 60 || stagingThrottle.OpenThresholdPercent != 20 || stagingThrottle.EwmaSpan != 8 {
+		t.Fatalf("staging default throttle profile not aligned: %+v", stagingThrottle)
+	}
+	if stagingThrottle.ConsecutiveThreshold != 4 {
+		t.Fatalf("staging throttle consecutiveThreshold not aligned: %d", stagingThrottle.ConsecutiveThreshold)
+	}
+	if len(stagingThrottle.ProtectHTTPCodes) != 6 {
+		t.Fatalf("staging throttle protectHttpCodes not aligned: %+v", stagingThrottle.ProtectHTTPCodes)
+	}
+
 	prod, ok := cfg.Envs["prod"]
 	if !ok {
 		t.Fatalf("prod env missing in config.yaml")
@@ -105,6 +119,19 @@ func TestSampleConfigAlignment(t *testing.T) {
 	}
 	if prod.Download.FairQueue.SlotHandlerAuthHeader != prod.SlotHandler.Auth.Header {
 		t.Fatalf("prod download fairQueue slotHandlerAuthHeader must match slotHandler auth header")
+	}
+	prodThrottle, ok := prod.Download.ThrottleProfiles["default"]
+	if !ok {
+		t.Fatalf("prod download default throttle profile missing")
+	}
+	if prodThrottle.OpenCapSeconds != 60 || prodThrottle.OpenThresholdPercent != 20 || prodThrottle.EwmaSpan != 8 {
+		t.Fatalf("prod default throttle profile not aligned: %+v", prodThrottle)
+	}
+	if prodThrottle.ConsecutiveThreshold != 4 {
+		t.Fatalf("prod throttle consecutiveThreshold not aligned: %d", prodThrottle.ConsecutiveThreshold)
+	}
+	if len(prodThrottle.ProtectHTTPCodes) != 6 {
+		t.Fatalf("prod throttle protectHttpCodes not aligned: %+v", prodThrottle.ProtectHTTPCodes)
 	}
 }
 
@@ -142,5 +169,68 @@ func TestLoadAllowsCaseInsensitiveSlotHandlerAuthHeaderMatch(t *testing.T) {
 	}
 	if staging.SlotHandler.Auth.Header != "X-FQ-Auth" {
 		t.Fatalf("expected normalized slotHandler auth header, got %q", staging.SlotHandler.Auth.Header)
+	}
+}
+
+func TestSampleConfigUsesMinimalThrottleProfileSchema(t *testing.T) {
+	_, file, _, _ := runtime.Caller(0)
+	cfgPath := filepath.Join(filepath.Dir(file), "..", "..", "config.yaml")
+
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read config.yaml: %v", err)
+	}
+
+	text := string(data)
+	lines := strings.Split(text, "\n")
+	blocks := make([]string, 0, 2)
+	inBlock := false
+	blockIndent := 0
+	blockStart := 0
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		indent := len(line) - len(strings.TrimLeft(line, " "))
+		if !inBlock && trimmed == "throttleProfiles:" {
+			inBlock = true
+			blockIndent = indent
+			blockStart = i
+			continue
+		}
+		if inBlock && trimmed != "" && indent <= blockIndent {
+			blocks = append(blocks, strings.Join(lines[blockStart:i], "\n"))
+			inBlock = false
+		}
+	}
+	if inBlock {
+		blocks = append(blocks, strings.Join(lines[blockStart:], "\n"))
+	}
+	if len(blocks) == 0 {
+		t.Fatalf("config.yaml missing throttleProfiles blocks")
+	}
+	throttleText := strings.Join(blocks, "\n")
+
+	for _, legacy := range []string{
+		"observeWindowSeconds:",
+		"errorRatioPercent:",
+		"minSampleCount:",
+		"fastErrorRatioPercent:",
+		"fastMinSampleCount:",
+		"cleanupPercentage:",
+		"tableName:",
+	} {
+		if strings.Contains(throttleText, legacy) {
+			t.Fatalf("legacy throttle field still documented in config.yaml: %s", legacy)
+		}
+	}
+	for _, want := range []string{
+		"openCapSeconds:",
+		"openThresholdPercent:",
+		"ewmaSpan:",
+		"consecutiveThreshold:",
+		"protectHttpCodes:",
+	} {
+		if !strings.Contains(throttleText, want) {
+			t.Fatalf("config.yaml missing throttle field %s", want)
+		}
 	}
 }

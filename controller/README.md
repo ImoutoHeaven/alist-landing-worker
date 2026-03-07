@@ -19,9 +19,14 @@
 - `apiToken`、`bootstrapVersion`、`rulesVersion`、`listenAddr`
 - `envs.<env>`：包含 `common/landing/download/powdet/slotHandler`
 
-路径规则以 `paths.*` 为准（`paths.global`、`paths.pathProfiles`、`paths.pathRules`）。
-`landing.pathRules` 与 `download.pathRules` 仍保留在结构里，但当前决策只读取 `paths.*`，避免混用。
-注意：若旧字段已移除，旧版组件可能无法识别新的 `paths.*` 结构；升级需与 landing/download 组件版本联动，并在发布说明中标注为不兼容变更。
+路径规则只使用 `paths.*`（`paths.global`、`paths.pathProfiles`、`paths.pathRules`）。
+
+download breaker 相关：
+
+- `download.throttleProfiles.default` 是下载 breaker 的必填 profile key。
+- `download.paths.pathProfiles[].actions.throttleProfile` 若填写，必须命中真实的 `download.throttleProfiles.<name>`；controller 会在配置加载阶段直接拒绝未知 selector。
+- bootstrap 下发的 breaker profile 只包含最小字段：`hostPatterns`、`openCapSeconds`、`openThresholdPercent`、`ewmaSpan`、`consecutiveThreshold`、`protectHttpCodes`。
+- controller 只下发 breaker profile 配置和 `throttleProfile` selector，不下发任何运行时 breaker 状态；运行时状态固定由数据库 `THROTTLE_PROTECTION` 维护。
 
 Powdet 相关：`landing.powdet.algorithms` 控制可用算法（argon2id/argon2d/randomx），`captchaCombo` 可用 `verify-powdet-argon2id`/`verify-powdet-argon2d`/`verify-powdet-randomx` 指定实际启用算法。
 
