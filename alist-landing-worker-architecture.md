@@ -37,11 +37,11 @@ Worker 启动后会从 controller 拉取 `bootstrap`，并基于 `paths.*` 匹�
 
 没有 controller 或 bootstrap/decision 获取失败时，Worker 会返回 503。
 
-### 2.2 Worker 环境变量（infra 级）
+### 2.2 Worker 配置（infra 级）
 
 - `CONTROLLER_URL` / `CONTROLLER_API_PREFIX` / `CONTROLLER_API_TOKEN`
 - `ENV` / `ROLE` / `INSTANCE_ID` / `APP_NAME` / `APP_VERSION`
-- `BOOTSTRAP_CACHE_MODE`（`direct`/`d1`）+ `CACHE_D1` + `INIT_TABLES`
+- `BOOTSTRAP_CACHE_MODE`（`direct`/`d1`）+ `INIT_TABLES`；若使用 `d1` 模式，还需提供 D1 绑定 `CACHE_D1`
 - `INTERNAL_API_TOKEN`（用于 `/api/v0/health|refresh|flush`）
 - `INNER_AUTH_SECRET` / `INNER_AUTH_HEADER`（入口内网鉴权，可选）
 - `ENABLE_CF_RATELIMITER` / `CF_RATELIMITER_BINDING`（可选）

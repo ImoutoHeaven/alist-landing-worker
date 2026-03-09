@@ -27,10 +27,10 @@ Cloudflare Workers 版 AList 下载落地网关。它位于 AList 与 download w
 - `common`：`tokenHmacKey`、`signSecret`、`workerAddresses`、`landingWorkerAddresses`、`binding`、`alistBaseUrl`、`alistAuthHeaders`
 - `landing`：`pageSecret`、`frontend.*`、`turnstile/altcha/powdet`、`paths.*`、`db`、`crypt`、`webDownloader` 等
 
-### Worker 环境变量（wrangler/Cloudflare）
+### Worker 配置（wrangler/Cloudflare）
 
 - **控制面连接**：`CONTROLLER_URL`、`CONTROLLER_API_PREFIX`、`CONTROLLER_API_TOKEN`、`ENV`、`ROLE`、`INSTANCE_ID`
-- **Bootstrap 缓存**：`BOOTSTRAP_CACHE_MODE`（`direct`/`d1`）、`CACHE_D1`（仅 d1 模式）、`INIT_TABLES`
+- **Bootstrap 缓存**：环境变量 `BOOTSTRAP_CACHE_MODE`（`direct`/`d1`）、`INIT_TABLES`；使用 `d1` 模式时还需配置 D1 绑定 `CACHE_D1`
 - **内部控制 API**：`INTERNAL_API_TOKEN`
 - **入口内网鉴权（可选）**：`INNER_AUTH_SECRET`、`INNER_AUTH_HEADER`（默认 `X-Inner-Auth`）
 - **CF Rate Limiter（可选）**：`ENABLE_CF_RATELIMITER`、`CF_RATELIMITER_BINDING`
