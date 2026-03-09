@@ -100,11 +100,17 @@ func TestSampleConfigAlignment(t *testing.T) {
 	if !ok {
 		t.Fatalf("staging download default throttle profile missing")
 	}
-	if stagingThrottle.OpenCapSeconds != 60 || stagingThrottle.OpenThresholdPercent != 20 || stagingThrottle.EwmaSpan != 8 {
+	if stagingThrottle.OpenCapSeconds != 60 || stagingThrottle.OpenThresholdPercent != 30 || stagingThrottle.EwmaSpan != 8 {
 		t.Fatalf("staging default throttle profile not aligned: %+v", stagingThrottle)
 	}
 	if stagingThrottle.ConsecutiveThreshold != 4 {
 		t.Fatalf("staging throttle consecutiveThreshold not aligned: %d", stagingThrottle.ConsecutiveThreshold)
+	}
+	if stagingThrottle.MinSamplesBeforeEwmaOpen != 8 {
+		t.Fatalf("staging throttle minSamplesBeforeEwmaOpen not aligned: %d", stagingThrottle.MinSamplesBeforeEwmaOpen)
+	}
+	if stagingThrottle.IdleResetSeconds != 900 {
+		t.Fatalf("staging throttle idleResetSeconds not aligned: %d", stagingThrottle.IdleResetSeconds)
 	}
 	if len(stagingThrottle.ProtectHTTPCodes) != 6 {
 		t.Fatalf("staging throttle protectHttpCodes not aligned: %+v", stagingThrottle.ProtectHTTPCodes)
@@ -124,11 +130,17 @@ func TestSampleConfigAlignment(t *testing.T) {
 	if !ok {
 		t.Fatalf("prod download default throttle profile missing")
 	}
-	if prodThrottle.OpenCapSeconds != 60 || prodThrottle.OpenThresholdPercent != 20 || prodThrottle.EwmaSpan != 8 {
+	if prodThrottle.OpenCapSeconds != 60 || prodThrottle.OpenThresholdPercent != 30 || prodThrottle.EwmaSpan != 8 {
 		t.Fatalf("prod default throttle profile not aligned: %+v", prodThrottle)
 	}
 	if prodThrottle.ConsecutiveThreshold != 4 {
 		t.Fatalf("prod throttle consecutiveThreshold not aligned: %d", prodThrottle.ConsecutiveThreshold)
+	}
+	if prodThrottle.MinSamplesBeforeEwmaOpen != 8 {
+		t.Fatalf("prod throttle minSamplesBeforeEwmaOpen not aligned: %d", prodThrottle.MinSamplesBeforeEwmaOpen)
+	}
+	if prodThrottle.IdleResetSeconds != 900 {
+		t.Fatalf("prod throttle idleResetSeconds not aligned: %d", prodThrottle.IdleResetSeconds)
 	}
 	if len(prodThrottle.ProtectHTTPCodes) != 6 {
 		t.Fatalf("prod throttle protectHttpCodes not aligned: %+v", prodThrottle.ProtectHTTPCodes)
@@ -227,6 +239,8 @@ func TestSampleConfigUsesMinimalThrottleProfileSchema(t *testing.T) {
 		"openThresholdPercent:",
 		"ewmaSpan:",
 		"consecutiveThreshold:",
+		"minSamplesBeforeEwmaOpen:",
+		"idleResetSeconds:",
 		"protectHttpCodes:",
 	} {
 		if !strings.Contains(throttleText, want) {

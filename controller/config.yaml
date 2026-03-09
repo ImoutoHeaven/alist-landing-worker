@@ -264,9 +264,11 @@ envs:
         default:
           hostPatterns: [] # Host patterns this throttle profile applies to; glob list
           openCapSeconds: 60 # Max open duration or numeric Retry-After cap applied by the worker; seconds >0
-          openThresholdPercent: 20 # Breaker open threshold for EWMA error score; percent >0
+          openThresholdPercent: 30 # Breaker open threshold for EWMA error score; percent >0; default comes from controller
           ewmaSpan: 8 # EWMA smoothing span used by the breaker state machine; >0
           consecutiveThreshold: 4 # Consecutive protected responses that can trip quickly; >=1
+          minSamplesBeforeEwmaOpen: 8 # Minimum post-reset samples before EWMA can open the breaker; >0; default comes from controller
+          idleResetSeconds: 900 # Closed-state idle gap that clears breaker memory before the next sample; seconds >0; default comes from controller
           protectHttpCodes: [429, 499, 500, 502, 503, 504] # Status codes considered errors; list of ints
       originBindingDefault: "path,asn,country,iprange" # Default binding mode; allowed tokens: ip|iprange|country|continent|region|city|asn|tls|path (comma-separated); empty string disables binding
       paths: # Download 侧 path profile/rule schema；决定 pathAction / FQ profile / throttle profile 等
@@ -634,9 +636,11 @@ envs:
         default:
           hostPatterns: []
           openCapSeconds: 60
-          openThresholdPercent: 20
+          openThresholdPercent: 30
           ewmaSpan: 8
           consecutiveThreshold: 4
+          minSamplesBeforeEwmaOpen: 8
+          idleResetSeconds: 900
           protectHttpCodes: [429, 499, 500, 502, 503, 504]
       originBindingDefault: "path,asn,country,iprange" # Default binding mode; allowed tokens: ip|iprange|country|continent|region|city|asn|tls|path; empty string disables binding
       paths:

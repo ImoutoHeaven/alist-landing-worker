@@ -72,6 +72,16 @@ func TestBootstrapOmitsLegacyThrottleFields(t *testing.T) {
 	}
 }
 
+func TestBootstrapIncludesWarmupBreakerFields(t *testing.T) {
+	body := bootstrapBodyForRole(t, "download")
+	if !strings.Contains(body, "minSamplesBeforeEwmaOpen") {
+		t.Fatalf("bootstrap missing minSamplesBeforeEwmaOpen: %s", body)
+	}
+	if !strings.Contains(body, "idleResetSeconds") {
+		t.Fatalf("bootstrap missing idleResetSeconds: %s", body)
+	}
+}
+
 func TestHandleBootstrapDownloadIncludesSlotHandlerAuthHeader(t *testing.T) {
 	_, file, _, _ := runtime.Caller(0)
 	cfgPath := filepath.Join(filepath.Dir(file), "..", "..", "config.yaml")

@@ -82,6 +82,32 @@ func TestValidateRejectsInvalidProtectHTTPCodes(t *testing.T) {
 	}
 }
 
+func TestValidateAppliesDownloadThrottleProfileDefaults(t *testing.T) {
+	cfg := validConfigForTests(t)
+	staging := cfg.Envs["staging"]
+	profile := staging.Download.ThrottleProfiles["default"]
+	profile.OpenThresholdPercent = 0
+	profile.MinSamplesBeforeEwmaOpen = 0
+	profile.IdleResetSeconds = 0
+	staging.Download.ThrottleProfiles["default"] = profile
+	cfg.Envs["staging"] = staging
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() failed: %v", err)
+	}
+
+	profile = cfg.Envs["staging"].Download.ThrottleProfiles["default"]
+	if profile.OpenThresholdPercent != 30 {
+		t.Fatalf("expected default openThresholdPercent 30, got %d", profile.OpenThresholdPercent)
+	}
+	if profile.MinSamplesBeforeEwmaOpen != 8 {
+		t.Fatalf("expected default minSamplesBeforeEwmaOpen 8, got %d", profile.MinSamplesBeforeEwmaOpen)
+	}
+	if profile.IdleResetSeconds != 900 {
+		t.Fatalf("expected default idleResetSeconds 900, got %d", profile.IdleResetSeconds)
+	}
+}
+
 func TestValidateRequiresDownloadDefaultProfileID(t *testing.T) {
 	cfg := validConfigForTests(t)
 	staging := cfg.Envs["staging"]

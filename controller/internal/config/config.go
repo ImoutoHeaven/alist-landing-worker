@@ -51,9 +51,11 @@ const (
 	defaultBindingIPv6Suffix            = "/60"
 	defaultRateLimitBlockSeconds        = 600
 	defaultThrottleOpenCapSeconds       = 60
-	defaultThrottleOpenThresholdPercent = 20
+	defaultThrottleOpenThresholdPercent = 30
 	defaultThrottleEwmaSpan             = 8
 	defaultThrottleConsecutive          = 4
+	defaultThrottleMinSamplesBeforeOpen = 8
+	defaultThrottleIdleResetSeconds     = 900
 	defaultSlotHandlerGraceMs           = 4000
 	defaultSlotHandlerUtilWindowSec     = 10
 	defaultSlotHandlerMaxBatch          = 8
@@ -528,12 +530,14 @@ type DownloadDBConfig struct {
 
 // DownloadThrottleProfile defines the minimal breaker profile contract.
 type DownloadThrottleProfile struct {
-	HostPatterns         []string `yaml:"hostPatterns" json:"hostPatterns"`
-	OpenCapSeconds       int      `yaml:"openCapSeconds" json:"openCapSeconds"`
-	OpenThresholdPercent int      `yaml:"openThresholdPercent" json:"openThresholdPercent"`
-	EwmaSpan             int      `yaml:"ewmaSpan" json:"ewmaSpan"`
-	ConsecutiveThreshold int      `yaml:"consecutiveThreshold" json:"consecutiveThreshold"`
-	ProtectHTTPCodes     []int    `yaml:"protectHttpCodes" json:"protectHttpCodes"`
+	HostPatterns             []string `yaml:"hostPatterns" json:"hostPatterns"`
+	OpenCapSeconds           int      `yaml:"openCapSeconds" json:"openCapSeconds"`
+	OpenThresholdPercent     int      `yaml:"openThresholdPercent" json:"openThresholdPercent"`
+	EwmaSpan                 int      `yaml:"ewmaSpan" json:"ewmaSpan"`
+	ConsecutiveThreshold     int      `yaml:"consecutiveThreshold" json:"consecutiveThreshold"`
+	MinSamplesBeforeEwmaOpen int      `yaml:"minSamplesBeforeEwmaOpen" json:"minSamplesBeforeEwmaOpen"`
+	IdleResetSeconds         int      `yaml:"idleResetSeconds" json:"idleResetSeconds"`
+	ProtectHTTPCodes         []int    `yaml:"protectHttpCodes" json:"protectHttpCodes"`
 }
 
 func (p *DownloadThrottleProfile) UnmarshalYAML(value *yaml.Node) error {
@@ -547,12 +551,14 @@ func (p *DownloadThrottleProfile) UnmarshalYAML(value *yaml.Node) error {
 
 	if resolved != nil && resolved.Kind == yaml.MappingNode {
 		allowed := map[string]struct{}{
-			"hostPatterns":         {},
-			"openCapSeconds":       {},
-			"openThresholdPercent": {},
-			"ewmaSpan":             {},
-			"consecutiveThreshold": {},
-			"protectHttpCodes":     {},
+			"hostPatterns":             {},
+			"openCapSeconds":           {},
+			"openThresholdPercent":     {},
+			"ewmaSpan":                 {},
+			"consecutiveThreshold":     {},
+			"minSamplesBeforeEwmaOpen": {},
+			"idleResetSeconds":         {},
+			"protectHttpCodes":         {},
 		}
 		for i := 0; i+1 < len(resolved.Content); i += 2 {
 			key := strings.TrimSpace(resolved.Content[i].Value)
@@ -1544,6 +1550,12 @@ func (p *DownloadThrottleProfile) ensureDefaults() {
 	}
 	if p.ConsecutiveThreshold <= 0 {
 		p.ConsecutiveThreshold = defaultThrottleConsecutive
+	}
+	if p.MinSamplesBeforeEwmaOpen <= 0 {
+		p.MinSamplesBeforeEwmaOpen = defaultThrottleMinSamplesBeforeOpen
+	}
+	if p.IdleResetSeconds <= 0 {
+		p.IdleResetSeconds = defaultThrottleIdleResetSeconds
 	}
 	if len(p.ProtectHTTPCodes) == 0 {
 		p.ProtectHTTPCodes = []int{429, 499, 500, 502, 503, 504}
