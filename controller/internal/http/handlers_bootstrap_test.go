@@ -70,6 +70,18 @@ func TestBootstrapOmitsLegacyThrottleFields(t *testing.T) {
 		!strings.Contains(throttleBody, "ewmaSpan") {
 		t.Fatalf("missing minimal breaker fields in bootstrap: %s", throttleBody)
 	}
+	for _, field := range []string{
+		"closeThresholdPercent",
+		"halfOpenSuccessThreshold",
+		"halfOpenCloseMode",
+		"probeLeaseSeconds",
+		"halfOpenMaxSeconds",
+		"halfOpenTimeoutMode",
+	} {
+		if !strings.Contains(throttleBody, field) {
+			t.Fatalf("bootstrap missing %s: %s", field, throttleBody)
+		}
+	}
 }
 
 func TestBootstrapIncludesWarmupBreakerFields(t *testing.T) {

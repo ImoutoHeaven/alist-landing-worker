@@ -112,6 +112,24 @@ func TestSampleConfigAlignment(t *testing.T) {
 	if stagingThrottle.IdleResetSeconds != 900 {
 		t.Fatalf("staging throttle idleResetSeconds not aligned: %d", stagingThrottle.IdleResetSeconds)
 	}
+	if stagingThrottle.CloseThresholdPercent != 15 {
+		t.Fatalf("staging throttle closeThresholdPercent not aligned: %d", stagingThrottle.CloseThresholdPercent)
+	}
+	if stagingThrottle.HalfOpenSuccessThreshold != 2 {
+		t.Fatalf("staging throttle halfOpenSuccessThreshold not aligned: %d", stagingThrottle.HalfOpenSuccessThreshold)
+	}
+	if stagingThrottle.HalfOpenCloseMode != "and" {
+		t.Fatalf("staging throttle halfOpenCloseMode not aligned: %q", stagingThrottle.HalfOpenCloseMode)
+	}
+	if stagingThrottle.ProbeLeaseSeconds != 15 {
+		t.Fatalf("staging throttle probeLeaseSeconds not aligned: %d", stagingThrottle.ProbeLeaseSeconds)
+	}
+	if stagingThrottle.HalfOpenMaxSeconds != 0 {
+		t.Fatalf("staging throttle halfOpenMaxSeconds not aligned: %d", stagingThrottle.HalfOpenMaxSeconds)
+	}
+	if stagingThrottle.HalfOpenTimeoutMode != "partial-close" {
+		t.Fatalf("staging throttle halfOpenTimeoutMode not aligned: %q", stagingThrottle.HalfOpenTimeoutMode)
+	}
 	if len(stagingThrottle.ProtectHTTPCodes) != 6 {
 		t.Fatalf("staging throttle protectHttpCodes not aligned: %+v", stagingThrottle.ProtectHTTPCodes)
 	}
@@ -141,6 +159,24 @@ func TestSampleConfigAlignment(t *testing.T) {
 	}
 	if prodThrottle.IdleResetSeconds != 900 {
 		t.Fatalf("prod throttle idleResetSeconds not aligned: %d", prodThrottle.IdleResetSeconds)
+	}
+	if prodThrottle.CloseThresholdPercent != 15 {
+		t.Fatalf("prod throttle closeThresholdPercent not aligned: %d", prodThrottle.CloseThresholdPercent)
+	}
+	if prodThrottle.HalfOpenSuccessThreshold != 2 {
+		t.Fatalf("prod throttle halfOpenSuccessThreshold not aligned: %d", prodThrottle.HalfOpenSuccessThreshold)
+	}
+	if prodThrottle.HalfOpenCloseMode != "and" {
+		t.Fatalf("prod throttle halfOpenCloseMode not aligned: %q", prodThrottle.HalfOpenCloseMode)
+	}
+	if prodThrottle.ProbeLeaseSeconds != 15 {
+		t.Fatalf("prod throttle probeLeaseSeconds not aligned: %d", prodThrottle.ProbeLeaseSeconds)
+	}
+	if prodThrottle.HalfOpenMaxSeconds != 0 {
+		t.Fatalf("prod throttle halfOpenMaxSeconds not aligned: %d", prodThrottle.HalfOpenMaxSeconds)
+	}
+	if prodThrottle.HalfOpenTimeoutMode != "partial-close" {
+		t.Fatalf("prod throttle halfOpenTimeoutMode not aligned: %q", prodThrottle.HalfOpenTimeoutMode)
 	}
 	if len(prodThrottle.ProtectHTTPCodes) != 6 {
 		t.Fatalf("prod throttle protectHttpCodes not aligned: %+v", prodThrottle.ProtectHTTPCodes)
@@ -237,10 +273,16 @@ func TestSampleConfigUsesMinimalThrottleProfileSchema(t *testing.T) {
 	for _, want := range []string{
 		"openCapSeconds:",
 		"openThresholdPercent:",
+		"closeThresholdPercent:",
 		"ewmaSpan:",
 		"consecutiveThreshold:",
 		"minSamplesBeforeEwmaOpen:",
 		"idleResetSeconds:",
+		"halfOpenSuccessThreshold:",
+		"halfOpenCloseMode:",
+		"probeLeaseSeconds:",
+		"halfOpenMaxSeconds:",
+		"halfOpenTimeoutMode:",
 		"protectHttpCodes:",
 	} {
 		if !strings.Contains(throttleText, want) {

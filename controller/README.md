@@ -25,8 +25,8 @@ download breaker 相关：
 
 - `download.throttleProfiles.default` 是下载 breaker 的必填 profile key。
 - `download.paths.pathProfiles[].actions.throttleProfile` 若填写，必须命中真实的 `download.throttleProfiles.<name>`；controller 会在配置加载阶段直接拒绝未知 selector。
-- bootstrap 下发的 breaker profile 只包含最小字段：`hostPatterns`、`openCapSeconds`、`openThresholdPercent`、`ewmaSpan`、`consecutiveThreshold`、`minSamplesBeforeEwmaOpen`、`idleResetSeconds`、`protectHttpCodes`。
-- breaker profile 默认值由 controller 代码定义并在配置加载时补齐；当前默认值为 `openThresholdPercent=30`、`ewmaSpan=8`、`consecutiveThreshold=4`、`minSamplesBeforeEwmaOpen=8`、`idleResetSeconds=900`，`config.yaml` 只是镜像这些默认值的示例。
+- bootstrap 下发的 breaker profile 采用完整 Stage 1 字段：`hostPatterns`、`openCapSeconds`、`openThresholdPercent`、`closeThresholdPercent`、`ewmaSpan`、`consecutiveThreshold`、`minSamplesBeforeEwmaOpen`、`idleResetSeconds`、`halfOpenSuccessThreshold`、`halfOpenCloseMode`、`probeLeaseSeconds`、`halfOpenMaxSeconds`、`halfOpenTimeoutMode`、`protectHttpCodes`。
+- breaker profile 默认值由 controller 代码定义并在配置加载时补齐；当前默认值为 `openThresholdPercent=30`、`closeThresholdPercent=15`、`ewmaSpan=8`、`consecutiveThreshold=4`、`minSamplesBeforeEwmaOpen=8`、`idleResetSeconds=900`、`halfOpenSuccessThreshold=2`、`halfOpenCloseMode=and`、`probeLeaseSeconds=15`、`halfOpenMaxSeconds=0`、`halfOpenTimeoutMode=partial-close`，其中 `halfOpenCloseMode` 只允许 `and|or`，`halfOpenTimeoutMode` 只允许 `open|close|partial-close`，`halfOpenMaxSeconds=0` 表示禁用 timeout cap；`config.yaml` 只是镜像这些默认值的示例。
 - controller 只下发 breaker profile 配置和 `throttleProfile` selector，不下发任何运行时 breaker 状态；运行时状态固定由数据库 `THROTTLE_PROTECTION` 维护。
 
 Powdet 相关：`landing.powdet.algorithms` 控制可用算法（argon2id/argon2d/randomx），`captchaCombo` 可用 `verify-powdet-argon2id`/`verify-powdet-argon2d`/`verify-powdet-randomx` 指定实际启用算法。

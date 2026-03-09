@@ -12,85 +12,91 @@ import (
 )
 
 const (
-	defaultAltchaDifficulty             = 250000
-	defaultAltchaTokenExpireSeconds     = 180
-	defaultAltchaDifficultyWindow       = 30
-	defaultAltchaDifficultyReset        = 120
-	defaultAltchaMaxBlockSeconds        = 120
-	defaultAltchaMaxExponent            = 10
-	defaultAltchaMinUpgradeExponent     = 3
-	defaultPowdetExpireSeconds          = 180
-	defaultPowdetClockSkewSeconds       = 60
-	defaultPowdetMaxWindowSeconds       = 600
-	defaultPowdetLevelStep              = 1
-	defaultPowdetBaseLevelMin           = 12
-	defaultPowdetBaseLevelMax           = 20
-	defaultPowdetMaxLevel               = 4
-	defaultPowdetDifficultyTable        = "POWDET_DIFFICULTY_STATE"
-	defaultPowdetTicketTable            = "POW_CHALLENGE_TICKET"
-	defaultPowdetListenPort             = 2370
-	defaultPowdetBatchSize              = 1000
-	defaultPowdetDeprecateBatches       = 10
-	defaultPowdetArgonMemoryKiB         = 16384
-	defaultPowdetArgonIterations        = 2
-	defaultPowdetArgonParallelism       = 1
-	defaultPowdetArgonKeyLength         = 16
-	defaultPowdetRandomxSeedLen         = 32
-	defaultPowdetRandomxCacheLRU        = 128
-	defaultPowdetRandomxCacheTTL        = 600
-	defaultAltchaTokenBindingTable      = "ALTCHA_TOKEN_LIST"
-	defaultDownloadLinkTTLSeconds       = 1800
-	defaultDownloadCleanupPercent       = 1.0
-	defaultDownloadIdleTimeout          = 0
-	defaultDownloadCacheOverrideMax     = "500MB"
-	defaultRateLimitIPv4Suffix          = "/32"
-	defaultRateLimitIPv6Suffix          = "/60"
-	defaultBindingVersion               = 1
-	defaultBindingModes                 = "path,asn,country,iprange"
-	defaultBindingIPv4Suffix            = "/32"
-	defaultBindingIPv6Suffix            = "/60"
-	defaultRateLimitBlockSeconds        = 600
-	defaultThrottleOpenCapSeconds       = 60
-	defaultThrottleOpenThresholdPercent = 30
-	defaultThrottleEwmaSpan             = 8
-	defaultThrottleConsecutive          = 4
-	defaultThrottleMinSamplesBeforeOpen = 8
-	defaultThrottleIdleResetSeconds     = 900
-	defaultSlotHandlerGraceMs           = 4000
-	defaultSlotHandlerUtilWindowSec     = 10
-	defaultSlotHandlerMaxBatch          = 8
-	defaultSlotHandlerMaxProbePar       = 4
-	defaultSlotHandlerMaxProbeQps       = 20
-	defaultSlotHandlerMaxInFlightGlobal = 300
-	defaultSlotHandlerMaxInFlightHost   = 100
-	defaultSlotHandlerMaxInFlightSite   = 50
-	defaultSlotHandlerMaxInFlightIP     = 10
-	defaultSlotHandlerTimeoutMs         = 20000
-	defaultSlotHandlerPerReqTimeout     = 8000
-	defaultSlotHandlerAttemptsCap       = 35
-	defaultLandingCleanupPercent        = 5.0
-	defaultLandingCacheTTLSeconds       = 86400
-	defaultLandingFileWindowSeconds     = 60
-	defaultLandingFileBlockSeconds      = 240
-	defaultLandingIdleTimeout           = 0
-	defaultLandingCryptFileHeader       = 32
-	defaultLandingCryptBlockHeader      = 16
-	defaultLandingCryptBlockData        = 64 * 1024
-	defaultLandingWebMaxConn            = 16
-	defaultLandingMinBandwidthMbps      = 10
-	defaultLandingMinDurationSec        = 3600
-	defaultLandingHrwMaxSize            = "500MB"
-	defaultSlotHandlerListen            = ":8080"
-	defaultSlotHandlerAuthHeader        = "X-FQ-Auth"
-	defaultSlotHandlerPollInterval      = 500
-	defaultSlotHandlerPollWindow        = 6000
-	defaultSlotHandlerMaxSlotHost       = 5
-	defaultSlotHandlerMaxSlotIP         = 1
-	defaultSlotHandlerZombieTimeout     = 30
-	defaultSlotHandlerCleanupInt        = 1800
-	defaultSlotHandlerTryAcquire        = "fq_try_acquire_batch"
-	defaultSlotHandlerReleaseSlot       = "fq_release_dual"
-	defaultControllerListenAddr         = ":8080"
+	defaultAltchaDifficulty                 = 250000
+	defaultAltchaTokenExpireSeconds         = 180
+	defaultAltchaDifficultyWindow           = 30
+	defaultAltchaDifficultyReset            = 120
+	defaultAltchaMaxBlockSeconds            = 120
+	defaultAltchaMaxExponent                = 10
+	defaultAltchaMinUpgradeExponent         = 3
+	defaultPowdetExpireSeconds              = 180
+	defaultPowdetClockSkewSeconds           = 60
+	defaultPowdetMaxWindowSeconds           = 600
+	defaultPowdetLevelStep                  = 1
+	defaultPowdetBaseLevelMin               = 12
+	defaultPowdetBaseLevelMax               = 20
+	defaultPowdetMaxLevel                   = 4
+	defaultPowdetDifficultyTable            = "POWDET_DIFFICULTY_STATE"
+	defaultPowdetTicketTable                = "POW_CHALLENGE_TICKET"
+	defaultPowdetListenPort                 = 2370
+	defaultPowdetBatchSize                  = 1000
+	defaultPowdetDeprecateBatches           = 10
+	defaultPowdetArgonMemoryKiB             = 16384
+	defaultPowdetArgonIterations            = 2
+	defaultPowdetArgonParallelism           = 1
+	defaultPowdetArgonKeyLength             = 16
+	defaultPowdetRandomxSeedLen             = 32
+	defaultPowdetRandomxCacheLRU            = 128
+	defaultPowdetRandomxCacheTTL            = 600
+	defaultAltchaTokenBindingTable          = "ALTCHA_TOKEN_LIST"
+	defaultDownloadLinkTTLSeconds           = 1800
+	defaultDownloadCleanupPercent           = 1.0
+	defaultDownloadIdleTimeout              = 0
+	defaultDownloadCacheOverrideMax         = "500MB"
+	defaultRateLimitIPv4Suffix              = "/32"
+	defaultRateLimitIPv6Suffix              = "/60"
+	defaultBindingVersion                   = 1
+	defaultBindingModes                     = "path,asn,country,iprange"
+	defaultBindingIPv4Suffix                = "/32"
+	defaultBindingIPv6Suffix                = "/60"
+	defaultRateLimitBlockSeconds            = 600
+	defaultThrottleOpenCapSeconds           = 60
+	defaultThrottleOpenThresholdPercent     = 30
+	defaultThrottleCloseThresholdPercent    = 15
+	defaultThrottleEwmaSpan                 = 8
+	defaultThrottleConsecutive              = 4
+	defaultThrottleMinSamplesBeforeOpen     = 8
+	defaultThrottleIdleResetSeconds         = 900
+	defaultThrottleHalfOpenSuccessThreshold = 2
+	defaultThrottleHalfOpenCloseMode        = "and"
+	defaultThrottleProbeLeaseSeconds        = 15
+	defaultThrottleHalfOpenMaxSeconds       = 0
+	defaultThrottleHalfOpenTimeoutMode      = "partial-close"
+	defaultSlotHandlerGraceMs               = 4000
+	defaultSlotHandlerUtilWindowSec         = 10
+	defaultSlotHandlerMaxBatch              = 8
+	defaultSlotHandlerMaxProbePar           = 4
+	defaultSlotHandlerMaxProbeQps           = 20
+	defaultSlotHandlerMaxInFlightGlobal     = 300
+	defaultSlotHandlerMaxInFlightHost       = 100
+	defaultSlotHandlerMaxInFlightSite       = 50
+	defaultSlotHandlerMaxInFlightIP         = 10
+	defaultSlotHandlerTimeoutMs             = 20000
+	defaultSlotHandlerPerReqTimeout         = 8000
+	defaultSlotHandlerAttemptsCap           = 35
+	defaultLandingCleanupPercent            = 5.0
+	defaultLandingCacheTTLSeconds           = 86400
+	defaultLandingFileWindowSeconds         = 60
+	defaultLandingFileBlockSeconds          = 240
+	defaultLandingIdleTimeout               = 0
+	defaultLandingCryptFileHeader           = 32
+	defaultLandingCryptBlockHeader          = 16
+	defaultLandingCryptBlockData            = 64 * 1024
+	defaultLandingWebMaxConn                = 16
+	defaultLandingMinBandwidthMbps          = 10
+	defaultLandingMinDurationSec            = 3600
+	defaultLandingHrwMaxSize                = "500MB"
+	defaultSlotHandlerListen                = ":8080"
+	defaultSlotHandlerAuthHeader            = "X-FQ-Auth"
+	defaultSlotHandlerPollInterval          = 500
+	defaultSlotHandlerPollWindow            = 6000
+	defaultSlotHandlerMaxSlotHost           = 5
+	defaultSlotHandlerMaxSlotIP             = 1
+	defaultSlotHandlerZombieTimeout         = 30
+	defaultSlotHandlerCleanupInt            = 1800
+	defaultSlotHandlerTryAcquire            = "fq_try_acquire_batch"
+	defaultSlotHandlerReleaseSlot           = "fq_release_dual"
+	defaultControllerListenAddr             = ":8080"
 )
 
 func boolPtr(v bool) *bool {
@@ -528,15 +534,21 @@ type DownloadDBConfig struct {
 	Extra              map[string]any          `yaml:",inline" json:"-"`
 }
 
-// DownloadThrottleProfile defines the minimal breaker profile contract.
+// DownloadThrottleProfile defines the Stage 1 breaker profile contract.
 type DownloadThrottleProfile struct {
 	HostPatterns             []string `yaml:"hostPatterns" json:"hostPatterns"`
 	OpenCapSeconds           int      `yaml:"openCapSeconds" json:"openCapSeconds"`
 	OpenThresholdPercent     int      `yaml:"openThresholdPercent" json:"openThresholdPercent"`
+	CloseThresholdPercent    int      `yaml:"closeThresholdPercent" json:"closeThresholdPercent"`
 	EwmaSpan                 int      `yaml:"ewmaSpan" json:"ewmaSpan"`
 	ConsecutiveThreshold     int      `yaml:"consecutiveThreshold" json:"consecutiveThreshold"`
 	MinSamplesBeforeEwmaOpen int      `yaml:"minSamplesBeforeEwmaOpen" json:"minSamplesBeforeEwmaOpen"`
 	IdleResetSeconds         int      `yaml:"idleResetSeconds" json:"idleResetSeconds"`
+	HalfOpenSuccessThreshold int      `yaml:"halfOpenSuccessThreshold" json:"halfOpenSuccessThreshold"`
+	HalfOpenCloseMode        string   `yaml:"halfOpenCloseMode" json:"halfOpenCloseMode"`
+	ProbeLeaseSeconds        int      `yaml:"probeLeaseSeconds" json:"probeLeaseSeconds"`
+	HalfOpenMaxSeconds       int      `yaml:"halfOpenMaxSeconds" json:"halfOpenMaxSeconds"`
+	HalfOpenTimeoutMode      string   `yaml:"halfOpenTimeoutMode" json:"halfOpenTimeoutMode"`
 	ProtectHTTPCodes         []int    `yaml:"protectHttpCodes" json:"protectHttpCodes"`
 }
 
@@ -554,10 +566,16 @@ func (p *DownloadThrottleProfile) UnmarshalYAML(value *yaml.Node) error {
 			"hostPatterns":             {},
 			"openCapSeconds":           {},
 			"openThresholdPercent":     {},
+			"closeThresholdPercent":    {},
 			"ewmaSpan":                 {},
 			"consecutiveThreshold":     {},
 			"minSamplesBeforeEwmaOpen": {},
 			"idleResetSeconds":         {},
+			"halfOpenSuccessThreshold": {},
+			"halfOpenCloseMode":        {},
+			"probeLeaseSeconds":        {},
+			"halfOpenMaxSeconds":       {},
+			"halfOpenTimeoutMode":      {},
 			"protectHttpCodes":         {},
 		}
 		for i := 0; i+1 < len(resolved.Content); i += 2 {
@@ -1545,6 +1563,9 @@ func (p *DownloadThrottleProfile) ensureDefaults() {
 	if p.OpenThresholdPercent <= 0 {
 		p.OpenThresholdPercent = defaultThrottleOpenThresholdPercent
 	}
+	if p.CloseThresholdPercent <= 0 {
+		p.CloseThresholdPercent = defaultThrottleCloseThresholdPercent
+	}
 	if p.EwmaSpan <= 0 {
 		p.EwmaSpan = defaultThrottleEwmaSpan
 	}
@@ -1557,12 +1578,58 @@ func (p *DownloadThrottleProfile) ensureDefaults() {
 	if p.IdleResetSeconds <= 0 {
 		p.IdleResetSeconds = defaultThrottleIdleResetSeconds
 	}
+	p.HalfOpenCloseMode = strings.TrimSpace(p.HalfOpenCloseMode)
+	if p.HalfOpenSuccessThreshold <= 0 {
+		p.HalfOpenSuccessThreshold = defaultThrottleHalfOpenSuccessThreshold
+	}
+	if p.HalfOpenCloseMode == "" {
+		p.HalfOpenCloseMode = defaultThrottleHalfOpenCloseMode
+	}
+	if p.ProbeLeaseSeconds <= 0 {
+		p.ProbeLeaseSeconds = defaultThrottleProbeLeaseSeconds
+	}
+	if p.HalfOpenMaxSeconds == 0 {
+		p.HalfOpenMaxSeconds = defaultThrottleHalfOpenMaxSeconds
+	}
+	p.HalfOpenTimeoutMode = strings.TrimSpace(p.HalfOpenTimeoutMode)
+	if p.HalfOpenTimeoutMode == "" {
+		p.HalfOpenTimeoutMode = defaultThrottleHalfOpenTimeoutMode
+	}
 	if len(p.ProtectHTTPCodes) == 0 {
 		p.ProtectHTTPCodes = []int{429, 499, 500, 502, 503, 504}
 	}
 }
 
 func (p DownloadThrottleProfile) validate(name string) error {
+	fieldPrefix := fmt.Sprintf("download.throttleProfiles.%s", name)
+
+	for _, check := range []struct {
+		field string
+		value int
+	}{
+		{field: "openCapSeconds", value: p.OpenCapSeconds},
+		{field: "openThresholdPercent", value: p.OpenThresholdPercent},
+		{field: "closeThresholdPercent", value: p.CloseThresholdPercent},
+		{field: "ewmaSpan", value: p.EwmaSpan},
+		{field: "consecutiveThreshold", value: p.ConsecutiveThreshold},
+		{field: "minSamplesBeforeEwmaOpen", value: p.MinSamplesBeforeEwmaOpen},
+		{field: "idleResetSeconds", value: p.IdleResetSeconds},
+		{field: "halfOpenSuccessThreshold", value: p.HalfOpenSuccessThreshold},
+		{field: "probeLeaseSeconds", value: p.ProbeLeaseSeconds},
+	} {
+		if check.value <= 0 {
+			return fmt.Errorf("%s.%s must be > 0", fieldPrefix, check.field)
+		}
+	}
+	if p.HalfOpenMaxSeconds < 0 {
+		return fmt.Errorf("%s.halfOpenMaxSeconds must be >= 0", fieldPrefix)
+	}
+	if p.HalfOpenCloseMode != "and" && p.HalfOpenCloseMode != "or" {
+		return fmt.Errorf("%s.halfOpenCloseMode must be one of and, or", fieldPrefix)
+	}
+	if p.HalfOpenTimeoutMode != "open" && p.HalfOpenTimeoutMode != "close" && p.HalfOpenTimeoutMode != "partial-close" {
+		return fmt.Errorf("%s.halfOpenTimeoutMode must be one of open, close, partial-close", fieldPrefix)
+	}
 	for idx, code := range p.ProtectHTTPCodes {
 		if code < 100 || code > 599 {
 			return fmt.Errorf("protectHttpCodes[%d] must be between 100 and 599, got %d", idx, code)

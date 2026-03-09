@@ -87,8 +87,14 @@ func TestValidateAppliesDownloadThrottleProfileDefaults(t *testing.T) {
 	staging := cfg.Envs["staging"]
 	profile := staging.Download.ThrottleProfiles["default"]
 	profile.OpenThresholdPercent = 0
+	profile.CloseThresholdPercent = 0
 	profile.MinSamplesBeforeEwmaOpen = 0
 	profile.IdleResetSeconds = 0
+	profile.HalfOpenSuccessThreshold = 0
+	profile.HalfOpenCloseMode = ""
+	profile.ProbeLeaseSeconds = 0
+	profile.HalfOpenMaxSeconds = 0
+	profile.HalfOpenTimeoutMode = ""
 	staging.Download.ThrottleProfiles["default"] = profile
 	cfg.Envs["staging"] = staging
 
@@ -100,11 +106,57 @@ func TestValidateAppliesDownloadThrottleProfileDefaults(t *testing.T) {
 	if profile.OpenThresholdPercent != 30 {
 		t.Fatalf("expected default openThresholdPercent 30, got %d", profile.OpenThresholdPercent)
 	}
+	if profile.CloseThresholdPercent != 15 {
+		t.Fatalf("expected default closeThresholdPercent 15, got %d", profile.CloseThresholdPercent)
+	}
 	if profile.MinSamplesBeforeEwmaOpen != 8 {
 		t.Fatalf("expected default minSamplesBeforeEwmaOpen 8, got %d", profile.MinSamplesBeforeEwmaOpen)
 	}
 	if profile.IdleResetSeconds != 900 {
 		t.Fatalf("expected default idleResetSeconds 900, got %d", profile.IdleResetSeconds)
+	}
+	if profile.HalfOpenSuccessThreshold != 2 {
+		t.Fatalf("expected default halfOpenSuccessThreshold 2, got %d", profile.HalfOpenSuccessThreshold)
+	}
+	if profile.HalfOpenCloseMode != "and" {
+		t.Fatalf("expected default halfOpenCloseMode and, got %q", profile.HalfOpenCloseMode)
+	}
+	if profile.ProbeLeaseSeconds != 15 {
+		t.Fatalf("expected default probeLeaseSeconds 15, got %d", profile.ProbeLeaseSeconds)
+	}
+	if profile.HalfOpenMaxSeconds != 0 {
+		t.Fatalf("expected default halfOpenMaxSeconds 0, got %d", profile.HalfOpenMaxSeconds)
+	}
+	if profile.HalfOpenTimeoutMode != "partial-close" {
+		t.Fatalf("expected default halfOpenTimeoutMode partial-close, got %q", profile.HalfOpenTimeoutMode)
+	}
+}
+
+func TestValidateRejectsInvalidHalfOpenCloseMode(t *testing.T) {
+	cfg := validConfigForTests(t)
+	staging := cfg.Envs["staging"]
+	profile := staging.Download.ThrottleProfiles["default"]
+	profile.HalfOpenCloseMode = "xor"
+	staging.Download.ThrottleProfiles["default"] = profile
+	cfg.Envs["staging"] = staging
+
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "halfOpenCloseMode") {
+		t.Fatalf("expected invalid halfOpenCloseMode error, got %v", err)
+	}
+}
+
+func TestValidateRejectsInvalidHalfOpenTimeoutMode(t *testing.T) {
+	cfg := validConfigForTests(t)
+	staging := cfg.Envs["staging"]
+	profile := staging.Download.ThrottleProfiles["default"]
+	profile.HalfOpenTimeoutMode = "linger"
+	staging.Download.ThrottleProfiles["default"] = profile
+	cfg.Envs["staging"] = staging
+
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "halfOpenTimeoutMode") {
+		t.Fatalf("expected invalid halfOpenTimeoutMode error, got %v", err)
 	}
 }
 
