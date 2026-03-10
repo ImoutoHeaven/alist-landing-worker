@@ -48,38 +48,41 @@ func TestBootstrapOmitsLegacyThrottleFields(t *testing.T) {
 	if !ok {
 		t.Fatalf("bootstrap missing download payload: %s", body)
 	}
-	throttleProfiles, ok := download["throttleProfiles"]
+	throttleProfiles, ok := download["throttleProfiles"].(map[string]any)
 	if !ok {
 		t.Fatalf("bootstrap missing download.throttleProfiles: %s", body)
 	}
-	encoded, err := json.Marshal(throttleProfiles)
-	if err != nil {
-		t.Fatalf("encode throttle profiles: %v", err)
+	defaultProfile, ok := throttleProfiles["default"].(map[string]any)
+	if !ok {
+		t.Fatalf("bootstrap missing default throttle profile: %s", body)
 	}
-	throttleBody := string(encoded)
-
-	if strings.Contains(throttleBody, "observeWindowSeconds") ||
-		strings.Contains(throttleBody, "fastErrorRatioPercent") ||
-		strings.Contains(throttleBody, "fastMinSampleCount") ||
-		strings.Contains(throttleBody, "cleanupPercentage") ||
-		strings.Contains(throttleBody, "tableName") {
-		t.Fatalf("legacy throttle fields leaked into bootstrap: %s", throttleBody)
+	expectedFields := map[string]struct{}{
+		"hostPatterns":             {},
+		"openCapSeconds":           {},
+		"openThresholdPercent":     {},
+		"closeThresholdPercent":    {},
+		"ewmaSpan":                 {},
+		"consecutiveThreshold":     {},
+		"minSamplesBeforeEwmaOpen": {},
+		"idleResetSeconds":         {},
+		"halfOpenSuccessThreshold": {},
+		"halfOpenCloseMode":        {},
+		"halfOpenMaxProbeCount":    {},
+		"halfOpenMaxSeconds":       {},
+		"halfOpenTimeoutMode":      {},
+		"protectHttpCodes":         {},
 	}
-	if !strings.Contains(throttleBody, "openCapSeconds") ||
-		!strings.Contains(throttleBody, "openThresholdPercent") ||
-		!strings.Contains(throttleBody, "ewmaSpan") {
-		t.Fatalf("missing minimal breaker fields in bootstrap: %s", throttleBody)
+	if len(defaultProfile) != len(expectedFields) {
+		t.Fatalf("unexpected throttle field count in bootstrap: %+v", defaultProfile)
 	}
-	for _, field := range []string{
-		"closeThresholdPercent",
-		"halfOpenSuccessThreshold",
-		"halfOpenCloseMode",
-		"probeLeaseSeconds",
-		"halfOpenMaxSeconds",
-		"halfOpenTimeoutMode",
-	} {
-		if !strings.Contains(throttleBody, field) {
-			t.Fatalf("bootstrap missing %s: %s", field, throttleBody)
+	for field := range defaultProfile {
+		if _, ok := expectedFields[field]; !ok {
+			t.Fatalf("unexpected throttle field in bootstrap: %s", field)
+		}
+	}
+	for field := range expectedFields {
+		if _, ok := defaultProfile[field]; !ok {
+			t.Fatalf("bootstrap missing %s: %+v", field, defaultProfile)
 		}
 	}
 }

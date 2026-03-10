@@ -38,6 +38,66 @@ func validConfigForTests(t *testing.T) *RootConfig {
 	return cfg
 }
 
+func TestDownloadThrottleProfileDefaultsIncludeHalfOpenMaxProbeCount(t *testing.T) {
+	testCases := []struct {
+		name    string
+		profile DownloadThrottleProfile
+	}{
+		{name: "zero-values"},
+		{
+			name: "negative-values",
+			profile: DownloadThrottleProfile{
+				HalfOpenMaxProbeCount: -3,
+				HalfOpenMaxSeconds:    -9,
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			profile := tc.profile
+			profile.ensureDefaults()
+
+			if profile.HalfOpenMaxProbeCount != 4 {
+				t.Fatalf("expected default HalfOpenMaxProbeCount 4, got %d", profile.HalfOpenMaxProbeCount)
+			}
+			if profile.HalfOpenMaxSeconds != 15 {
+				t.Fatalf("expected default HalfOpenMaxSeconds 15, got %d", profile.HalfOpenMaxSeconds)
+			}
+		})
+	}
+}
+
+func TestDownloadThrottleProfileRejectsImpossibleHalfOpenBudget(t *testing.T) {
+	profile := DownloadThrottleProfile{
+		HalfOpenSuccessThreshold: 3,
+		HalfOpenMaxProbeCount:    2,
+		HalfOpenCloseMode:        "and",
+		HalfOpenTimeoutMode:      "partial-close",
+	}
+	profile.ensureDefaults()
+
+	err := profile.validate("default")
+	if err == nil || !strings.Contains(err.Error(), "halfOpenSuccessThreshold must be <= halfOpenMaxProbeCount") {
+		t.Fatalf("expected half-open budget validation error, got %v", err)
+	}
+}
+
+func TestDownloadThrottleProfileRejectsHalfOpenBudgetBeyondSQLBitmapLimit(t *testing.T) {
+	profile := DownloadThrottleProfile{
+		HalfOpenSuccessThreshold: 2,
+		HalfOpenMaxProbeCount:    64,
+		HalfOpenCloseMode:        "and",
+		HalfOpenTimeoutMode:      "partial-close",
+	}
+	profile.ensureDefaults()
+
+	err := profile.validate("default")
+	if err == nil || !strings.Contains(err.Error(), "halfOpenMaxProbeCount must be <= 63") {
+		t.Fatalf("expected half-open bitmap ceiling validation error, got %v", err)
+	}
+}
+
 func TestValidateRejectsUnknownThrottleProfileReference(t *testing.T) {
 	cfg := validConfigForTests(t)
 	cfg.Envs["staging"].Download.Paths.Profiles[0].Actions["throttleProfile"] = "missing"
@@ -92,7 +152,7 @@ func TestValidateAppliesDownloadThrottleProfileDefaults(t *testing.T) {
 	profile.IdleResetSeconds = 0
 	profile.HalfOpenSuccessThreshold = 0
 	profile.HalfOpenCloseMode = ""
-	profile.ProbeLeaseSeconds = 0
+	profile.HalfOpenMaxProbeCount = 0
 	profile.HalfOpenMaxSeconds = 0
 	profile.HalfOpenTimeoutMode = ""
 	staging.Download.ThrottleProfiles["default"] = profile
@@ -121,11 +181,11 @@ func TestValidateAppliesDownloadThrottleProfileDefaults(t *testing.T) {
 	if profile.HalfOpenCloseMode != "and" {
 		t.Fatalf("expected default halfOpenCloseMode and, got %q", profile.HalfOpenCloseMode)
 	}
-	if profile.ProbeLeaseSeconds != 15 {
-		t.Fatalf("expected default probeLeaseSeconds 15, got %d", profile.ProbeLeaseSeconds)
+	if profile.HalfOpenMaxProbeCount != 4 {
+		t.Fatalf("expected default halfOpenMaxProbeCount 4, got %d", profile.HalfOpenMaxProbeCount)
 	}
-	if profile.HalfOpenMaxSeconds != 0 {
-		t.Fatalf("expected default halfOpenMaxSeconds 0, got %d", profile.HalfOpenMaxSeconds)
+	if profile.HalfOpenMaxSeconds != 15 {
+		t.Fatalf("expected default halfOpenMaxSeconds 15, got %d", profile.HalfOpenMaxSeconds)
 	}
 	if profile.HalfOpenTimeoutMode != "partial-close" {
 		t.Fatalf("expected default halfOpenTimeoutMode partial-close, got %q", profile.HalfOpenTimeoutMode)
@@ -341,6 +401,32 @@ func TestLoadRejectsLegacyDownloadThrottleProfileFields(t *testing.T) {
 				t.Fatalf("expected error to mention legacy field %s, got %v", legacy.name, err)
 			}
 		})
+	}
+}
+
+func TestLoadRejectsLegacyDownloadThrottleProfileProbeLeaseSeconds(t *testing.T) {
+	original := sampleConfigTextForTests(t)
+	mutated := strings.Replace(
+		original,
+		"          hostPatterns: [] # Host patterns this throttle profile applies to; glob list",
+		"          hostPatterns: [] # Host patterns this throttle profile applies to; glob list\n          probeLeaseSeconds: 15",
+		1,
+	)
+	if mutated == original {
+		t.Fatalf("failed to inject legacy field probeLeaseSeconds into config.yaml")
+	}
+
+	tmpPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(tmpPath, []byte(mutated), 0o600); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+
+	_, err := Load(tmpPath)
+	if err == nil {
+		t.Fatalf("expected Load to fail for legacy throttle field probeLeaseSeconds")
+	}
+	if !strings.Contains(err.Error(), "probeLeaseSeconds") {
+		t.Fatalf("expected error to mention legacy field probeLeaseSeconds, got %v", err)
 	}
 }
 

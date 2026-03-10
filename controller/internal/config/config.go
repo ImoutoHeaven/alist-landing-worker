@@ -59,8 +59,9 @@ const (
 	defaultThrottleIdleResetSeconds         = 900
 	defaultThrottleHalfOpenSuccessThreshold = 2
 	defaultThrottleHalfOpenCloseMode        = "and"
-	defaultThrottleProbeLeaseSeconds        = 15
-	defaultThrottleHalfOpenMaxSeconds       = 0
+	defaultThrottleHalfOpenMaxProbeCount    = 4
+	maxThrottleHalfOpenProbeCount           = 63
+	defaultThrottleHalfOpenMaxSeconds       = 15
 	defaultThrottleHalfOpenTimeoutMode      = "partial-close"
 	defaultSlotHandlerGraceMs               = 4000
 	defaultSlotHandlerUtilWindowSec         = 10
@@ -546,7 +547,7 @@ type DownloadThrottleProfile struct {
 	IdleResetSeconds         int      `yaml:"idleResetSeconds" json:"idleResetSeconds"`
 	HalfOpenSuccessThreshold int      `yaml:"halfOpenSuccessThreshold" json:"halfOpenSuccessThreshold"`
 	HalfOpenCloseMode        string   `yaml:"halfOpenCloseMode" json:"halfOpenCloseMode"`
-	ProbeLeaseSeconds        int      `yaml:"probeLeaseSeconds" json:"probeLeaseSeconds"`
+	HalfOpenMaxProbeCount    int      `yaml:"halfOpenMaxProbeCount" json:"halfOpenMaxProbeCount"`
 	HalfOpenMaxSeconds       int      `yaml:"halfOpenMaxSeconds" json:"halfOpenMaxSeconds"`
 	HalfOpenTimeoutMode      string   `yaml:"halfOpenTimeoutMode" json:"halfOpenTimeoutMode"`
 	ProtectHTTPCodes         []int    `yaml:"protectHttpCodes" json:"protectHttpCodes"`
@@ -573,7 +574,7 @@ func (p *DownloadThrottleProfile) UnmarshalYAML(value *yaml.Node) error {
 			"idleResetSeconds":         {},
 			"halfOpenSuccessThreshold": {},
 			"halfOpenCloseMode":        {},
-			"probeLeaseSeconds":        {},
+			"halfOpenMaxProbeCount":    {},
 			"halfOpenMaxSeconds":       {},
 			"halfOpenTimeoutMode":      {},
 			"protectHttpCodes":         {},
@@ -1585,10 +1586,10 @@ func (p *DownloadThrottleProfile) ensureDefaults() {
 	if p.HalfOpenCloseMode == "" {
 		p.HalfOpenCloseMode = defaultThrottleHalfOpenCloseMode
 	}
-	if p.ProbeLeaseSeconds <= 0 {
-		p.ProbeLeaseSeconds = defaultThrottleProbeLeaseSeconds
+	if p.HalfOpenMaxProbeCount <= 0 {
+		p.HalfOpenMaxProbeCount = defaultThrottleHalfOpenMaxProbeCount
 	}
-	if p.HalfOpenMaxSeconds == 0 {
+	if p.HalfOpenMaxSeconds <= 0 {
 		p.HalfOpenMaxSeconds = defaultThrottleHalfOpenMaxSeconds
 	}
 	p.HalfOpenTimeoutMode = strings.TrimSpace(p.HalfOpenTimeoutMode)
@@ -1615,17 +1616,21 @@ func (p DownloadThrottleProfile) validate(name string) error {
 		{field: "minSamplesBeforeEwmaOpen", value: p.MinSamplesBeforeEwmaOpen},
 		{field: "idleResetSeconds", value: p.IdleResetSeconds},
 		{field: "halfOpenSuccessThreshold", value: p.HalfOpenSuccessThreshold},
-		{field: "probeLeaseSeconds", value: p.ProbeLeaseSeconds},
+		{field: "halfOpenMaxProbeCount", value: p.HalfOpenMaxProbeCount},
+		{field: "halfOpenMaxSeconds", value: p.HalfOpenMaxSeconds},
 	} {
 		if check.value <= 0 {
 			return fmt.Errorf("%s.%s must be > 0", fieldPrefix, check.field)
 		}
 	}
-	if p.HalfOpenMaxSeconds < 0 {
-		return fmt.Errorf("%s.halfOpenMaxSeconds must be >= 0", fieldPrefix)
-	}
 	if p.HalfOpenCloseMode != "and" && p.HalfOpenCloseMode != "or" {
 		return fmt.Errorf("%s.halfOpenCloseMode must be one of and, or", fieldPrefix)
+	}
+	if p.HalfOpenMaxProbeCount > maxThrottleHalfOpenProbeCount {
+		return fmt.Errorf("%s.halfOpenMaxProbeCount must be <= %d", fieldPrefix, maxThrottleHalfOpenProbeCount)
+	}
+	if p.HalfOpenSuccessThreshold > p.HalfOpenMaxProbeCount {
+		return fmt.Errorf("%s.halfOpenSuccessThreshold must be <= halfOpenMaxProbeCount", fieldPrefix)
 	}
 	if p.HalfOpenTimeoutMode != "open" && p.HalfOpenTimeoutMode != "close" && p.HalfOpenTimeoutMode != "partial-close" {
 		return fmt.Errorf("%s.halfOpenTimeoutMode must be one of open, close, partial-close", fieldPrefix)

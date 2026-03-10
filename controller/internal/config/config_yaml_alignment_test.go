@@ -121,10 +121,10 @@ func TestSampleConfigAlignment(t *testing.T) {
 	if stagingThrottle.HalfOpenCloseMode != "and" {
 		t.Fatalf("staging throttle halfOpenCloseMode not aligned: %q", stagingThrottle.HalfOpenCloseMode)
 	}
-	if stagingThrottle.ProbeLeaseSeconds != 15 {
-		t.Fatalf("staging throttle probeLeaseSeconds not aligned: %d", stagingThrottle.ProbeLeaseSeconds)
+	if stagingThrottle.HalfOpenMaxProbeCount != 4 {
+		t.Fatalf("staging throttle halfOpenMaxProbeCount not aligned: %d", stagingThrottle.HalfOpenMaxProbeCount)
 	}
-	if stagingThrottle.HalfOpenMaxSeconds != 0 {
+	if stagingThrottle.HalfOpenMaxSeconds != 15 {
 		t.Fatalf("staging throttle halfOpenMaxSeconds not aligned: %d", stagingThrottle.HalfOpenMaxSeconds)
 	}
 	if stagingThrottle.HalfOpenTimeoutMode != "partial-close" {
@@ -169,10 +169,10 @@ func TestSampleConfigAlignment(t *testing.T) {
 	if prodThrottle.HalfOpenCloseMode != "and" {
 		t.Fatalf("prod throttle halfOpenCloseMode not aligned: %q", prodThrottle.HalfOpenCloseMode)
 	}
-	if prodThrottle.ProbeLeaseSeconds != 15 {
-		t.Fatalf("prod throttle probeLeaseSeconds not aligned: %d", prodThrottle.ProbeLeaseSeconds)
+	if prodThrottle.HalfOpenMaxProbeCount != 4 {
+		t.Fatalf("prod throttle halfOpenMaxProbeCount not aligned: %d", prodThrottle.HalfOpenMaxProbeCount)
 	}
-	if prodThrottle.HalfOpenMaxSeconds != 0 {
+	if prodThrottle.HalfOpenMaxSeconds != 15 {
 		t.Fatalf("prod throttle halfOpenMaxSeconds not aligned: %d", prodThrottle.HalfOpenMaxSeconds)
 	}
 	if prodThrottle.HalfOpenTimeoutMode != "partial-close" {
@@ -280,7 +280,7 @@ func TestSampleConfigUsesMinimalThrottleProfileSchema(t *testing.T) {
 		"idleResetSeconds:",
 		"halfOpenSuccessThreshold:",
 		"halfOpenCloseMode:",
-		"probeLeaseSeconds:",
+		"halfOpenMaxProbeCount:",
 		"halfOpenMaxSeconds:",
 		"halfOpenTimeoutMode:",
 		"protectHttpCodes:",

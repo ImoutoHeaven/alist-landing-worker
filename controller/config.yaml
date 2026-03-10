@@ -272,8 +272,8 @@ envs:
           idleResetSeconds: 900 # Closed-state idle gap that clears breaker memory before the next sample; seconds >0; default comes from controller
           halfOpenSuccessThreshold: 2 # Successful half-open samples required before close rule can pass; >0; default=2
           halfOpenCloseMode: "and" # Half-open close rule: and | or; default=and
-          probeLeaseSeconds: 15 # Lease length for half-open probe claims; seconds >0; default=15
-          halfOpenMaxSeconds: 0 # Max half-open age before timeout rule applies; seconds >=0; 0 disables timeout capping
+          halfOpenMaxProbeCount: 4 # Max half-open attempts issued in one batch; 1..63 because SQL packs attempt reports into a signed BIGINT bitmap; default=4; must be >= halfOpenSuccessThreshold
+          halfOpenMaxSeconds: 15 # Max half-open age before timeout rule applies; seconds >0; default=15
           halfOpenTimeoutMode: "partial-close" # Half-open timeout rule: open | close | partial-close; default=partial-close
           protectHttpCodes: [429, 499, 500, 502, 503, 504] # Status codes considered errors; list of ints
       originBindingDefault: "path,asn,country,iprange" # Default binding mode; allowed tokens: ip|iprange|country|continent|region|city|asn|tls|path (comma-separated); empty string disables binding
@@ -650,8 +650,8 @@ envs:
           idleResetSeconds: 900
           halfOpenSuccessThreshold: 2
           halfOpenCloseMode: "and"
-          probeLeaseSeconds: 15
-          halfOpenMaxSeconds: 0
+          halfOpenMaxProbeCount: 4
+          halfOpenMaxSeconds: 15
           halfOpenTimeoutMode: "partial-close"
           protectHttpCodes: [429, 499, 500, 502, 503, 504]
       originBindingDefault: "path,asn,country,iprange" # Default binding mode; allowed tokens: ip|iprange|country|continent|region|city|asn|tls|path; empty string disables binding
