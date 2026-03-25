@@ -73,6 +73,12 @@ func TestSampleConfigAlignment(t *testing.T) {
 	if fairQueue.GraceMs != 4000 {
 		t.Fatalf("slotHandler fairQueue graceMs not aligned: %d", fairQueue.GraceMs)
 	}
+	if fairQueue.RPC.TryAcquireFunc != "fq_admit_batch" {
+		t.Fatalf("slotHandler fairQueue tryAcquireFunc not aligned: %q", fairQueue.RPC.TryAcquireFunc)
+	}
+	if fairQueue.RPC.ReleaseFunc != "fq_release_dual" {
+		t.Fatalf("slotHandler fairQueue releaseFunc not aligned: %q", fairQueue.RPC.ReleaseFunc)
+	}
 	if fairQueue.UtilWindowSec != 10 {
 		t.Fatalf("slotHandler fairQueue utilWindowSec not aligned: %d", fairQueue.UtilWindowSec)
 	}
@@ -143,6 +149,12 @@ func TestSampleConfigAlignment(t *testing.T) {
 	}
 	if prod.Download.FairQueue.SlotHandlerAuthHeader != prod.SlotHandler.Auth.Header {
 		t.Fatalf("prod download fairQueue slotHandlerAuthHeader must match slotHandler auth header")
+	}
+	if prod.SlotHandler.FairQueue.RPC.TryAcquireFunc != "fq_admit_batch" {
+		t.Fatalf("prod slotHandler fairQueue tryAcquireFunc not aligned: %q", prod.SlotHandler.FairQueue.RPC.TryAcquireFunc)
+	}
+	if prod.SlotHandler.FairQueue.RPC.ReleaseFunc != "fq_release_dual" {
+		t.Fatalf("prod slotHandler fairQueue releaseFunc not aligned: %q", prod.SlotHandler.FairQueue.RPC.ReleaseFunc)
 	}
 	prodThrottle, ok := prod.Download.ThrottleProfiles["default"]
 	if !ok {
@@ -288,5 +300,20 @@ func TestSampleConfigUsesMinimalThrottleProfileSchema(t *testing.T) {
 		if !strings.Contains(throttleText, want) {
 			t.Fatalf("config.yaml missing throttle field %s", want)
 		}
+	}
+}
+
+func TestSlotHandlerFairQueueDefaultsUseAtomicAdmitRPC(t *testing.T) {
+	var cfg SlotHandlerFairQueueConfig
+
+	if err := cfg.ensureDefaults(); err != nil {
+		t.Fatalf("ensureDefaults() failed: %v", err)
+	}
+
+	if cfg.RPC.TryAcquireFunc != "fq_admit_batch" {
+		t.Fatalf("expected default tryAcquireFunc fq_admit_batch, got %q", cfg.RPC.TryAcquireFunc)
+	}
+	if cfg.RPC.ReleaseFunc != "fq_release_dual" {
+		t.Fatalf("expected default releaseFunc fq_release_dual, got %q", cfg.RPC.ReleaseFunc)
 	}
 }

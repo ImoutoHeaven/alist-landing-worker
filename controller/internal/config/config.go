@@ -95,7 +95,7 @@ const (
 	defaultSlotHandlerMaxSlotIP             = 1
 	defaultSlotHandlerZombieTimeout         = 30
 	defaultSlotHandlerCleanupInt            = 1800
-	defaultSlotHandlerTryAcquire            = "fq_try_acquire_batch"
+	defaultSlotHandlerTryAcquire            = "fq_admit_batch"
 	defaultSlotHandlerReleaseSlot           = "fq_release_dual"
 	defaultControllerListenAddr             = ":8080"
 )

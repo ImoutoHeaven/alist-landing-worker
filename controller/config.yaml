@@ -403,7 +403,7 @@ envs:
           maxSlotPerSite: 5 # Slot cap per site; 0 = unlimited
           maxSlotPerIp: 1 # Slot cap per IP; 0 = unlimited
         rpc:
-          tryAcquireFunc: "fq_try_acquire_batch" # Batch RPC to attempt slot acquisition
+          tryAcquireFunc: "fq_admit_batch" # Batch RPC to perform queue/breaker admission
           releaseFunc: "fq_release_dual" # RPC to release slot
         cleanup:
           enabled: true # Enable periodic cleanup; default=true
@@ -762,7 +762,7 @@ envs:
           maxSlotPerSite: 5
           maxSlotPerIp: 1
         rpc:
-          tryAcquireFunc: "fq_try_acquire_batch"
+          tryAcquireFunc: "fq_admit_batch"
           releaseFunc: "fq_release_dual"
         cleanup:
           enabled: true

@@ -181,3 +181,27 @@ func TestHandleBootstrapDownloadNormalizesSlotHandlerAuthHeaderWhitespace(t *tes
 		t.Fatalf("expected normalized slotHandlerAuthHeader in bootstrap, got %q", resp.Download.FairQueue.SlotHandlerAuthHeader)
 	}
 }
+
+func TestHandleBootstrapSlotHandlerUsesAtomicAdmitRPC(t *testing.T) {
+	body := bootstrapBodyForRole(t, "slot-handler")
+
+	var resp struct {
+		SlotHandler struct {
+			FairQueue struct {
+				RPC struct {
+					TryAcquireFunc string `json:"tryAcquireFunc"`
+					ReleaseFunc    string `json:"releaseFunc"`
+				} `json:"rpc"`
+			} `json:"fairQueue"`
+		} `json:"slotHandler"`
+	}
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		t.Fatalf("decode bootstrap body: %v", err)
+	}
+	if resp.SlotHandler.FairQueue.RPC.TryAcquireFunc != "fq_admit_batch" {
+		t.Fatalf("expected slot-handler bootstrap tryAcquireFunc fq_admit_batch, got %q", resp.SlotHandler.FairQueue.RPC.TryAcquireFunc)
+	}
+	if resp.SlotHandler.FairQueue.RPC.ReleaseFunc != "fq_release_dual" {
+		t.Fatalf("expected slot-handler bootstrap releaseFunc fq_release_dual, got %q", resp.SlotHandler.FairQueue.RPC.ReleaseFunc)
+	}
+}
