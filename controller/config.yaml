@@ -260,6 +260,16 @@ envs:
         maxAttemptsCap: 35 # Max retry attempts for slot acquisition; >=1
         siteBucket:
           mode: "sharepoint" # Derive site bucket by SharePoint path segments
+      trueConcurrency:
+        enabled: true # Enable true concurrency handler integration
+        hostPatterns: ["*.sharepoint.com"] # Hosts controlled by concurrency handler; glob list
+        handlerUrl: "https://concurrency-handler-staging.example.com" # concurrency handler endpoint; required if enabled
+        handlerAuthKey: "replace-with-concurrency-handler-key" # Auth key sent to concurrency handler; required if enabled
+        handlerAuthHeader: "X-CQ-Auth" # Header name sent to concurrency handler
+        siteBucket:
+          mode: "sharepoint" # Derive site bucket by SharePoint path segments
+        acquireTimeoutMs: 11500 # Acquire timeout budget in milliseconds; >0
+        releaseTimeoutMs: 1500 # Release timeout budget in milliseconds; >0
       throttleProfiles:
         default:
           hostPatterns: [] # Host patterns this throttle profile applies to; glob list
@@ -638,6 +648,16 @@ envs:
         maxAttemptsCap: 35
         siteBucket:
           mode: "sharepoint"
+      trueConcurrency:
+        enabled: true
+        hostPatterns: ["*.sharepoint.com"]
+        handlerUrl: "https://concurrency-handler.example.com"
+        handlerAuthKey: "replace-with-concurrency-handler-key"
+        handlerAuthHeader: "X-CQ-Auth"
+        siteBucket:
+          mode: "sharepoint"
+        acquireTimeoutMs: 11500
+        releaseTimeoutMs: 1500
       throttleProfiles:
         default:
           hostPatterns: []

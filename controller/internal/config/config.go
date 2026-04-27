@@ -89,6 +89,10 @@ const (
 	defaultLandingHrwMaxSize                = "500MB"
 	defaultSlotHandlerListen                = ":8080"
 	defaultSlotHandlerAuthHeader            = "X-FQ-Auth"
+	defaultTrueConcurrencyAuthHeader        = "X-CQ-Auth"
+	defaultTrueConcurrencySiteBucketMode    = "sharepoint"
+	defaultTrueConcurrencyAcquireTimeoutMs  = 11500
+	defaultTrueConcurrencyReleaseTimeoutMs  = 1500
 	defaultSlotHandlerPollInterval          = 500
 	defaultSlotHandlerPollWindow            = 6000
 	defaultSlotHandlerMaxSlotHost           = 5
@@ -143,6 +147,14 @@ func normalizeSlotHandlerAuthHeaderName(value string) string {
 	header := strings.TrimSpace(value)
 	if strings.EqualFold(header, defaultSlotHandlerAuthHeader) {
 		return defaultSlotHandlerAuthHeader
+	}
+	return header
+}
+
+func normalizeTrueConcurrencyAuthHeaderName(value string) string {
+	header := strings.TrimSpace(value)
+	if strings.EqualFold(header, defaultTrueConcurrencyAuthHeader) {
+		return defaultTrueConcurrencyAuthHeader
 	}
 	return header
 }
@@ -615,6 +627,10 @@ func resolveYAMLNodeAliases(value *yaml.Node) (*yaml.Node, error) {
 }
 
 func hasYAMLMappingKey(value *yaml.Node, key string) (bool, error) {
+	return hasYAMLMappingKeyWithSeen(value, key, map[*yaml.Node]struct{}{})
+}
+
+func hasYAMLMappingKeyWithSeen(value *yaml.Node, key string, seen map[*yaml.Node]struct{}) (bool, error) {
 	resolved, err := resolveYAMLNodeAliases(value)
 	if err != nil {
 		return false, err
@@ -622,9 +638,48 @@ func hasYAMLMappingKey(value *yaml.Node, key string) (bool, error) {
 	if resolved == nil || resolved.Kind != yaml.MappingNode {
 		return false, nil
 	}
+	if _, ok := seen[resolved]; ok {
+		return false, errors.New("yaml merge cycle")
+	}
+	seen[resolved] = struct{}{}
+	defer delete(seen, resolved)
 
 	for i := 0; i+1 < len(resolved.Content); i += 2 {
-		if strings.TrimSpace(resolved.Content[i].Value) == key {
+		currentKey := strings.TrimSpace(resolved.Content[i].Value)
+		if currentKey == key {
+			return true, nil
+		}
+	}
+
+	for i := 0; i+1 < len(resolved.Content); i += 2 {
+		if strings.TrimSpace(resolved.Content[i].Value) != "<<" {
+			continue
+		}
+		merged := resolved.Content[i+1]
+		mergedResolved, err := resolveYAMLNodeAliases(merged)
+		if err != nil {
+			return false, err
+		}
+		if mergedResolved == nil {
+			continue
+		}
+		if mergedResolved.Kind == yaml.SequenceNode {
+			for _, item := range mergedResolved.Content {
+				found, err := hasYAMLMappingKeyWithSeen(item, key, seen)
+				if err != nil {
+					return false, err
+				}
+				if found {
+					return true, nil
+				}
+			}
+			continue
+		}
+		found, err := hasYAMLMappingKeyWithSeen(mergedResolved, key, seen)
+		if err != nil {
+			return false, err
+		}
+		if found {
 			return true, nil
 		}
 	}
@@ -652,6 +707,23 @@ type DownloadFairQueueConfig struct {
 	Extra                 map[string]any                    `yaml:",inline" json:"-"`
 }
 
+type DownloadTrueConcurrencySiteBucketConfig struct {
+	Mode string `yaml:"mode" json:"mode"`
+}
+
+type DownloadTrueConcurrencyConfig struct {
+	Enabled           bool                                    `yaml:"enabled" json:"enabled"`
+	HostPatterns      []string                                `yaml:"hostPatterns" json:"hostPatterns"`
+	HandlerURL        string                                  `yaml:"handlerUrl" json:"handlerUrl"`
+	HandlerAuthKey    string                                  `yaml:"handlerAuthKey" json:"handlerAuthKey"`
+	HandlerAuthHeader string                                  `yaml:"handlerAuthHeader" json:"handlerAuthHeader"`
+	SiteBucket        DownloadTrueConcurrencySiteBucketConfig `yaml:"siteBucket" json:"siteBucket"`
+	AcquireTimeoutMs  int                                     `yaml:"acquireTimeoutMs" json:"acquireTimeoutMs"`
+	ReleaseTimeoutMs  int                                     `yaml:"releaseTimeoutMs" json:"releaseTimeoutMs"`
+	acquireTimeoutSet bool                                    `yaml:"-" json:"-"`
+	releaseTimeoutSet bool                                    `yaml:"-" json:"-"`
+}
+
 // DownloadAuthConfig controls request integrity checks.
 type DownloadAuthConfig struct {
 	IPv4Only *bool `yaml:"ipv4Only" json:"ipv4Only"`
@@ -662,6 +734,7 @@ type DownloadConfig struct {
 	Address              string                             `yaml:"address" json:"address"`
 	DB                   DownloadDBConfig                   `yaml:"db" json:"db"`
 	FairQueue            DownloadFairQueueConfig            `yaml:"fairQueue" json:"fairQueue"`
+	TrueConcurrency      DownloadTrueConcurrencyConfig      `yaml:"trueConcurrency" json:"trueConcurrency"`
 	ThrottleProfiles     map[string]DownloadThrottleProfile `yaml:"throttleProfiles" json:"throttleProfiles"`
 	OriginBindingDefault string                             `yaml:"originBindingDefault" json:"originBindingDefault"`
 	OverrideCacheControl bool                               `yaml:"override-cache-control" json:"overrideCacheControl"`
@@ -696,6 +769,26 @@ func (d *DownloadConfig) UnmarshalYAML(value *yaml.Node) error {
 	}
 
 	*d = DownloadConfig(aux)
+	return nil
+}
+
+func (c *DownloadTrueConcurrencyConfig) UnmarshalYAML(value *yaml.Node) error {
+	type raw DownloadTrueConcurrencyConfig
+	var aux raw
+	acquireTimeoutSet, err := hasYAMLMappingKey(value, "acquireTimeoutMs")
+	if err != nil {
+		return err
+	}
+	releaseTimeoutSet, err := hasYAMLMappingKey(value, "releaseTimeoutMs")
+	if err != nil {
+		return err
+	}
+	if err := value.Decode(&aux); err != nil {
+		return err
+	}
+	*c = DownloadTrueConcurrencyConfig(aux)
+	c.acquireTimeoutSet = acquireTimeoutSet
+	c.releaseTimeoutSet = releaseTimeoutSet
 	return nil
 }
 
@@ -1399,6 +1492,10 @@ func (d *DownloadConfig) ensureDefaults(common CommonConfig, envName string) err
 		return err
 	}
 
+	if err := d.TrueConcurrency.ensureDefaults(envName); err != nil {
+		return err
+	}
+
 	if strings.TrimSpace(d.CacheOverrideMaxSize) == "" {
 		d.CacheOverrideMaxSize = defaultDownloadCacheOverrideMax
 	}
@@ -1674,6 +1771,57 @@ func (f *DownloadFairQueueConfig) ensureDefaults(envName string) error {
 		}
 		if strings.TrimSpace(f.SlotHandlerAuthKey) == "" {
 			return fmt.Errorf("download.fairQueue.slotHandlerAuthKey is required for env %s when fairQueue.enabled is true", envName)
+		}
+	}
+
+	return nil
+}
+
+func (c *DownloadTrueConcurrencyConfig) ensureDefaults(envName string) error {
+	normalizedPatterns := make([]string, 0, len(c.HostPatterns))
+	for _, pattern := range c.HostPatterns {
+		trimmed := strings.TrimSpace(pattern)
+		if trimmed != "" {
+			normalizedPatterns = append(normalizedPatterns, trimmed)
+		}
+	}
+	c.HostPatterns = normalizedPatterns
+	c.HandlerURL = strings.TrimSpace(c.HandlerURL)
+	c.HandlerAuthKey = strings.TrimSpace(c.HandlerAuthKey)
+	c.HandlerAuthHeader = normalizeTrueConcurrencyAuthHeaderName(c.HandlerAuthHeader)
+	if c.HandlerAuthHeader == "" {
+		c.HandlerAuthHeader = defaultTrueConcurrencyAuthHeader
+	}
+	c.SiteBucket.Mode = strings.ToLower(strings.TrimSpace(c.SiteBucket.Mode))
+	if c.SiteBucket.Mode == "" {
+		c.SiteBucket.Mode = defaultTrueConcurrencySiteBucketMode
+	}
+	if c.SiteBucket.Mode != defaultTrueConcurrencySiteBucketMode {
+		return fmt.Errorf("download.trueConcurrency.siteBucket.mode must be %q for env %s", defaultTrueConcurrencySiteBucketMode, envName)
+	}
+	if c.acquireTimeoutSet {
+		if c.AcquireTimeoutMs <= 0 {
+			return fmt.Errorf("download.trueConcurrency.acquireTimeoutMs must be > 0 for env %s", envName)
+		}
+	} else {
+		c.AcquireTimeoutMs = defaultTrueConcurrencyAcquireTimeoutMs
+	}
+	if c.releaseTimeoutSet {
+		if c.ReleaseTimeoutMs <= 0 {
+			return fmt.Errorf("download.trueConcurrency.releaseTimeoutMs must be > 0 for env %s", envName)
+		}
+	} else {
+		c.ReleaseTimeoutMs = defaultTrueConcurrencyReleaseTimeoutMs
+	}
+	if c.Enabled {
+		if len(c.HostPatterns) == 0 {
+			return fmt.Errorf("download.trueConcurrency.hostPatterns is required for env %s when trueConcurrency.enabled is true", envName)
+		}
+		if c.HandlerURL == "" {
+			return fmt.Errorf("download.trueConcurrency.handlerUrl is required for env %s when trueConcurrency.enabled is true", envName)
+		}
+		if c.HandlerAuthKey == "" {
+			return fmt.Errorf("download.trueConcurrency.handlerAuthKey is required for env %s when trueConcurrency.enabled is true", envName)
 		}
 	}
 

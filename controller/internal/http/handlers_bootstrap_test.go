@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -179,6 +181,196 @@ func TestHandleBootstrapDownloadNormalizesSlotHandlerAuthHeaderWhitespace(t *tes
 	}
 	if resp.Download.FairQueue.SlotHandlerAuthHeader != "X-FQ-Auth" {
 		t.Fatalf("expected normalized slotHandlerAuthHeader in bootstrap, got %q", resp.Download.FairQueue.SlotHandlerAuthHeader)
+	}
+}
+
+func TestHandleBootstrapDownloadIncludesTrueConcurrencyContract(t *testing.T) {
+	_, file, _, _ := runtime.Caller(0)
+	cfgPath := filepath.Join(filepath.Dir(file), "..", "..", "config.yaml")
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load(%s) failed: %v", cfgPath, err)
+	}
+
+	ctrl := &Controller{Cfg: cfg}
+	req := httptest.NewRequest(http.MethodPost, "/api/v0/bootstrap", bytes.NewBufferString(`{"role":"download","env":"staging"}`))
+	w := httptest.NewRecorder()
+	ctrl.HandleBootstrap(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, w.Code)
+	}
+	body := w.Body.Bytes()
+
+	var rawResp struct {
+		Download struct {
+			TrueConcurrency map[string]json.RawMessage `json:"trueConcurrency"`
+		} `json:"download"`
+	}
+	if err := json.Unmarshal(body, &rawResp); err != nil {
+		t.Fatalf("decode bootstrap response: %v", err)
+	}
+	expectedKeys := map[string]struct{}{
+		"enabled":           {},
+		"hostPatterns":      {},
+		"handlerUrl":        {},
+		"handlerAuthKey":    {},
+		"handlerAuthHeader": {},
+		"siteBucket":        {},
+		"acquireTimeoutMs":  {},
+		"releaseTimeoutMs":  {},
+	}
+	if len(rawResp.Download.TrueConcurrency) != len(expectedKeys) {
+		t.Fatalf("unexpected trueConcurrency field count: got %d want %d (%v)", len(rawResp.Download.TrueConcurrency), len(expectedKeys), rawResp.Download.TrueConcurrency)
+	}
+	for key := range rawResp.Download.TrueConcurrency {
+		if _, ok := expectedKeys[key]; !ok {
+			t.Fatalf("unexpected trueConcurrency field in bootstrap: %s", key)
+		}
+	}
+	for key := range expectedKeys {
+		if _, ok := rawResp.Download.TrueConcurrency[key]; !ok {
+			t.Fatalf("bootstrap missing trueConcurrency field: %s", key)
+		}
+	}
+
+	var resp struct {
+		Download struct {
+			TrueConcurrency struct {
+				Enabled           bool     `json:"enabled"`
+				HostPatterns      []string `json:"hostPatterns"`
+				HandlerURL        string   `json:"handlerUrl"`
+				HandlerAuthKey    string   `json:"handlerAuthKey"`
+				HandlerAuthHeader string   `json:"handlerAuthHeader"`
+				AcquireTimeoutMs  int      `json:"acquireTimeoutMs"`
+				ReleaseTimeoutMs  int      `json:"releaseTimeoutMs"`
+				SiteBucket        struct {
+					Mode string `json:"mode"`
+				} `json:"siteBucket"`
+			} `json:"trueConcurrency"`
+		} `json:"download"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		t.Fatalf("decode bootstrap response: %v", err)
+	}
+	if !resp.Download.TrueConcurrency.Enabled {
+		t.Fatalf("bootstrap missing enabled trueConcurrency contract")
+	}
+	if !reflect.DeepEqual(resp.Download.TrueConcurrency.HostPatterns, []string{"*.sharepoint.com"}) {
+		t.Fatalf("unexpected trueConcurrency hostPatterns: %+v", resp.Download.TrueConcurrency.HostPatterns)
+	}
+	if resp.Download.TrueConcurrency.HandlerURL != "https://concurrency-handler-staging.example.com" {
+		t.Fatalf("unexpected trueConcurrency handlerUrl: %q", resp.Download.TrueConcurrency.HandlerURL)
+	}
+	if resp.Download.TrueConcurrency.HandlerAuthKey != "replace-with-concurrency-handler-key" {
+		t.Fatalf("unexpected trueConcurrency handlerAuthKey: %q", resp.Download.TrueConcurrency.HandlerAuthKey)
+	}
+	if resp.Download.TrueConcurrency.HandlerAuthHeader != "X-CQ-Auth" {
+		t.Fatalf("unexpected trueConcurrency handlerAuthHeader: %q", resp.Download.TrueConcurrency.HandlerAuthHeader)
+	}
+	if resp.Download.TrueConcurrency.AcquireTimeoutMs != 11500 {
+		t.Fatalf("unexpected trueConcurrency acquireTimeoutMs: %d", resp.Download.TrueConcurrency.AcquireTimeoutMs)
+	}
+	if resp.Download.TrueConcurrency.ReleaseTimeoutMs != 1500 {
+		t.Fatalf("unexpected trueConcurrency releaseTimeoutMs: %d", resp.Download.TrueConcurrency.ReleaseTimeoutMs)
+	}
+	if resp.Download.TrueConcurrency.SiteBucket.Mode != "sharepoint" {
+		t.Fatalf("unexpected trueConcurrency siteBucket.mode: %q", resp.Download.TrueConcurrency.SiteBucket.Mode)
+	}
+}
+
+func TestHandleBootstrapDownloadNormalizesTrueConcurrencyFields(t *testing.T) {
+	_, file, _, _ := runtime.Caller(0)
+	cfgPath := filepath.Join(filepath.Dir(file), "..", "..", "config.yaml")
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load(%s) failed: %v", cfgPath, err)
+	}
+
+	staging := cfg.Envs["staging"]
+	staging.Download.TrueConcurrency.HandlerURL = " https://concurrency-handler-staging.example.com "
+	staging.Download.TrueConcurrency.HandlerAuthKey = " replace-with-concurrency-handler-key "
+	staging.Download.TrueConcurrency.HandlerAuthHeader = " x-cq-auth "
+	staging.Download.TrueConcurrency.HostPatterns = []string{"  *.sharepoint.com  ", "   "}
+	staging.Download.TrueConcurrency.SiteBucket.Mode = " SharePoint "
+	cfg.Envs["staging"] = staging
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() failed: %v", err)
+	}
+
+	ctrl := &Controller{Cfg: cfg}
+	req := httptest.NewRequest(http.MethodPost, "/api/v0/bootstrap", bytes.NewBufferString(`{"role":"download","env":"staging"}`))
+	w := httptest.NewRecorder()
+	ctrl.HandleBootstrap(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, w.Code)
+	}
+
+	var resp struct {
+		Download struct {
+			TrueConcurrency struct {
+				HostPatterns      []string `json:"hostPatterns"`
+				HandlerURL        string   `json:"handlerUrl"`
+				HandlerAuthKey    string   `json:"handlerAuthKey"`
+				HandlerAuthHeader string   `json:"handlerAuthHeader"`
+				SiteBucket        struct {
+					Mode string `json:"mode"`
+				} `json:"siteBucket"`
+			} `json:"trueConcurrency"`
+		} `json:"download"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode bootstrap response: %v", err)
+	}
+	if resp.Download.TrueConcurrency.HandlerURL != "https://concurrency-handler-staging.example.com" {
+		t.Fatalf("expected normalized trueConcurrency handlerUrl, got %q", resp.Download.TrueConcurrency.HandlerURL)
+	}
+	if resp.Download.TrueConcurrency.HandlerAuthKey != "replace-with-concurrency-handler-key" {
+		t.Fatalf("expected normalized trueConcurrency handlerAuthKey, got %q", resp.Download.TrueConcurrency.HandlerAuthKey)
+	}
+	if resp.Download.TrueConcurrency.HandlerAuthHeader != "X-CQ-Auth" {
+		t.Fatalf("expected normalized trueConcurrency auth header, got %q", resp.Download.TrueConcurrency.HandlerAuthHeader)
+	}
+	if !reflect.DeepEqual(resp.Download.TrueConcurrency.HostPatterns, []string{"*.sharepoint.com"}) {
+		t.Fatalf("expected normalized trueConcurrency hostPatterns, got %+v", resp.Download.TrueConcurrency.HostPatterns)
+	}
+	if resp.Download.TrueConcurrency.SiteBucket.Mode != "sharepoint" {
+		t.Fatalf("expected normalized trueConcurrency siteBucket.mode, got %q", resp.Download.TrueConcurrency.SiteBucket.Mode)
+	}
+}
+
+func TestReadmeDocumentsTrueConcurrencyContract(t *testing.T) {
+	_, file, _, _ := runtime.Caller(0)
+	readmePath := filepath.Join(filepath.Dir(file), "..", "..", "README.md")
+
+	data, err := os.ReadFile(readmePath)
+	if err != nil {
+		t.Fatalf("read README.md: %v", err)
+	}
+
+	text := string(data)
+	for _, want := range []string{
+		"download true-concurrency",
+		"download.trueConcurrency.enabled",
+		"download.trueConcurrency.hostPatterns",
+		"download.trueConcurrency.handlerUrl",
+		"download.trueConcurrency.handlerAuthKey",
+		"download.trueConcurrency.handlerAuthHeader",
+		"download.trueConcurrency.acquireTimeoutMs",
+		"download.trueConcurrency.releaseTimeoutMs",
+		"download.trueConcurrency.siteBucket.mode",
+		"X-CQ-Auth",
+		"sharepoint",
+		"11500",
+		"1500",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("README.md missing true-concurrency documentation: %s", want)
+		}
 	}
 }
 

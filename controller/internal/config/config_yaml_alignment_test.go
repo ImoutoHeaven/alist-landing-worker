@@ -3,10 +3,77 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
 )
+
+func sampleConfigText(t *testing.T) string {
+	t.Helper()
+	_, file, _, _ := runtime.Caller(0)
+	cfgPath := filepath.Join(filepath.Dir(file), "..", "..", "config.yaml")
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read config.yaml: %v", err)
+	}
+	return string(data)
+}
+
+func loadConfigFromText(t *testing.T, text string) (*RootConfig, error) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+	return Load(path)
+}
+
+func extractTrueConcurrencyBlock(block string) string {
+	marker := "      trueConcurrency:\n"
+	start := strings.Index(block, marker)
+	if start < 0 {
+		return ""
+	}
+	lines := strings.Split(block[start:], "\n")
+	collected := make([]string, 0, len(lines))
+	for idx, line := range lines {
+		if idx > 0 {
+			trimmed := strings.TrimSpace(line)
+			indent := len(line) - len(strings.TrimLeft(line, " "))
+			if trimmed != "" && indent <= 6 {
+				break
+			}
+		}
+		collected = append(collected, line)
+	}
+	return strings.Join(collected, "\n")
+}
+
+func replaceFirstTrueConcurrencyBlock(text string, replacement string) string {
+	marker := "      trueConcurrency:\n"
+	start := strings.Index(text, marker)
+	if start < 0 {
+		return text
+	}
+	tail := text[start:]
+	rest := extractTrueConcurrencyBlock(tail)
+	if rest == "" {
+		return text
+	}
+	end := start + len(rest)
+	return text[:start] + replacement + text[end:]
+}
+
+func replaceFirstTrueConcurrencyBlockWithMergeTemplate(text string, templateName string, templateBody string) string {
+	template := "      trueConcurrencyTemplate: &" + templateName + "\n" + templateBody
+	merged := template + "      trueConcurrency:\n        <<: *" + templateName + "\n"
+	return replaceFirstTrueConcurrencyBlock(text, merged)
+}
+
+func envSectionStart(text string, env string) int {
+	return strings.Index(text, "  "+env+":")
+}
 
 // ensureSampleConfig decodes with all dynamic fields present (ALTCHA/Powdet).
 func TestSampleConfigAlignment(t *testing.T) {
@@ -300,6 +367,273 @@ func TestSampleConfigUsesMinimalThrottleProfileSchema(t *testing.T) {
 		if !strings.Contains(throttleText, want) {
 			t.Fatalf("config.yaml missing throttle field %s", want)
 		}
+	}
+}
+
+func TestSampleConfigDocumentsExplicitTrueConcurrencyBlocksPerEnv(t *testing.T) {
+	text := sampleConfigText(t)
+
+	stagingStart := envSectionStart(text, "staging")
+	prodStart := envSectionStart(text, "prod")
+	if stagingStart < 0 || prodStart < 0 || prodStart <= stagingStart {
+		t.Fatalf("config.yaml missing staging/prod env sections")
+	}
+
+	for env, block := range map[string]string{
+		"staging": text[stagingStart:prodStart],
+		"prod":    text[prodStart:],
+	} {
+		tcBlock := extractTrueConcurrencyBlock(block)
+		if tcBlock == "" {
+			t.Fatalf("config.yaml %s missing trueConcurrency block", env)
+		}
+		for _, want := range []string{
+			"enabled:",
+			"hostPatterns:",
+			"handlerUrl:",
+			"handlerAuthKey:",
+			"handlerAuthHeader:",
+			"siteBucket:",
+			"mode:",
+			"acquireTimeoutMs:",
+			"releaseTimeoutMs:",
+		} {
+			if !strings.Contains(tcBlock, want) {
+				t.Fatalf("config.yaml %s trueConcurrency block missing %s", env, want)
+			}
+		}
+	}
+}
+
+func TestSampleConfigAlignsTrueConcurrencyContract(t *testing.T) {
+	_, file, _, _ := runtime.Caller(0)
+	cfgPath := filepath.Join(filepath.Dir(file), "..", "..", "config.yaml")
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load(%s) failed: %v", cfgPath, err)
+	}
+
+	staging := cfg.Envs["staging"]
+	if !staging.Download.TrueConcurrency.Enabled {
+		t.Fatalf("staging trueConcurrency must be enabled")
+	}
+	if !reflect.DeepEqual(staging.Download.TrueConcurrency.HostPatterns, []string{"*.sharepoint.com"}) {
+		t.Fatalf("staging trueConcurrency hostPatterns not aligned: %+v", staging.Download.TrueConcurrency.HostPatterns)
+	}
+	if staging.Download.TrueConcurrency.HandlerURL != "https://concurrency-handler-staging.example.com" {
+		t.Fatalf("staging trueConcurrency handlerUrl not aligned: %q", staging.Download.TrueConcurrency.HandlerURL)
+	}
+	if staging.Download.TrueConcurrency.HandlerAuthKey != "replace-with-concurrency-handler-key" {
+		t.Fatalf("staging trueConcurrency handlerAuthKey not aligned: %q", staging.Download.TrueConcurrency.HandlerAuthKey)
+	}
+	if staging.Download.TrueConcurrency.HandlerAuthHeader != "X-CQ-Auth" {
+		t.Fatalf("staging trueConcurrency handlerAuthHeader not aligned: %q", staging.Download.TrueConcurrency.HandlerAuthHeader)
+	}
+	if staging.Download.TrueConcurrency.SiteBucket.Mode != "sharepoint" {
+		t.Fatalf("staging trueConcurrency siteBucket.mode not aligned: %q", staging.Download.TrueConcurrency.SiteBucket.Mode)
+	}
+	if staging.Download.TrueConcurrency.AcquireTimeoutMs != 11500 {
+		t.Fatalf("staging trueConcurrency acquireTimeoutMs not aligned: %d", staging.Download.TrueConcurrency.AcquireTimeoutMs)
+	}
+	if staging.Download.TrueConcurrency.ReleaseTimeoutMs != 1500 {
+		t.Fatalf("staging trueConcurrency releaseTimeoutMs not aligned: %d", staging.Download.TrueConcurrency.ReleaseTimeoutMs)
+	}
+
+	prod := cfg.Envs["prod"]
+	if !prod.Download.TrueConcurrency.Enabled {
+		t.Fatalf("prod trueConcurrency must be enabled")
+	}
+	if !reflect.DeepEqual(prod.Download.TrueConcurrency.HostPatterns, []string{"*.sharepoint.com"}) {
+		t.Fatalf("prod trueConcurrency hostPatterns not aligned: %+v", prod.Download.TrueConcurrency.HostPatterns)
+	}
+	if prod.Download.TrueConcurrency.HandlerURL != "https://concurrency-handler.example.com" {
+		t.Fatalf("prod trueConcurrency handlerUrl not aligned: %q", prod.Download.TrueConcurrency.HandlerURL)
+	}
+	if prod.Download.TrueConcurrency.HandlerAuthKey != "replace-with-concurrency-handler-key" {
+		t.Fatalf("prod trueConcurrency handlerAuthKey not aligned: %q", prod.Download.TrueConcurrency.HandlerAuthKey)
+	}
+	if prod.Download.TrueConcurrency.HandlerAuthHeader != "X-CQ-Auth" {
+		t.Fatalf("prod trueConcurrency handlerAuthHeader not aligned: %q", prod.Download.TrueConcurrency.HandlerAuthHeader)
+	}
+	if prod.Download.TrueConcurrency.SiteBucket.Mode != "sharepoint" {
+		t.Fatalf("prod trueConcurrency siteBucket.mode not aligned: %q", prod.Download.TrueConcurrency.SiteBucket.Mode)
+	}
+	if prod.Download.TrueConcurrency.AcquireTimeoutMs != 11500 {
+		t.Fatalf("prod trueConcurrency acquireTimeoutMs not aligned: %d", prod.Download.TrueConcurrency.AcquireTimeoutMs)
+	}
+	if prod.Download.TrueConcurrency.ReleaseTimeoutMs != 1500 {
+		t.Fatalf("prod trueConcurrency releaseTimeoutMs not aligned: %d", prod.Download.TrueConcurrency.ReleaseTimeoutMs)
+	}
+}
+
+func TestLoadRejectsInvalidTrueConcurrencyConfig(t *testing.T) {
+	base := sampleConfigText(t)
+	for _, tc := range []struct {
+		name    string
+		mutate  func(string) string
+		wantErr string
+	}{
+		{
+			name: "missing host patterns when enabled",
+			mutate: func(src string) string {
+				return replaceFirstTrueConcurrencyBlock(src, "      trueConcurrency:\n        enabled: true\n        hostPatterns: []\n        handlerUrl: \"https://concurrency-handler-staging.example.com\"\n        handlerAuthKey: \"replace-with-concurrency-handler-key\"\n        handlerAuthHeader: \"X-CQ-Auth\"\n        siteBucket:\n          mode: \"sharepoint\"\n        acquireTimeoutMs: 11500\n        releaseTimeoutMs: 1500\n")
+			},
+			wantErr: "download.trueConcurrency.hostPatterns",
+		},
+		{
+			name: "whitespace-only handlerUrl when enabled",
+			mutate: func(src string) string {
+				return replaceFirstTrueConcurrencyBlock(src, "      trueConcurrency:\n        enabled: true\n        hostPatterns:\n          - \"*.sharepoint.com\"\n        handlerUrl: \"   \"\n        handlerAuthKey: \"replace-with-concurrency-handler-key\"\n        handlerAuthHeader: \"X-CQ-Auth\"\n        siteBucket:\n          mode: \"sharepoint\"\n        acquireTimeoutMs: 11500\n        releaseTimeoutMs: 1500\n")
+			},
+			wantErr: "download.trueConcurrency.handlerUrl",
+		},
+		{
+			name: "whitespace-only handlerAuthKey when enabled",
+			mutate: func(src string) string {
+				return replaceFirstTrueConcurrencyBlock(src, "      trueConcurrency:\n        enabled: true\n        hostPatterns:\n          - \"*.sharepoint.com\"\n        handlerUrl: \"https://concurrency-handler-staging.example.com\"\n        handlerAuthKey: \"   \"\n        handlerAuthHeader: \"X-CQ-Auth\"\n        siteBucket:\n          mode: \"sharepoint\"\n        acquireTimeoutMs: 11500\n        releaseTimeoutMs: 1500\n")
+			},
+			wantErr: "download.trueConcurrency.handlerAuthKey",
+		},
+		{
+			name: "invalid site bucket mode",
+			mutate: func(src string) string {
+				return replaceFirstTrueConcurrencyBlock(src, "      trueConcurrency:\n        enabled: true\n        hostPatterns:\n          - \"*.sharepoint.com\"\n        handlerUrl: \"https://concurrency-handler-staging.example.com\"\n        handlerAuthKey: \"replace-with-concurrency-handler-key\"\n        handlerAuthHeader: \"X-CQ-Auth\"\n        siteBucket:\n          mode: \"host\"\n        acquireTimeoutMs: 11500\n        releaseTimeoutMs: 1500\n")
+			},
+			wantErr: "download.trueConcurrency.siteBucket.mode",
+		},
+		{
+			name: "explicit zero acquire timeout",
+			mutate: func(src string) string {
+				return replaceFirstTrueConcurrencyBlock(src, "      trueConcurrency:\n        enabled: true\n        hostPatterns:\n          - \"*.sharepoint.com\"\n        handlerUrl: \"https://concurrency-handler-staging.example.com\"\n        handlerAuthKey: \"replace-with-concurrency-handler-key\"\n        handlerAuthHeader: \"X-CQ-Auth\"\n        siteBucket:\n          mode: \"sharepoint\"\n        acquireTimeoutMs: 0\n        releaseTimeoutMs: 1500\n")
+			},
+			wantErr: "download.trueConcurrency.acquireTimeoutMs",
+		},
+		{
+			name: "negative release timeout",
+			mutate: func(src string) string {
+				return replaceFirstTrueConcurrencyBlock(src, "      trueConcurrency:\n        enabled: true\n        hostPatterns:\n          - \"*.sharepoint.com\"\n        handlerUrl: \"https://concurrency-handler-staging.example.com\"\n        handlerAuthKey: \"replace-with-concurrency-handler-key\"\n        handlerAuthHeader: \"X-CQ-Auth\"\n        siteBucket:\n          mode: \"sharepoint\"\n        acquireTimeoutMs: 11500\n        releaseTimeoutMs: -1\n")
+			},
+			wantErr: "download.trueConcurrency.releaseTimeoutMs",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := loadConfigFromText(t, tc.mutate(base))
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestLoadNormalizesTrueConcurrencyFieldsAndAppliesDefaultsWhenTimeoutsAreOmitted(t *testing.T) {
+	text := replaceFirstTrueConcurrencyBlock(sampleConfigText(t), "      trueConcurrency:\n        enabled: true\n        hostPatterns:\n          - \"  *.sharepoint.com  \"\n          - \"   \"\n        handlerUrl: \" https://concurrency-handler-staging.example.com \"\n        handlerAuthKey: \" replace-with-concurrency-handler-key \"\n        handlerAuthHeader: \" x-cq-auth \"\n        siteBucket:\n          mode: \" SharePoint \"\n")
+
+	cfg, err := loadConfigFromText(t, text)
+	if err != nil {
+		t.Fatalf("Load(temp config) failed: %v", err)
+	}
+
+	staging := cfg.Envs["staging"]
+	if !reflect.DeepEqual(staging.Download.TrueConcurrency.HostPatterns, []string{"*.sharepoint.com"}) {
+		t.Fatalf("expected trimmed trueConcurrency hostPatterns, got %+v", staging.Download.TrueConcurrency.HostPatterns)
+	}
+	if staging.Download.TrueConcurrency.HandlerURL != "https://concurrency-handler-staging.example.com" {
+		t.Fatalf("expected normalized trueConcurrency handlerUrl, got %q", staging.Download.TrueConcurrency.HandlerURL)
+	}
+	if staging.Download.TrueConcurrency.HandlerAuthKey != "replace-with-concurrency-handler-key" {
+		t.Fatalf("expected normalized trueConcurrency handlerAuthKey, got %q", staging.Download.TrueConcurrency.HandlerAuthKey)
+	}
+	if staging.Download.TrueConcurrency.HandlerAuthHeader != "X-CQ-Auth" {
+		t.Fatalf("expected normalized trueConcurrency auth header, got %q", staging.Download.TrueConcurrency.HandlerAuthHeader)
+	}
+	if staging.Download.TrueConcurrency.SiteBucket.Mode != "sharepoint" {
+		t.Fatalf("expected normalized siteBucket.mode, got %q", staging.Download.TrueConcurrency.SiteBucket.Mode)
+	}
+	if staging.Download.TrueConcurrency.AcquireTimeoutMs != 11500 {
+		t.Fatalf("expected default acquireTimeoutMs, got %d", staging.Download.TrueConcurrency.AcquireTimeoutMs)
+	}
+	if staging.Download.TrueConcurrency.ReleaseTimeoutMs != 1500 {
+		t.Fatalf("expected default releaseTimeoutMs, got %d", staging.Download.TrueConcurrency.ReleaseTimeoutMs)
+	}
+}
+
+func TestLoadDefaultsTrueConcurrencyHeaderAndSiteBucketModeWhenOmittedOrEmpty(t *testing.T) {
+	base := sampleConfigText(t)
+
+	t.Run("omitted fields", func(t *testing.T) {
+		text := replaceFirstTrueConcurrencyBlock(base, "      trueConcurrency:\n        enabled: true\n        hostPatterns:\n          - \"*.sharepoint.com\"\n        handlerUrl: \"https://concurrency-handler-staging.example.com\"\n        handlerAuthKey: \"replace-with-concurrency-handler-key\"\n        siteBucket: {}\n")
+		cfg, err := loadConfigFromText(t, text)
+		if err != nil {
+			t.Fatalf("Load(temp config) failed: %v", err)
+		}
+		staging := cfg.Envs["staging"]
+		if staging.Download.TrueConcurrency.HandlerAuthHeader != "X-CQ-Auth" {
+			t.Fatalf("expected default trueConcurrency auth header, got %q", staging.Download.TrueConcurrency.HandlerAuthHeader)
+		}
+		if staging.Download.TrueConcurrency.SiteBucket.Mode != "sharepoint" {
+			t.Fatalf("expected default trueConcurrency siteBucket.mode, got %q", staging.Download.TrueConcurrency.SiteBucket.Mode)
+		}
+	})
+
+	t.Run("empty fields", func(t *testing.T) {
+		text := replaceFirstTrueConcurrencyBlock(base, "      trueConcurrency:\n        enabled: true\n        hostPatterns:\n          - \"*.sharepoint.com\"\n        handlerUrl: \"https://concurrency-handler-staging.example.com\"\n        handlerAuthKey: \"replace-with-concurrency-handler-key\"\n        handlerAuthHeader: \"   \"\n        siteBucket:\n          mode: \"   \"\n        acquireTimeoutMs: 11500\n        releaseTimeoutMs: 1500\n")
+		cfg, err := loadConfigFromText(t, text)
+		if err != nil {
+			t.Fatalf("Load(temp config) failed: %v", err)
+		}
+		staging := cfg.Envs["staging"]
+		if staging.Download.TrueConcurrency.HandlerAuthHeader != "X-CQ-Auth" {
+			t.Fatalf("expected default trueConcurrency auth header from empty input, got %q", staging.Download.TrueConcurrency.HandlerAuthHeader)
+		}
+		if staging.Download.TrueConcurrency.SiteBucket.Mode != "sharepoint" {
+			t.Fatalf("expected default trueConcurrency siteBucket.mode from empty input, got %q", staging.Download.TrueConcurrency.SiteBucket.Mode)
+		}
+	})
+}
+
+func TestLoadPreservesMergedTrueConcurrencyExplicitTimeouts(t *testing.T) {
+	text := replaceFirstTrueConcurrencyBlockWithMergeTemplate(sampleConfigText(t), "tcbase", "        enabled: true\n        hostPatterns:\n          - \"*.sharepoint.com\"\n        handlerUrl: \"https://concurrency-handler-staging.example.com\"\n        handlerAuthKey: \"replace-with-concurrency-handler-key\"\n        handlerAuthHeader: \"X-CQ-Auth\"\n        siteBucket:\n          mode: \"sharepoint\"\n        acquireTimeoutMs: 9999\n        releaseTimeoutMs: 2222\n")
+
+	cfg, err := loadConfigFromText(t, text)
+	if err != nil {
+		t.Fatalf("Load(temp config) failed: %v", err)
+	}
+
+	staging := cfg.Envs["staging"]
+	if staging.Download.TrueConcurrency.AcquireTimeoutMs != 9999 {
+		t.Fatalf("expected merged acquireTimeoutMs to survive load, got %d", staging.Download.TrueConcurrency.AcquireTimeoutMs)
+	}
+	if staging.Download.TrueConcurrency.ReleaseTimeoutMs != 2222 {
+		t.Fatalf("expected merged releaseTimeoutMs to survive load, got %d", staging.Download.TrueConcurrency.ReleaseTimeoutMs)
+	}
+}
+
+func TestLoadRejectsInvalidMergedTrueConcurrencyTimeouts(t *testing.T) {
+	base := sampleConfigText(t)
+	for _, tc := range []struct {
+		name         string
+		templateBody string
+		wantErr      string
+	}{
+		{
+			name:         "merged zero acquire timeout",
+			templateBody: "        enabled: true\n        hostPatterns:\n          - \"*.sharepoint.com\"\n        handlerUrl: \"https://concurrency-handler-staging.example.com\"\n        handlerAuthKey: \"replace-with-concurrency-handler-key\"\n        handlerAuthHeader: \"X-CQ-Auth\"\n        siteBucket:\n          mode: \"sharepoint\"\n        acquireTimeoutMs: 0\n        releaseTimeoutMs: 2222\n",
+			wantErr:      "download.trueConcurrency.acquireTimeoutMs",
+		},
+		{
+			name:         "merged negative release timeout",
+			templateBody: "        enabled: true\n        hostPatterns:\n          - \"*.sharepoint.com\"\n        handlerUrl: \"https://concurrency-handler-staging.example.com\"\n        handlerAuthKey: \"replace-with-concurrency-handler-key\"\n        handlerAuthHeader: \"X-CQ-Auth\"\n        siteBucket:\n          mode: \"sharepoint\"\n        acquireTimeoutMs: 9999\n        releaseTimeoutMs: -1\n",
+			wantErr:      "download.trueConcurrency.releaseTimeoutMs",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			text := replaceFirstTrueConcurrencyBlockWithMergeTemplate(base, "tcbase", tc.templateBody)
+			_, err := loadConfigFromText(t, text)
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
+			}
+		})
 	}
 }
 
