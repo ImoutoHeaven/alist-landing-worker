@@ -237,6 +237,12 @@ func TestHandleBootstrapDownloadIncludesTrueConcurrencyContract(t *testing.T) {
 
 	var resp struct {
 		Download struct {
+			FairQueue struct {
+				SiteBucket struct {
+					Mode  string   `json:"mode"`
+					Modes []string `json:"modes"`
+				} `json:"siteBucket"`
+			} `json:"fairQueue"`
 			TrueConcurrency struct {
 				Enabled           bool     `json:"enabled"`
 				HostPatterns      []string `json:"hostPatterns"`
@@ -246,7 +252,8 @@ func TestHandleBootstrapDownloadIncludesTrueConcurrencyContract(t *testing.T) {
 				AcquireTimeoutMs  int      `json:"acquireTimeoutMs"`
 				ReleaseTimeoutMs  int      `json:"releaseTimeoutMs"`
 				SiteBucket        struct {
-					Mode string `json:"mode"`
+					Mode  string   `json:"mode"`
+					Modes []string `json:"modes"`
 				} `json:"siteBucket"`
 			} `json:"trueConcurrency"`
 		} `json:"download"`
@@ -275,8 +282,17 @@ func TestHandleBootstrapDownloadIncludesTrueConcurrencyContract(t *testing.T) {
 	if resp.Download.TrueConcurrency.ReleaseTimeoutMs != 1500 {
 		t.Fatalf("unexpected trueConcurrency releaseTimeoutMs: %d", resp.Download.TrueConcurrency.ReleaseTimeoutMs)
 	}
+	if resp.Download.FairQueue.SiteBucket.Mode != "sharepoint" {
+		t.Fatalf("unexpected fairQueue siteBucket.mode: %q", resp.Download.FairQueue.SiteBucket.Mode)
+	}
+	if !reflect.DeepEqual(resp.Download.FairQueue.SiteBucket.Modes, []string{"sharepoint"}) {
+		t.Fatalf("unexpected fairQueue siteBucket.modes: %+v", resp.Download.FairQueue.SiteBucket.Modes)
+	}
 	if resp.Download.TrueConcurrency.SiteBucket.Mode != "sharepoint" {
 		t.Fatalf("unexpected trueConcurrency siteBucket.mode: %q", resp.Download.TrueConcurrency.SiteBucket.Mode)
+	}
+	if !reflect.DeepEqual(resp.Download.TrueConcurrency.SiteBucket.Modes, []string{"sharepoint"}) {
+		t.Fatalf("unexpected trueConcurrency siteBucket.modes: %+v", resp.Download.TrueConcurrency.SiteBucket.Modes)
 	}
 }
 
@@ -312,13 +328,20 @@ func TestHandleBootstrapDownloadNormalizesTrueConcurrencyFields(t *testing.T) {
 
 	var resp struct {
 		Download struct {
+			FairQueue struct {
+				SiteBucket struct {
+					Mode  string   `json:"mode"`
+					Modes []string `json:"modes"`
+				} `json:"siteBucket"`
+			} `json:"fairQueue"`
 			TrueConcurrency struct {
 				HostPatterns      []string `json:"hostPatterns"`
 				HandlerURL        string   `json:"handlerUrl"`
 				HandlerAuthKey    string   `json:"handlerAuthKey"`
 				HandlerAuthHeader string   `json:"handlerAuthHeader"`
 				SiteBucket        struct {
-					Mode string `json:"mode"`
+					Mode  string   `json:"mode"`
+					Modes []string `json:"modes"`
 				} `json:"siteBucket"`
 			} `json:"trueConcurrency"`
 		} `json:"download"`
@@ -338,8 +361,142 @@ func TestHandleBootstrapDownloadNormalizesTrueConcurrencyFields(t *testing.T) {
 	if !reflect.DeepEqual(resp.Download.TrueConcurrency.HostPatterns, []string{"*.sharepoint.com"}) {
 		t.Fatalf("expected normalized trueConcurrency hostPatterns, got %+v", resp.Download.TrueConcurrency.HostPatterns)
 	}
+	if resp.Download.FairQueue.SiteBucket.Mode != "sharepoint" {
+		t.Fatalf("expected normalized fairQueue siteBucket.mode, got %q", resp.Download.FairQueue.SiteBucket.Mode)
+	}
+	if !reflect.DeepEqual(resp.Download.FairQueue.SiteBucket.Modes, []string{"sharepoint"}) {
+		t.Fatalf("expected normalized fairQueue siteBucket.modes, got %+v", resp.Download.FairQueue.SiteBucket.Modes)
+	}
 	if resp.Download.TrueConcurrency.SiteBucket.Mode != "sharepoint" {
 		t.Fatalf("expected normalized trueConcurrency siteBucket.mode, got %q", resp.Download.TrueConcurrency.SiteBucket.Mode)
+	}
+	if !reflect.DeepEqual(resp.Download.TrueConcurrency.SiteBucket.Modes, []string{"sharepoint"}) {
+		t.Fatalf("expected normalized trueConcurrency siteBucket.modes, got %+v", resp.Download.TrueConcurrency.SiteBucket.Modes)
+	}
+}
+
+func TestHandleBootstrapDownloadIncludesMultiModeSiteBucketContract(t *testing.T) {
+	_, file, _, _ := runtime.Caller(0)
+	cfgPath := filepath.Join(filepath.Dir(file), "..", "..", "config.yaml")
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load(%s) failed: %v", cfgPath, err)
+	}
+
+	staging := cfg.Envs["staging"]
+	staging.Download.FairQueue.SiteBucket.Mode = "googledrive"
+	staging.Download.FairQueue.SiteBucket.Modes = []string{" SharePoint ", "googledrive", "sharepoint", "   "}
+	staging.Download.TrueConcurrency.SiteBucket.Mode = "googledrive"
+	staging.Download.TrueConcurrency.SiteBucket.Modes = []string{" SharePoint ", "googledrive", "sharepoint", "   "}
+	cfg.Envs["staging"] = staging
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() failed: %v", err)
+	}
+
+	ctrl := &Controller{Cfg: cfg}
+	req := httptest.NewRequest(http.MethodPost, "/api/v0/bootstrap", bytes.NewBufferString(`{"role":"download","env":"staging"}`))
+	w := httptest.NewRecorder()
+	ctrl.HandleBootstrap(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, w.Code)
+	}
+
+	var resp struct {
+		Download struct {
+			FairQueue struct {
+				SiteBucket struct {
+					Mode  string   `json:"mode"`
+					Modes []string `json:"modes"`
+				} `json:"siteBucket"`
+			} `json:"fairQueue"`
+			TrueConcurrency struct {
+				SiteBucket struct {
+					Mode  string   `json:"mode"`
+					Modes []string `json:"modes"`
+				} `json:"siteBucket"`
+			} `json:"trueConcurrency"`
+		} `json:"download"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode bootstrap response: %v", err)
+	}
+	if resp.Download.FairQueue.SiteBucket.Mode != "sharepoint" {
+		t.Fatalf("expected normalized fairQueue multi-mode projection, got %q", resp.Download.FairQueue.SiteBucket.Mode)
+	}
+	if !reflect.DeepEqual(resp.Download.FairQueue.SiteBucket.Modes, []string{"sharepoint", "googledrive"}) {
+		t.Fatalf("expected normalized fairQueue multi-mode set, got %+v", resp.Download.FairQueue.SiteBucket.Modes)
+	}
+	if resp.Download.TrueConcurrency.SiteBucket.Mode != "sharepoint" {
+		t.Fatalf("expected normalized trueConcurrency multi-mode projection, got %q", resp.Download.TrueConcurrency.SiteBucket.Mode)
+	}
+	if !reflect.DeepEqual(resp.Download.TrueConcurrency.SiteBucket.Modes, []string{"sharepoint", "googledrive"}) {
+		t.Fatalf("expected normalized trueConcurrency multi-mode set, got %+v", resp.Download.TrueConcurrency.SiteBucket.Modes)
+	}
+}
+
+func TestHandleBootstrapDownloadPreservesFirstOccurrenceOrderInMultiModeSiteBucket(t *testing.T) {
+	_, file, _, _ := runtime.Caller(0)
+	cfgPath := filepath.Join(filepath.Dir(file), "..", "..", "config.yaml")
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load(%s) failed: %v", cfgPath, err)
+	}
+
+	staging := cfg.Envs["staging"]
+	staging.Download.FairQueue.SiteBucket.Mode = "sharepoint"
+	staging.Download.FairQueue.SiteBucket.Modes = []string{" googledrive ", "sharepoint", "googledrive"}
+	staging.Download.TrueConcurrency.SiteBucket.Mode = "sharepoint"
+	staging.Download.TrueConcurrency.SiteBucket.Modes = []string{" googledrive ", "sharepoint", "googledrive"}
+	cfg.Envs["staging"] = staging
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() failed: %v", err)
+	}
+
+	ctrl := &Controller{Cfg: cfg}
+	req := httptest.NewRequest(http.MethodPost, "/api/v0/bootstrap", bytes.NewBufferString(`{"role":"download","env":"staging"}`))
+	w := httptest.NewRecorder()
+	ctrl.HandleBootstrap(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, w.Code)
+	}
+
+	var resp struct {
+		Download struct {
+			FairQueue struct {
+				SiteBucket struct {
+					Mode  string   `json:"mode"`
+					Modes []string `json:"modes"`
+				} `json:"siteBucket"`
+			} `json:"fairQueue"`
+			TrueConcurrency struct {
+				SiteBucket struct {
+					Mode  string   `json:"mode"`
+					Modes []string `json:"modes"`
+				} `json:"siteBucket"`
+			} `json:"trueConcurrency"`
+		} `json:"download"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode bootstrap response: %v", err)
+	}
+
+	if resp.Download.FairQueue.SiteBucket.Mode != "googledrive" {
+		t.Fatalf("expected fairQueue multi-mode projection to preserve first occurrence, got %q", resp.Download.FairQueue.SiteBucket.Mode)
+	}
+	if !reflect.DeepEqual(resp.Download.FairQueue.SiteBucket.Modes, []string{"googledrive", "sharepoint"}) {
+		t.Fatalf("expected fairQueue multi-mode order to be preserved, got %+v", resp.Download.FairQueue.SiteBucket.Modes)
+	}
+	if resp.Download.TrueConcurrency.SiteBucket.Mode != "googledrive" {
+		t.Fatalf("expected trueConcurrency multi-mode projection to preserve first occurrence, got %q", resp.Download.TrueConcurrency.SiteBucket.Mode)
+	}
+	if !reflect.DeepEqual(resp.Download.TrueConcurrency.SiteBucket.Modes, []string{"googledrive", "sharepoint"}) {
+		t.Fatalf("expected trueConcurrency multi-mode order to be preserved, got %+v", resp.Download.TrueConcurrency.SiteBucket.Modes)
 	}
 }
 
@@ -363,8 +520,13 @@ func TestReadmeDocumentsTrueConcurrencyContract(t *testing.T) {
 		"download.trueConcurrency.acquireTimeoutMs",
 		"download.trueConcurrency.releaseTimeoutMs",
 		"download.trueConcurrency.siteBucket.mode",
+		"download.trueConcurrency.siteBucket.modes",
+		"download.fairQueue.siteBucket.mode",
+		"download.fairQueue.siteBucket.modes",
 		"X-CQ-Auth",
-		"sharepoint",
+		"sharepoint|googledrive",
+		"modes is authoritative",
+		"mode is legacy-compatible",
 		"11500",
 		"1500",
 	} {

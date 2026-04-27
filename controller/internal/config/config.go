@@ -91,6 +91,7 @@ const (
 	defaultSlotHandlerAuthHeader            = "X-FQ-Auth"
 	defaultTrueConcurrencyAuthHeader        = "X-CQ-Auth"
 	defaultTrueConcurrencySiteBucketMode    = "sharepoint"
+	downloadSiteBucketModeGoogleDrive       = "googledrive"
 	defaultTrueConcurrencyAcquireTimeoutMs  = 11500
 	defaultTrueConcurrencyReleaseTimeoutMs  = 1500
 	defaultSlotHandlerPollInterval          = 500
@@ -157,6 +158,52 @@ func normalizeTrueConcurrencyAuthHeaderName(value string) string {
 		return defaultTrueConcurrencyAuthHeader
 	}
 	return header
+}
+
+func normalizeDownloadSiteBucketModeValue(value string, fieldPath string) (string, error) {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	if normalized == "" {
+		return "", nil
+	}
+	if normalized != defaultTrueConcurrencySiteBucketMode && normalized != downloadSiteBucketModeGoogleDrive {
+		return "", fmt.Errorf("%s must be one of %q or %q", fieldPath, defaultTrueConcurrencySiteBucketMode, downloadSiteBucketModeGoogleDrive)
+	}
+	return normalized, nil
+}
+
+func normalizeDownloadSiteBucketValues(mode string, modes []string, fieldPrefix string) (string, []string, error) {
+	normalizedMode, err := normalizeDownloadSiteBucketModeValue(mode, fieldPrefix+".mode")
+	if err != nil {
+		return "", nil, err
+	}
+
+	normalizedModes := make([]string, 0, len(modes))
+	seen := make(map[string]struct{}, len(modes))
+	for idx, raw := range modes {
+		normalized, err := normalizeDownloadSiteBucketModeValue(raw, fmt.Sprintf("%s.modes[%d]", fieldPrefix, idx))
+		if err != nil {
+			return "", nil, err
+		}
+		if normalized == "" {
+			continue
+		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		normalizedModes = append(normalizedModes, normalized)
+	}
+
+	effectiveModes := normalizedModes
+	if len(effectiveModes) == 0 {
+		if normalizedMode != "" {
+			effectiveModes = []string{normalizedMode}
+		} else {
+			effectiveModes = []string{defaultTrueConcurrencySiteBucketMode}
+		}
+	}
+
+	return effectiveModes[0], effectiveModes, nil
 }
 
 func (b *BindingConfig) ensureDefaults() {
@@ -689,7 +736,8 @@ func hasYAMLMappingKeyWithSeen(value *yaml.Node, key string, seen map[*yaml.Node
 
 // DownloadFairQueueSiteBucketConfig controls site bucket derivation.
 type DownloadFairQueueSiteBucketConfig struct {
-	Mode string `yaml:"mode" json:"mode"`
+	Mode  string   `yaml:"mode" json:"mode"`
+	Modes []string `yaml:"modes" json:"modes"`
 }
 
 // DownloadFairQueueConfig controls slot-handler integration.
@@ -708,7 +756,8 @@ type DownloadFairQueueConfig struct {
 }
 
 type DownloadTrueConcurrencySiteBucketConfig struct {
-	Mode string `yaml:"mode" json:"mode"`
+	Mode  string   `yaml:"mode" json:"mode"`
+	Modes []string `yaml:"modes" json:"modes"`
 }
 
 type DownloadTrueConcurrencyConfig struct {
@@ -1758,9 +1807,12 @@ func (f *DownloadFairQueueConfig) ensureDefaults(envName string) error {
 	if f.SlotHandlerAuthHeader == "" {
 		f.SlotHandlerAuthHeader = defaultSlotHandlerAuthHeader
 	}
-	if strings.TrimSpace(f.SiteBucket.Mode) == "" {
-		f.SiteBucket.Mode = "sharepoint"
+	mode, modes, err := normalizeDownloadSiteBucketValues(f.SiteBucket.Mode, f.SiteBucket.Modes, "download.fairQueue.siteBucket")
+	if err != nil {
+		return err
 	}
+	f.SiteBucket.Mode = mode
+	f.SiteBucket.Modes = modes
 
 	if f.Enabled {
 		if len(f.HostPatterns) == 0 {
@@ -1792,13 +1844,12 @@ func (c *DownloadTrueConcurrencyConfig) ensureDefaults(envName string) error {
 	if c.HandlerAuthHeader == "" {
 		c.HandlerAuthHeader = defaultTrueConcurrencyAuthHeader
 	}
-	c.SiteBucket.Mode = strings.ToLower(strings.TrimSpace(c.SiteBucket.Mode))
-	if c.SiteBucket.Mode == "" {
-		c.SiteBucket.Mode = defaultTrueConcurrencySiteBucketMode
+	mode, modes, err := normalizeDownloadSiteBucketValues(c.SiteBucket.Mode, c.SiteBucket.Modes, "download.trueConcurrency.siteBucket")
+	if err != nil {
+		return err
 	}
-	if c.SiteBucket.Mode != defaultTrueConcurrencySiteBucketMode {
-		return fmt.Errorf("download.trueConcurrency.siteBucket.mode must be %q for env %s", defaultTrueConcurrencySiteBucketMode, envName)
-	}
+	c.SiteBucket.Mode = mode
+	c.SiteBucket.Modes = modes
 	if c.acquireTimeoutSet {
 		if c.AcquireTimeoutMs <= 0 {
 			return fmt.Errorf("download.trueConcurrency.acquireTimeoutMs must be > 0 for env %s", envName)

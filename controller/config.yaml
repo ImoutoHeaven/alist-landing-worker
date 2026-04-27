@@ -259,7 +259,8 @@ envs:
         perRequestTimeoutMs: 8000 # Timeout per slot-handler request; ms >0
         maxAttemptsCap: 35 # Max retry attempts for slot acquisition; >=1
         siteBucket:
-          mode: "sharepoint" # Derive site bucket by SharePoint path segments
+          mode: "sharepoint" # Legacy-compatible projection field; defaults to the first effective provider mode
+          modes: ["sharepoint"] # Authoritative provider mode set; allowed values: sharepoint|googledrive
       trueConcurrency:
         enabled: true # Enable true concurrency handler integration
         hostPatterns: ["*.sharepoint.com"] # Hosts controlled by concurrency handler; glob list
@@ -267,7 +268,8 @@ envs:
         handlerAuthKey: "replace-with-concurrency-handler-key" # Auth key sent to concurrency handler; required if enabled
         handlerAuthHeader: "X-CQ-Auth" # Header name sent to concurrency handler
         siteBucket:
-          mode: "sharepoint" # Derive site bucket by SharePoint path segments
+          mode: "sharepoint" # Legacy-compatible projection field; defaults to the first effective provider mode
+          modes: ["sharepoint"] # Authoritative provider mode set; allowed values: sharepoint|googledrive
         acquireTimeoutMs: 11500 # Acquire timeout budget in milliseconds; >0
         releaseTimeoutMs: 1500 # Release timeout budget in milliseconds; >0
       throttleProfiles:
@@ -648,6 +650,7 @@ envs:
         maxAttemptsCap: 35
         siteBucket:
           mode: "sharepoint"
+          modes: ["sharepoint"]
       trueConcurrency:
         enabled: true
         hostPatterns: ["*.sharepoint.com"]
@@ -656,6 +659,7 @@ envs:
         handlerAuthHeader: "X-CQ-Auth"
         siteBucket:
           mode: "sharepoint"
+          modes: ["sharepoint"]
         acquireTimeoutMs: 11500
         releaseTimeoutMs: 1500
       throttleProfiles:

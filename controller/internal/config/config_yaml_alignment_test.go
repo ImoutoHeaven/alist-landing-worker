@@ -29,8 +29,7 @@ func loadConfigFromText(t *testing.T, text string) (*RootConfig, error) {
 	return Load(path)
 }
 
-func extractTrueConcurrencyBlock(block string) string {
-	marker := "      trueConcurrency:\n"
+func extractIndentedBlock(block string, marker string) string {
 	start := strings.Index(block, marker)
 	if start < 0 {
 		return ""
@@ -50,19 +49,34 @@ func extractTrueConcurrencyBlock(block string) string {
 	return strings.Join(collected, "\n")
 }
 
-func replaceFirstTrueConcurrencyBlock(text string, replacement string) string {
-	marker := "      trueConcurrency:\n"
+func extractFairQueueBlock(block string) string {
+	return extractIndentedBlock(block, "      fairQueue:\n")
+}
+
+func extractTrueConcurrencyBlock(block string) string {
+	return extractIndentedBlock(block, "      trueConcurrency:\n")
+}
+
+func replaceFirstIndentedBlock(text string, marker string, replacement string) string {
 	start := strings.Index(text, marker)
 	if start < 0 {
 		return text
 	}
 	tail := text[start:]
-	rest := extractTrueConcurrencyBlock(tail)
+	rest := extractIndentedBlock(tail, marker)
 	if rest == "" {
 		return text
 	}
 	end := start + len(rest)
 	return text[:start] + replacement + text[end:]
+}
+
+func replaceFirstFairQueueBlock(text string, replacement string) string {
+	return replaceFirstIndentedBlock(text, "      fairQueue:\n", replacement)
+}
+
+func replaceFirstTrueConcurrencyBlock(text string, replacement string) string {
+	return replaceFirstIndentedBlock(text, "      trueConcurrency:\n", replacement)
 }
 
 func replaceFirstTrueConcurrencyBlockWithMergeTemplate(text string, templateName string, templateBody string) string {
@@ -73,6 +87,16 @@ func replaceFirstTrueConcurrencyBlockWithMergeTemplate(text string, templateName
 
 func envSectionStart(text string, env string) int {
 	return strings.Index(text, "  "+env+":")
+}
+
+func assertSiteBucketNormalized(t *testing.T, gotMode string, gotModes []string, wantMode string, wantModes []string) {
+	t.Helper()
+	if gotMode != wantMode {
+		t.Fatalf("expected siteBucket.mode %q, got %q", wantMode, gotMode)
+	}
+	if !reflect.DeepEqual(gotModes, wantModes) {
+		t.Fatalf("expected siteBucket.modes %+v, got %+v", wantModes, gotModes)
+	}
 }
 
 // ensureSampleConfig decodes with all dynamic fields present (ALTCHA/Powdet).
@@ -370,7 +394,7 @@ func TestSampleConfigUsesMinimalThrottleProfileSchema(t *testing.T) {
 	}
 }
 
-func TestSampleConfigDocumentsExplicitTrueConcurrencyBlocksPerEnv(t *testing.T) {
+func TestSampleConfigDocumentsExplicitDownloadAdmissionBlocksPerEnv(t *testing.T) {
 	text := sampleConfigText(t)
 
 	stagingStart := envSectionStart(text, "staging")
@@ -383,6 +407,25 @@ func TestSampleConfigDocumentsExplicitTrueConcurrencyBlocksPerEnv(t *testing.T) 
 		"staging": text[stagingStart:prodStart],
 		"prod":    text[prodStart:],
 	} {
+		fqBlock := extractFairQueueBlock(block)
+		if fqBlock == "" {
+			t.Fatalf("config.yaml %s missing fairQueue block", env)
+		}
+		for _, want := range []string{
+			"enabled:",
+			"hostPatterns:",
+			"slotHandlerUrl:",
+			"slotHandlerAuthKey:",
+			"slotHandlerAuthHeader:",
+			"siteBucket:",
+			"mode:",
+			"modes:",
+		} {
+			if !strings.Contains(fqBlock, want) {
+				t.Fatalf("config.yaml %s fairQueue block missing %s", env, want)
+			}
+		}
+
 		tcBlock := extractTrueConcurrencyBlock(block)
 		if tcBlock == "" {
 			t.Fatalf("config.yaml %s missing trueConcurrency block", env)
@@ -395,6 +438,7 @@ func TestSampleConfigDocumentsExplicitTrueConcurrencyBlocksPerEnv(t *testing.T) 
 			"handlerAuthHeader:",
 			"siteBucket:",
 			"mode:",
+			"modes:",
 			"acquireTimeoutMs:",
 			"releaseTimeoutMs:",
 		} {
@@ -433,6 +477,9 @@ func TestSampleConfigAlignsTrueConcurrencyContract(t *testing.T) {
 	if staging.Download.TrueConcurrency.SiteBucket.Mode != "sharepoint" {
 		t.Fatalf("staging trueConcurrency siteBucket.mode not aligned: %q", staging.Download.TrueConcurrency.SiteBucket.Mode)
 	}
+	if !reflect.DeepEqual(staging.Download.TrueConcurrency.SiteBucket.Modes, []string{"sharepoint"}) {
+		t.Fatalf("staging trueConcurrency siteBucket.modes not aligned: %+v", staging.Download.TrueConcurrency.SiteBucket.Modes)
+	}
 	if staging.Download.TrueConcurrency.AcquireTimeoutMs != 11500 {
 		t.Fatalf("staging trueConcurrency acquireTimeoutMs not aligned: %d", staging.Download.TrueConcurrency.AcquireTimeoutMs)
 	}
@@ -459,11 +506,186 @@ func TestSampleConfigAlignsTrueConcurrencyContract(t *testing.T) {
 	if prod.Download.TrueConcurrency.SiteBucket.Mode != "sharepoint" {
 		t.Fatalf("prod trueConcurrency siteBucket.mode not aligned: %q", prod.Download.TrueConcurrency.SiteBucket.Mode)
 	}
+	if !reflect.DeepEqual(prod.Download.TrueConcurrency.SiteBucket.Modes, []string{"sharepoint"}) {
+		t.Fatalf("prod trueConcurrency siteBucket.modes not aligned: %+v", prod.Download.TrueConcurrency.SiteBucket.Modes)
+	}
 	if prod.Download.TrueConcurrency.AcquireTimeoutMs != 11500 {
 		t.Fatalf("prod trueConcurrency acquireTimeoutMs not aligned: %d", prod.Download.TrueConcurrency.AcquireTimeoutMs)
 	}
 	if prod.Download.TrueConcurrency.ReleaseTimeoutMs != 1500 {
 		t.Fatalf("prod trueConcurrency releaseTimeoutMs not aligned: %d", prod.Download.TrueConcurrency.ReleaseTimeoutMs)
+	}
+}
+
+func TestLoadNormalizesSiteBucketModesForTrueConcurrencyAndFairQueue(t *testing.T) {
+	base := sampleConfigText(t)
+
+	t.Run("trueConcurrency legacy googledrive mode", func(t *testing.T) {
+		text := replaceFirstTrueConcurrencyBlock(base, "      trueConcurrency:\n        enabled: true\n        hostPatterns:\n          - \"*.sharepoint.com\"\n        handlerUrl: \"https://concurrency-handler-staging.example.com\"\n        handlerAuthKey: \"replace-with-concurrency-handler-key\"\n        handlerAuthHeader: \"X-CQ-Auth\"\n        siteBucket:\n          mode: \"googledrive\"\n        acquireTimeoutMs: 11500\n        releaseTimeoutMs: 1500\n")
+
+		cfg, err := loadConfigFromText(t, text)
+		if err != nil {
+			t.Fatalf("Load(temp config) failed: %v", err)
+		}
+
+		assertSiteBucketNormalized(t,
+			cfg.Envs["staging"].Download.TrueConcurrency.SiteBucket.Mode,
+			cfg.Envs["staging"].Download.TrueConcurrency.SiteBucket.Modes,
+			"googledrive",
+			[]string{"googledrive"},
+		)
+	})
+
+	t.Run("fairQueue legacy googledrive mode", func(t *testing.T) {
+		text := replaceFirstFairQueueBlock(base, "      fairQueue:\n        enabled: true\n        backend: \"slot-handler\"\n        hostPatterns: [\"*.sharepoint.com\"]\n        slotHandlerUrl: \"https://slot-handler-staging.example.com\"\n        slotHandlerAuthKey: \"replace-with-slot-handler-key\"\n        slotHandlerAuthHeader: \"X-FQ-Auth\"\n        slotHandlerTimeoutMs: 20000\n        perRequestTimeoutMs: 8000\n        maxAttemptsCap: 35\n        siteBucket:\n          mode: \"googledrive\"\n")
+
+		cfg, err := loadConfigFromText(t, text)
+		if err != nil {
+			t.Fatalf("Load(temp config) failed: %v", err)
+		}
+
+		assertSiteBucketNormalized(t,
+			cfg.Envs["staging"].Download.FairQueue.SiteBucket.Mode,
+			cfg.Envs["staging"].Download.FairQueue.SiteBucket.Modes,
+			"googledrive",
+			[]string{"googledrive"},
+		)
+	})
+
+	t.Run("trueConcurrency modes list is authoritative", func(t *testing.T) {
+		text := replaceFirstTrueConcurrencyBlock(base, "      trueConcurrency:\n        enabled: true\n        hostPatterns:\n          - \"*.sharepoint.com\"\n        handlerUrl: \"https://concurrency-handler-staging.example.com\"\n        handlerAuthKey: \"replace-with-concurrency-handler-key\"\n        handlerAuthHeader: \"X-CQ-Auth\"\n        siteBucket:\n          mode: \"googledrive\"\n          modes:\n            - \" SharePoint \"\n            - \"googledrive\"\n            - \"sharepoint\"\n            - \"   \"\n        acquireTimeoutMs: 11500\n        releaseTimeoutMs: 1500\n")
+
+		cfg, err := loadConfigFromText(t, text)
+		if err != nil {
+			t.Fatalf("Load(temp config) failed: %v", err)
+		}
+
+		assertSiteBucketNormalized(t,
+			cfg.Envs["staging"].Download.TrueConcurrency.SiteBucket.Mode,
+			cfg.Envs["staging"].Download.TrueConcurrency.SiteBucket.Modes,
+			"sharepoint",
+			[]string{"sharepoint", "googledrive"},
+		)
+	})
+
+	t.Run("fairQueue modes list is authoritative", func(t *testing.T) {
+		text := replaceFirstFairQueueBlock(base, "      fairQueue:\n        enabled: true\n        backend: \"slot-handler\"\n        hostPatterns: [\"*.sharepoint.com\"]\n        slotHandlerUrl: \"https://slot-handler-staging.example.com\"\n        slotHandlerAuthKey: \"replace-with-slot-handler-key\"\n        slotHandlerAuthHeader: \"X-FQ-Auth\"\n        slotHandlerTimeoutMs: 20000\n        perRequestTimeoutMs: 8000\n        maxAttemptsCap: 35\n        siteBucket:\n          mode: \"googledrive\"\n          modes:\n            - \" SharePoint \"\n            - \"googledrive\"\n            - \"sharepoint\"\n            - \"   \"\n")
+
+		cfg, err := loadConfigFromText(t, text)
+		if err != nil {
+			t.Fatalf("Load(temp config) failed: %v", err)
+		}
+
+		assertSiteBucketNormalized(t,
+			cfg.Envs["staging"].Download.FairQueue.SiteBucket.Mode,
+			cfg.Envs["staging"].Download.FairQueue.SiteBucket.Modes,
+			"sharepoint",
+			[]string{"sharepoint", "googledrive"},
+		)
+	})
+
+	t.Run("modes preserve first occurrence order for both surfaces", func(t *testing.T) {
+		text := replaceFirstFairQueueBlock(base, "      fairQueue:\n        enabled: true\n        backend: \"slot-handler\"\n        hostPatterns: [\"*.sharepoint.com\"]\n        slotHandlerUrl: \"https://slot-handler-staging.example.com\"\n        slotHandlerAuthKey: \"replace-with-slot-handler-key\"\n        slotHandlerAuthHeader: \"X-FQ-Auth\"\n        slotHandlerTimeoutMs: 20000\n        perRequestTimeoutMs: 8000\n        maxAttemptsCap: 35\n        siteBucket:\n          mode: \"sharepoint\"\n          modes:\n            - \" googledrive \"\n            - \"sharepoint\"\n            - \"googledrive\"\n")
+		text = replaceFirstTrueConcurrencyBlock(text, "      trueConcurrency:\n        enabled: true\n        hostPatterns:\n          - \"*.sharepoint.com\"\n        handlerUrl: \"https://concurrency-handler-staging.example.com\"\n        handlerAuthKey: \"replace-with-concurrency-handler-key\"\n        handlerAuthHeader: \"X-CQ-Auth\"\n        siteBucket:\n          mode: \"sharepoint\"\n          modes:\n            - \" googledrive \"\n            - \"sharepoint\"\n            - \"googledrive\"\n        acquireTimeoutMs: 11500\n        releaseTimeoutMs: 1500\n")
+
+		cfg, err := loadConfigFromText(t, text)
+		if err != nil {
+			t.Fatalf("Load(temp config) failed: %v", err)
+		}
+
+		assertSiteBucketNormalized(t,
+			cfg.Envs["staging"].Download.FairQueue.SiteBucket.Mode,
+			cfg.Envs["staging"].Download.FairQueue.SiteBucket.Modes,
+			"googledrive",
+			[]string{"googledrive", "sharepoint"},
+		)
+		assertSiteBucketNormalized(t,
+			cfg.Envs["staging"].Download.TrueConcurrency.SiteBucket.Mode,
+			cfg.Envs["staging"].Download.TrueConcurrency.SiteBucket.Modes,
+			"googledrive",
+			[]string{"googledrive", "sharepoint"},
+		)
+	})
+}
+
+func TestLoadDefaultsSiteBucketModesForTrueConcurrencyAndFairQueue(t *testing.T) {
+	base := sampleConfigText(t)
+
+	t.Run("trueConcurrency empty siteBucket defaults to sharepoint mode set", func(t *testing.T) {
+		text := replaceFirstTrueConcurrencyBlock(base, "      trueConcurrency:\n        enabled: true\n        hostPatterns:\n          - \"*.sharepoint.com\"\n        handlerUrl: \"https://concurrency-handler-staging.example.com\"\n        handlerAuthKey: \"replace-with-concurrency-handler-key\"\n        handlerAuthHeader: \"X-CQ-Auth\"\n        siteBucket: {}\n        acquireTimeoutMs: 11500\n        releaseTimeoutMs: 1500\n")
+
+		cfg, err := loadConfigFromText(t, text)
+		if err != nil {
+			t.Fatalf("Load(temp config) failed: %v", err)
+		}
+
+		assertSiteBucketNormalized(t,
+			cfg.Envs["staging"].Download.TrueConcurrency.SiteBucket.Mode,
+			cfg.Envs["staging"].Download.TrueConcurrency.SiteBucket.Modes,
+			"sharepoint",
+			[]string{"sharepoint"},
+		)
+	})
+
+	t.Run("fairQueue empty siteBucket defaults to sharepoint mode set", func(t *testing.T) {
+		text := replaceFirstFairQueueBlock(base, "      fairQueue:\n        enabled: true\n        backend: \"slot-handler\"\n        hostPatterns: [\"*.sharepoint.com\"]\n        slotHandlerUrl: \"https://slot-handler-staging.example.com\"\n        slotHandlerAuthKey: \"replace-with-slot-handler-key\"\n        slotHandlerAuthHeader: \"X-FQ-Auth\"\n        slotHandlerTimeoutMs: 20000\n        perRequestTimeoutMs: 8000\n        maxAttemptsCap: 35\n        siteBucket: {}\n")
+
+		cfg, err := loadConfigFromText(t, text)
+		if err != nil {
+			t.Fatalf("Load(temp config) failed: %v", err)
+		}
+
+		assertSiteBucketNormalized(t,
+			cfg.Envs["staging"].Download.FairQueue.SiteBucket.Mode,
+			cfg.Envs["staging"].Download.FairQueue.SiteBucket.Modes,
+			"sharepoint",
+			[]string{"sharepoint"},
+		)
+	})
+}
+
+func TestLoadRejectsInvalidSiteBucketModesForTrueConcurrencyAndFairQueue(t *testing.T) {
+	base := sampleConfigText(t)
+	for _, tc := range []struct {
+		name    string
+		mutate  func(string) string
+		wantErr string
+	}{
+		{
+			name: "invalid trueConcurrency mode",
+			mutate: func(src string) string {
+				return replaceFirstTrueConcurrencyBlock(src, "      trueConcurrency:\n        enabled: true\n        hostPatterns:\n          - \"*.sharepoint.com\"\n        handlerUrl: \"https://concurrency-handler-staging.example.com\"\n        handlerAuthKey: \"replace-with-concurrency-handler-key\"\n        handlerAuthHeader: \"X-CQ-Auth\"\n        siteBucket:\n          mode: \"host\"\n        acquireTimeoutMs: 11500\n        releaseTimeoutMs: 1500\n")
+			},
+			wantErr: "download.trueConcurrency.siteBucket",
+		},
+		{
+			name: "invalid fairQueue mode",
+			mutate: func(src string) string {
+				return replaceFirstFairQueueBlock(src, "      fairQueue:\n        enabled: true\n        backend: \"slot-handler\"\n        hostPatterns: [\"*.sharepoint.com\"]\n        slotHandlerUrl: \"https://slot-handler-staging.example.com\"\n        slotHandlerAuthKey: \"replace-with-slot-handler-key\"\n        slotHandlerAuthHeader: \"X-FQ-Auth\"\n        slotHandlerTimeoutMs: 20000\n        perRequestTimeoutMs: 8000\n        maxAttemptsCap: 35\n        siteBucket:\n          mode: \"google\"\n")
+			},
+			wantErr: "download.fairQueue.siteBucket",
+		},
+		{
+			name: "invalid trueConcurrency modes entry",
+			mutate: func(src string) string {
+				return replaceFirstTrueConcurrencyBlock(src, "      trueConcurrency:\n        enabled: true\n        hostPatterns:\n          - \"*.sharepoint.com\"\n        handlerUrl: \"https://concurrency-handler-staging.example.com\"\n        handlerAuthKey: \"replace-with-concurrency-handler-key\"\n        handlerAuthHeader: \"X-CQ-Auth\"\n        siteBucket:\n          modes:\n            - \"sharepoint\"\n            - \"google\"\n        acquireTimeoutMs: 11500\n        releaseTimeoutMs: 1500\n")
+			},
+			wantErr: "download.trueConcurrency.siteBucket",
+		},
+		{
+			name: "invalid fairQueue modes entry",
+			mutate: func(src string) string {
+				return replaceFirstFairQueueBlock(src, "      fairQueue:\n        enabled: true\n        backend: \"slot-handler\"\n        hostPatterns: [\"*.sharepoint.com\"]\n        slotHandlerUrl: \"https://slot-handler-staging.example.com\"\n        slotHandlerAuthKey: \"replace-with-slot-handler-key\"\n        slotHandlerAuthHeader: \"X-FQ-Auth\"\n        slotHandlerTimeoutMs: 20000\n        perRequestTimeoutMs: 8000\n        maxAttemptsCap: 35\n        siteBucket:\n          modes:\n            - \"sharepoint\"\n            - \"host\"\n")
+			},
+			wantErr: "download.fairQueue.siteBucket",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := loadConfigFromText(t, tc.mutate(base))
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
+			}
+		})
 	}
 }
 
@@ -550,6 +772,9 @@ func TestLoadNormalizesTrueConcurrencyFieldsAndAppliesDefaultsWhenTimeoutsAreOmi
 	if staging.Download.TrueConcurrency.SiteBucket.Mode != "sharepoint" {
 		t.Fatalf("expected normalized siteBucket.mode, got %q", staging.Download.TrueConcurrency.SiteBucket.Mode)
 	}
+	if !reflect.DeepEqual(staging.Download.TrueConcurrency.SiteBucket.Modes, []string{"sharepoint"}) {
+		t.Fatalf("expected normalized siteBucket.modes, got %+v", staging.Download.TrueConcurrency.SiteBucket.Modes)
+	}
 	if staging.Download.TrueConcurrency.AcquireTimeoutMs != 11500 {
 		t.Fatalf("expected default acquireTimeoutMs, got %d", staging.Download.TrueConcurrency.AcquireTimeoutMs)
 	}
@@ -574,6 +799,9 @@ func TestLoadDefaultsTrueConcurrencyHeaderAndSiteBucketModeWhenOmittedOrEmpty(t 
 		if staging.Download.TrueConcurrency.SiteBucket.Mode != "sharepoint" {
 			t.Fatalf("expected default trueConcurrency siteBucket.mode, got %q", staging.Download.TrueConcurrency.SiteBucket.Mode)
 		}
+		if !reflect.DeepEqual(staging.Download.TrueConcurrency.SiteBucket.Modes, []string{"sharepoint"}) {
+			t.Fatalf("expected default trueConcurrency siteBucket.modes, got %+v", staging.Download.TrueConcurrency.SiteBucket.Modes)
+		}
 	})
 
 	t.Run("empty fields", func(t *testing.T) {
@@ -588,6 +816,9 @@ func TestLoadDefaultsTrueConcurrencyHeaderAndSiteBucketModeWhenOmittedOrEmpty(t 
 		}
 		if staging.Download.TrueConcurrency.SiteBucket.Mode != "sharepoint" {
 			t.Fatalf("expected default trueConcurrency siteBucket.mode from empty input, got %q", staging.Download.TrueConcurrency.SiteBucket.Mode)
+		}
+		if !reflect.DeepEqual(staging.Download.TrueConcurrency.SiteBucket.Modes, []string{"sharepoint"}) {
+			t.Fatalf("expected default trueConcurrency siteBucket.modes from empty input, got %+v", staging.Download.TrueConcurrency.SiteBucket.Modes)
 		}
 	})
 }
