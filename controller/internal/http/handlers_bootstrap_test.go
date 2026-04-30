@@ -524,7 +524,7 @@ func TestReadmeDocumentsTrueConcurrencyContract(t *testing.T) {
 		"download.fairQueue.siteBucket.mode",
 		"download.fairQueue.siteBucket.modes",
 		"X-CQ-Auth",
-		"sharepoint|googledrive",
+		"host|sharepoint|googledrive",
 		"modes is authoritative",
 		"mode is legacy-compatible",
 		"11500",

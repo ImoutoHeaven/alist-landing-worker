@@ -260,7 +260,7 @@ envs:
         maxAttemptsCap: 35 # Max retry attempts for slot acquisition; >=1
         siteBucket:
           mode: "sharepoint" # Legacy-compatible projection field; defaults to the first effective provider mode
-          modes: ["sharepoint"] # Authoritative provider mode set; allowed values: sharepoint|googledrive
+          modes: ["sharepoint"] # Authoritative provider mode set; allowed values: host|sharepoint|googledrive
       trueConcurrency:
         enabled: true # Enable true concurrency handler integration
         hostPatterns: ["*.sharepoint.com"] # Hosts controlled by concurrency handler; glob list
@@ -269,7 +269,7 @@ envs:
         handlerAuthHeader: "X-CQ-Auth" # Header name sent to concurrency handler
         siteBucket:
           mode: "sharepoint" # Legacy-compatible projection field; defaults to the first effective provider mode
-          modes: ["sharepoint"] # Authoritative provider mode set; allowed values: sharepoint|googledrive
+          modes: ["sharepoint"] # Authoritative provider mode set; allowed values: host|sharepoint|googledrive
         acquireTimeoutMs: 11500 # Acquire timeout budget in milliseconds; >0
         releaseTimeoutMs: 1500 # Release timeout budget in milliseconds; >0
       throttleProfiles:

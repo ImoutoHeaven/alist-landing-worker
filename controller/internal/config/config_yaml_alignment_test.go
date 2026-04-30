@@ -520,6 +520,52 @@ func TestSampleConfigAlignsTrueConcurrencyContract(t *testing.T) {
 func TestLoadNormalizesSiteBucketModesForTrueConcurrencyAndFairQueue(t *testing.T) {
 	base := sampleConfigText(t)
 
+	t.Run("host mode is accepted for both trueConcurrency and fairQueue", func(t *testing.T) {
+		text := replaceFirstFairQueueBlock(base, "      fairQueue:\n        enabled: true\n        backend: \"slot-handler\"\n        hostPatterns: [\"*.sharepoint.com\"]\n        slotHandlerUrl: \"https://slot-handler-staging.example.com\"\n        slotHandlerAuthKey: \"replace-with-slot-handler-key\"\n        slotHandlerAuthHeader: \"X-FQ-Auth\"\n        slotHandlerTimeoutMs: 20000\n        perRequestTimeoutMs: 8000\n        maxAttemptsCap: 35\n        siteBucket:\n          mode: \"host\"\n")
+		text = replaceFirstTrueConcurrencyBlock(text, "      trueConcurrency:\n        enabled: true\n        hostPatterns:\n          - \"*.sharepoint.com\"\n        handlerUrl: \"https://concurrency-handler-staging.example.com\"\n        handlerAuthKey: \"replace-with-concurrency-handler-key\"\n        handlerAuthHeader: \"X-CQ-Auth\"\n        siteBucket:\n          mode: \"host\"\n        acquireTimeoutMs: 11500\n        releaseTimeoutMs: 1500\n")
+
+		cfg, err := loadConfigFromText(t, text)
+		if err != nil {
+			t.Fatalf("Load(temp config) failed: %v", err)
+		}
+
+		assertSiteBucketNormalized(t,
+			cfg.Envs["staging"].Download.FairQueue.SiteBucket.Mode,
+			cfg.Envs["staging"].Download.FairQueue.SiteBucket.Modes,
+			"host",
+			[]string{"host"},
+		)
+		assertSiteBucketNormalized(t,
+			cfg.Envs["staging"].Download.TrueConcurrency.SiteBucket.Mode,
+			cfg.Envs["staging"].Download.TrueConcurrency.SiteBucket.Modes,
+			"host",
+			[]string{"host"},
+		)
+	})
+
+	t.Run("host modes list is authoritative for both trueConcurrency and fairQueue", func(t *testing.T) {
+		text := replaceFirstFairQueueBlock(base, "      fairQueue:\n        enabled: true\n        backend: \"slot-handler\"\n        hostPatterns: [\"*.sharepoint.com\"]\n        slotHandlerUrl: \"https://slot-handler-staging.example.com\"\n        slotHandlerAuthKey: \"replace-with-slot-handler-key\"\n        slotHandlerAuthHeader: \"X-FQ-Auth\"\n        slotHandlerTimeoutMs: 20000\n        perRequestTimeoutMs: 8000\n        maxAttemptsCap: 35\n        siteBucket:\n          mode: \"sharepoint\"\n          modes:\n            - \" host \"\n            - \"host\"\n            - \"   \"\n")
+		text = replaceFirstTrueConcurrencyBlock(text, "      trueConcurrency:\n        enabled: true\n        hostPatterns:\n          - \"*.sharepoint.com\"\n        handlerUrl: \"https://concurrency-handler-staging.example.com\"\n        handlerAuthKey: \"replace-with-concurrency-handler-key\"\n        handlerAuthHeader: \"X-CQ-Auth\"\n        siteBucket:\n          mode: \"sharepoint\"\n          modes:\n            - \" host \"\n            - \"host\"\n            - \"   \"\n        acquireTimeoutMs: 11500\n        releaseTimeoutMs: 1500\n")
+
+		cfg, err := loadConfigFromText(t, text)
+		if err != nil {
+			t.Fatalf("Load(temp config) failed: %v", err)
+		}
+
+		assertSiteBucketNormalized(t,
+			cfg.Envs["staging"].Download.FairQueue.SiteBucket.Mode,
+			cfg.Envs["staging"].Download.FairQueue.SiteBucket.Modes,
+			"host",
+			[]string{"host"},
+		)
+		assertSiteBucketNormalized(t,
+			cfg.Envs["staging"].Download.TrueConcurrency.SiteBucket.Mode,
+			cfg.Envs["staging"].Download.TrueConcurrency.SiteBucket.Modes,
+			"host",
+			[]string{"host"},
+		)
+	})
+
 	t.Run("trueConcurrency legacy googledrive mode", func(t *testing.T) {
 		text := replaceFirstTrueConcurrencyBlock(base, "      trueConcurrency:\n        enabled: true\n        hostPatterns:\n          - \"*.sharepoint.com\"\n        handlerUrl: \"https://concurrency-handler-staging.example.com\"\n        handlerAuthKey: \"replace-with-concurrency-handler-key\"\n        handlerAuthHeader: \"X-CQ-Auth\"\n        siteBucket:\n          mode: \"googledrive\"\n        acquireTimeoutMs: 11500\n        releaseTimeoutMs: 1500\n")
 
@@ -654,7 +700,7 @@ func TestLoadRejectsInvalidSiteBucketModesForTrueConcurrencyAndFairQueue(t *test
 		{
 			name: "invalid trueConcurrency mode",
 			mutate: func(src string) string {
-				return replaceFirstTrueConcurrencyBlock(src, "      trueConcurrency:\n        enabled: true\n        hostPatterns:\n          - \"*.sharepoint.com\"\n        handlerUrl: \"https://concurrency-handler-staging.example.com\"\n        handlerAuthKey: \"replace-with-concurrency-handler-key\"\n        handlerAuthHeader: \"X-CQ-Auth\"\n        siteBucket:\n          mode: \"host\"\n        acquireTimeoutMs: 11500\n        releaseTimeoutMs: 1500\n")
+				return replaceFirstTrueConcurrencyBlock(src, "      trueConcurrency:\n        enabled: true\n        hostPatterns:\n          - \"*.sharepoint.com\"\n        handlerUrl: \"https://concurrency-handler-staging.example.com\"\n        handlerAuthKey: \"replace-with-concurrency-handler-key\"\n        handlerAuthHeader: \"X-CQ-Auth\"\n        siteBucket:\n          mode: \"google\"\n        acquireTimeoutMs: 11500\n        releaseTimeoutMs: 1500\n")
 			},
 			wantErr: "download.trueConcurrency.siteBucket",
 		},
@@ -675,7 +721,7 @@ func TestLoadRejectsInvalidSiteBucketModesForTrueConcurrencyAndFairQueue(t *test
 		{
 			name: "invalid fairQueue modes entry",
 			mutate: func(src string) string {
-				return replaceFirstFairQueueBlock(src, "      fairQueue:\n        enabled: true\n        backend: \"slot-handler\"\n        hostPatterns: [\"*.sharepoint.com\"]\n        slotHandlerUrl: \"https://slot-handler-staging.example.com\"\n        slotHandlerAuthKey: \"replace-with-slot-handler-key\"\n        slotHandlerAuthHeader: \"X-FQ-Auth\"\n        slotHandlerTimeoutMs: 20000\n        perRequestTimeoutMs: 8000\n        maxAttemptsCap: 35\n        siteBucket:\n          modes:\n            - \"sharepoint\"\n            - \"host\"\n")
+				return replaceFirstFairQueueBlock(src, "      fairQueue:\n        enabled: true\n        backend: \"slot-handler\"\n        hostPatterns: [\"*.sharepoint.com\"]\n        slotHandlerUrl: \"https://slot-handler-staging.example.com\"\n        slotHandlerAuthKey: \"replace-with-slot-handler-key\"\n        slotHandlerAuthHeader: \"X-FQ-Auth\"\n        slotHandlerTimeoutMs: 20000\n        perRequestTimeoutMs: 8000\n        maxAttemptsCap: 35\n        siteBucket:\n          modes:\n            - \"sharepoint\"\n            - \"google\"\n")
 			},
 			wantErr: "download.fairQueue.siteBucket",
 		},
@@ -720,7 +766,7 @@ func TestLoadRejectsInvalidTrueConcurrencyConfig(t *testing.T) {
 		{
 			name: "invalid site bucket mode",
 			mutate: func(src string) string {
-				return replaceFirstTrueConcurrencyBlock(src, "      trueConcurrency:\n        enabled: true\n        hostPatterns:\n          - \"*.sharepoint.com\"\n        handlerUrl: \"https://concurrency-handler-staging.example.com\"\n        handlerAuthKey: \"replace-with-concurrency-handler-key\"\n        handlerAuthHeader: \"X-CQ-Auth\"\n        siteBucket:\n          mode: \"host\"\n        acquireTimeoutMs: 11500\n        releaseTimeoutMs: 1500\n")
+				return replaceFirstTrueConcurrencyBlock(src, "      trueConcurrency:\n        enabled: true\n        hostPatterns:\n          - \"*.sharepoint.com\"\n        handlerUrl: \"https://concurrency-handler-staging.example.com\"\n        handlerAuthKey: \"replace-with-concurrency-handler-key\"\n        handlerAuthHeader: \"X-CQ-Auth\"\n        siteBucket:\n          mode: \"google\"\n        acquireTimeoutMs: 11500\n        releaseTimeoutMs: 1500\n")
 			},
 			wantErr: "download.trueConcurrency.siteBucket.mode",
 		},

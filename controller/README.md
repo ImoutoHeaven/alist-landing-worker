@@ -37,8 +37,8 @@ download true-concurrency 相关：
 - `download.trueConcurrency.handlerUrl`：concurrency-handler 基础地址；controller 会先 trim，启用时归一化后必须提供。
 - `download.trueConcurrency.handlerAuthKey`：download worker 调用 concurrency-handler 的认证密钥；controller 会先 trim，启用时归一化后必须提供。
 - `download.trueConcurrency.handlerAuthHeader`：download worker 调用 concurrency-handler 的认证请求头名；默认 `X-CQ-Auth`，空值会回落到默认值，大小写无关匹配该值时 controller 会归一化成 `X-CQ-Auth`。
-- `download.trueConcurrency.siteBucket.mode`：legacy-compatible 单值输入与投影字段；controller 会先 trim 再转小写；允许值固定为 `sharepoint|googledrive`；当 `modes` 只有一个值时输出该值，多值时输出 `modes[0]`。
-- `download.trueConcurrency.siteBucket.modes`：authoritative provider mode set；controller 会 trim、转小写、移除空项、按首次出现顺序去重；允许值固定为 `sharepoint|googledrive`；当 `modes` 非空时它优先于 `mode`，当两者都为空时默认回落到 `sharepoint`。
+- `download.trueConcurrency.siteBucket.mode`：legacy-compatible 单值输入与投影字段；controller 会先 trim 再转小写；允许值固定为 `host|sharepoint|googledrive`；当 `modes` 只有一个值时输出该值，多值时输出 `modes[0]`。
+- `download.trueConcurrency.siteBucket.modes`：authoritative provider mode set；controller 会 trim、转小写、移除空项、按首次出现顺序去重；允许值固定为 `host|sharepoint|googledrive`；当 `modes` 非空时它优先于 `mode`，当两者都为空时默认回落到 `sharepoint`。
 - `download.trueConcurrency.acquireTimeoutMs`：controller 下发给 worker 的 acquire 超时；默认 `11500`，显式值必须为正数，缺省值由 controller 补齐。
 - `download.trueConcurrency.releaseTimeoutMs`：controller 下发给 worker 的 release 超时；默认 `1500`，显式值必须为正数，缺省值由 controller 补齐。
 - `role=download` 的 bootstrap 响应会下发完整、已归一化的 `download.trueConcurrency` block；`siteBucket` 总是同时包含 `mode` 与 `modes`，其中 modes is authoritative，mode is legacy-compatible；`config.yaml` 里的 staging/prod 示例只是镜像 controller 当前合同与默认值。
@@ -48,8 +48,8 @@ Powdet 相关：`landing.powdet.algorithms` 控制可用算法（argon2id/argon2
 slot-handler 相关：
 
 - `download.fairQueue.slotHandlerAuthHeader`：download bootstrap 下发给 worker 的 slot-handler 认证请求头名；默认 `X-FQ-Auth`，启用 Fair Queue 时必须与 `slotHandler.auth.header` 保持一致。
-- `download.fairQueue.siteBucket.mode`：legacy-compatible 单值输入与投影字段；controller 会先 trim 再转小写；允许值固定为 `sharepoint|googledrive`；当 `modes` 只有一个值时输出该值，多值时输出 `modes[0]`。
-- `download.fairQueue.siteBucket.modes`：authoritative provider mode set；controller 会 trim、转小写、移除空项、按首次出现顺序去重；允许值固定为 `sharepoint|googledrive`；当 `modes` 非空时它优先于 `mode`，当两者都为空时默认回落到 `sharepoint`。
+- `download.fairQueue.siteBucket.mode`：legacy-compatible 单值输入与投影字段；controller 会先 trim 再转小写；允许值固定为 `host|sharepoint|googledrive`；当 `modes` 只有一个值时输出该值，多值时输出 `modes[0]`。
+- `download.fairQueue.siteBucket.modes`：authoritative provider mode set；controller 会 trim、转小写、移除空项、按首次出现顺序去重；允许值固定为 `host|sharepoint|googledrive`；当 `modes` 非空时它优先于 `mode`，当两者都为空时默认回落到 `sharepoint`。
 - `slotHandler.fairQueue.minSlotHoldMs`：最小持有时间，避免刚授予就释放。
 - `slotHandler.fairQueue.smoothReleaseIntervalMs`：平滑释放间隔，`null` 表示禁用。
 - `slotHandler.fairQueue.graceMs`：授予后宽限窗口，用于延迟利用率计算。

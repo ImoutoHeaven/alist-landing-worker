@@ -90,6 +90,7 @@ const (
 	defaultSlotHandlerListen                = ":8080"
 	defaultSlotHandlerAuthHeader            = "X-FQ-Auth"
 	defaultTrueConcurrencyAuthHeader        = "X-CQ-Auth"
+	downloadSiteBucketModeHost              = "host"
 	defaultTrueConcurrencySiteBucketMode    = "sharepoint"
 	downloadSiteBucketModeGoogleDrive       = "googledrive"
 	defaultTrueConcurrencyAcquireTimeoutMs  = 11500
@@ -165,8 +166,8 @@ func normalizeDownloadSiteBucketModeValue(value string, fieldPath string) (strin
 	if normalized == "" {
 		return "", nil
 	}
-	if normalized != defaultTrueConcurrencySiteBucketMode && normalized != downloadSiteBucketModeGoogleDrive {
-		return "", fmt.Errorf("%s must be one of %q or %q", fieldPath, defaultTrueConcurrencySiteBucketMode, downloadSiteBucketModeGoogleDrive)
+	if normalized != downloadSiteBucketModeHost && normalized != defaultTrueConcurrencySiteBucketMode && normalized != downloadSiteBucketModeGoogleDrive {
+		return "", fmt.Errorf("%s must be one of %q, %q, or %q", fieldPath, downloadSiteBucketModeHost, defaultTrueConcurrencySiteBucketMode, downloadSiteBucketModeGoogleDrive)
 	}
 	return normalized, nil
 }
