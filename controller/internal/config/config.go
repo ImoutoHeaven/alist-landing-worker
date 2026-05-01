@@ -437,7 +437,7 @@ type LandingDBConfig struct {
 	VerifySecret       []string               `yaml:"verifySecret" json:"verifySecret"`
 	Cache              LandingCacheConfig     `yaml:"cache" json:"cache"`
 	RateLimit          LandingRateLimitConfig `yaml:"rateLimit" json:"rateLimit"`
-	IdleTable          string                 `yaml:"idleTable" json:"idleTable"`
+	TicketStateTable   string                 `yaml:"ticketStateTable" json:"ticketStateTable"`
 	IdleTimeoutSeconds int                    `yaml:"idleTimeoutSeconds" json:"idleTimeoutSeconds"`
 	CleanupPercentage  float64                `yaml:"cleanupPercentage" json:"cleanupPercentage"`
 }
@@ -590,7 +590,7 @@ type DownloadDBConfig struct {
 	LinkTTLSeconds     int                     `yaml:"linkTTLSeconds" json:"linkTTLSeconds"`
 	CleanupPercentage  float64                 `yaml:"cleanupPercentage" json:"cleanupPercentage"`
 	IdleTimeoutSeconds int                     `yaml:"idleTimeoutSeconds" json:"idleTimeoutSeconds"`
-	LastActiveTable    string                  `yaml:"lastActiveTable" json:"lastActiveTable"`
+	TicketStateTable   string                  `yaml:"ticketStateTable" json:"ticketStateTable"`
 	RateLimit          DownloadRateLimitConfig `yaml:"rateLimit" json:"rateLimit"`
 	Extra              map[string]any          `yaml:",inline" json:"-"`
 }
@@ -1292,8 +1292,8 @@ func (d *LandingDBConfig) ensureDefaults(envName string) error {
 	if d.IdleTimeoutSeconds < 0 {
 		d.IdleTimeoutSeconds = defaultLandingIdleTimeout
 	}
-	if d.IdleTable == "" {
-		d.IdleTable = "DOWNLOAD_LAST_ACTIVE_TABLE"
+	if d.TicketStateTable == "" {
+		d.TicketStateTable = "DOWNLOAD_TICKET_STATE_TABLE"
 	}
 
 	if d.Mode == "custom-pg-rest" {
@@ -1647,8 +1647,8 @@ func (d *DownloadDBConfig) ensureDefaults(envName string) error {
 	if d.IdleTimeoutSeconds < 0 {
 		d.IdleTimeoutSeconds = defaultDownloadIdleTimeout
 	}
-	if d.LastActiveTable == "" {
-		d.LastActiveTable = "DOWNLOAD_LAST_ACTIVE_TABLE"
+	if d.TicketStateTable == "" {
+		d.TicketStateTable = "DOWNLOAD_TICKET_STATE_TABLE"
 	}
 
 	d.RateLimit.ensureDefaults()

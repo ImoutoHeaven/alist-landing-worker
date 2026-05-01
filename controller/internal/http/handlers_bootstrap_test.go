@@ -99,6 +99,19 @@ func TestBootstrapIncludesWarmupBreakerFields(t *testing.T) {
 	}
 }
 
+func TestBootstrapUsesTicketStateTableContract(t *testing.T) {
+	body := bootstrapBodyForRole(t, "landing")
+	if !strings.Contains(body, "ticketStateTable") {
+		t.Fatalf("bootstrap must expose ticketStateTable fields: %s", body)
+	}
+	if strings.Contains(body, "idleTable") {
+		t.Fatalf("bootstrap must not expose legacy idleTable field: %s", body)
+	}
+	if strings.Contains(body, "lastActiveTable") {
+		t.Fatalf("bootstrap must not expose legacy lastActiveTable field: %s", body)
+	}
+}
+
 func TestHandleBootstrapDownloadIncludesSlotHandlerAuthHeader(t *testing.T) {
 	_, file, _, _ := runtime.Caller(0)
 	cfgPath := filepath.Join(filepath.Dir(file), "..", "..", "config.yaml")

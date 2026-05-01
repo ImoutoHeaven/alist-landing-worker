@@ -1286,7 +1286,7 @@ const resolveConfig = (env = {}, bootstrap = null) => {
   }
 
   const idleTimeoutRaw = `${idleTimeoutSeconds}s`;
-  const idleTableName = normalizeString(dbConfig.idleTable, 'DOWNLOAD_LAST_ACTIVE_TABLE') || 'DOWNLOAD_LAST_ACTIVE_TABLE';
+  const ticketStateTableName = normalizeString(dbConfig.ticketStateTable, 'DOWNLOAD_TICKET_STATE_TABLE') || 'DOWNLOAD_TICKET_STATE_TABLE';
 
   const payloadConfig = landingBootstrap.payload && typeof landingBootstrap.payload === 'object'
     ? landingBootstrap.payload
@@ -1352,6 +1352,7 @@ const resolveConfig = (env = {}, bootstrap = null) => {
     landingWorkerAddresses: normalizedLandingWorkerAddresses,
     verifyHeader: verifyHeaders,
     verifySecret: verifySecrets,
+    postgrestUrl,
     ipv4Only,
     downloadWorkerHrwEnabled,
     downloadWorkerHrwMaxSizeBytes,
@@ -1424,7 +1425,7 @@ const resolveConfig = (env = {}, bootstrap = null) => {
     maxDurationSeconds,
     idleTimeoutRaw,
     idleTimeoutSeconds,
-    idleTableName,
+    ticketStateTableName,
     crypt: {
       prefix: cryptPrefix || '',
       includes: cryptIncludes,
@@ -2279,10 +2280,16 @@ const createDownloadURL = async (
   { encodedPath, decodedPath, sign, clientIP, sizeBytes, expireTime, fileInfo, isCrypt = false, downloadDecision },
   ctx = null
 ) => {
+  // Required behavior for ticket-scoped idle gate refactor:
+  // 1. payload must include ticketNonce and issuance-stable idle_timeout
+  // 2. ticketHash = sha256(payload + ":" + payloadSign)
+  // 3. hardExpireAt = min(payload.expireTime, payloadSign expiry)
+  // 4. landing must seed ticket state synchronously before returning the URL
+  // 5. seed failure must abort issuance instead of logging and continuing
+  // 6. ticket table bootstrap defaults must align across landing and download repos
   const workerBaseURL = await selectDownloadWorker(config, decodedPath, sizeBytes, fileInfo);
   const normalizedFilePath = decodedPath.startsWith('/') ? decodedPath : `/${decodedPath}`;
   const normalizedSizeBytes = Number.isFinite(sizeBytes) && sizeBytes > 0 ? sizeBytes : 0;
-  const normalizedDbMode = typeof config.dbMode === 'string' ? config.dbMode.trim() : '';
   const idleTimeoutSeconds =
     Number.isFinite(config.idleTimeoutSeconds) && config.idleTimeoutSeconds >= 0
       ? Math.floor(config.idleTimeoutSeconds)
@@ -2325,12 +2332,14 @@ const createDownloadURL = async (
     { v: 2, issuer, workerAddress: workerOrigin },
     config.token
   );
+  const ticketNonce = generateNonce(16);
 
   const payloadObject = {
     v: 1,
     expireTime: resolvedExpireTime,
     filesize: normalizedSizeBytes,
     idle_timeout: idleTimeoutSeconds,
+    ticketNonce,
     encrypt,
     bindingStr: bindingResult.bindingStr,
     bindingVer: config.binding?.version || 1,
@@ -2338,106 +2347,115 @@ const createDownloadURL = async (
   };
   const payload = encodeJsonToBase64Url(payloadObject);
   const payloadSign = await hmacSha256Sign(config.token, payload, expire);
+  const hardExpireAt = Math.min(resolvedExpireTime, expire);
+  const ticketHash = await sha256Hash(`${payload}:${payloadSign}`);
+  const issuedAt = Math.floor(Date.now() / 1000);
+
+  if (!ticketNonce || !ticketHash || !Number.isFinite(hardExpireAt) || hardExpireAt <= 0) {
+    throw new Error('ticket contract generation failed');
+  }
+
+  if (config.dbMode !== 'custom-pg-rest' || !config.ticketStateTableName) {
+    throw new Error('ticket-state db configuration missing');
+  }
+
+  await seedTicketRecord({
+    clientIP,
+    path: normalizedFilePath,
+    dbMode: config.dbMode,
+    postgrestUrl: config.postgrestUrl,
+    rateLimitConfig: config.rateLimitConfig,
+    cacheConfig: config.cacheConfig,
+    verifyHeader: config.verifyHeader,
+    verifySecret: config.verifySecret,
+    ticketStateTableName: config.ticketStateTableName,
+    ipv4Suffix: config.ipv4Suffix,
+    ipv6Suffix: config.ipv6Suffix,
+    ticketHash,
+    issuedAt,
+    hardExpireAt,
+  });
 
   const downloadURLObj = new URL(encodedPath, workerBaseURL);
   downloadURLObj.searchParams.set('payload', payload);
   downloadURLObj.searchParams.set('payloadSign', payloadSign);
 
-  if (idleTimeoutSeconds > 0 && ctx && typeof ctx.waitUntil === 'function') {
-    ctx.waitUntil(
-      writeIdleInitialRecord(ctx, {
-        clientIP,
-        path: decodedPath,
-        dbMode: config.dbMode,
-        rateLimitConfig: config.rateLimitConfig,
-        cacheConfig: config.cacheConfig,
-        verifyHeader: config.verifyHeader,
-        verifySecret: config.verifySecret,
-        idleTableName: config.idleTableName,
-        ipv4Suffix: config.ipv4Suffix,
-        ipv6Suffix: config.ipv6Suffix,
-      })
-    );
-  }
-
   return downloadURLObj.toString();
 };
 
 /**
- * Write initial IDLE record when download link is generated.
- * @param {ExecutionContext|null} ctx
+ * Seed ticket state before returning the signed download URL.
  * @param {object} config
  */
-async function writeIdleInitialRecord(ctx, config) {
+async function seedTicketRecord(config) {
   const {
     clientIP,
     path,
     dbMode,
+    postgrestUrl,
     rateLimitConfig,
     cacheConfig,
     verifyHeader,
     verifySecret,
-    idleTableName,
+    ticketStateTableName,
     ipv4Suffix,
     ipv6Suffix,
+    ticketHash,
+    issuedAt,
+    hardExpireAt,
   } = config || {};
 
-  if (!clientIP || !path || dbMode !== 'custom-pg-rest' || !idleTableName) {
-    return;
+  if (
+    dbMode !== 'custom-pg-rest'
+    || !ticketStateTableName
+    || !ticketHash
+    || !Number.isFinite(issuedAt)
+    || issuedAt <= 0
+    || !Number.isFinite(hardExpireAt)
+    || hardExpireAt <= 0
+  ) {
+    throw new Error('ticket-state db configuration missing');
   }
 
-  try {
-    const ipSubnet = calculateIPSubnet(clientIP, ipv4Suffix, ipv6Suffix);
-    if (!ipSubnet) {
-      console.log('[IDLE] Failed to calculate IP subnet');
-      return;
-    }
+  const ipSubnet = clientIP ? calculateIPSubnet(clientIP, ipv4Suffix, ipv6Suffix) : '';
+  const [ipHash, pathHash] = await Promise.all([
+    ipSubnet ? sha256Hash(ipSubnet) : Promise.resolve(null),
+    path ? sha256Hash(path) : Promise.resolve(null),
+  ]);
 
-    const [ipHash, pathHash] = await Promise.all([
-      sha256Hash(ipSubnet),
-      sha256Hash(path),
-    ]);
+  const ticketPostgrestUrl =
+    postgrestUrl || rateLimitConfig?.postgrestUrl || cacheConfig?.postgrestUrl;
+  if (!ticketPostgrestUrl) {
+    throw new Error('ticket-state db configuration missing');
+  }
 
-    if (!ipHash || !pathHash) {
-      console.log('[IDLE] Failed to calculate hashes');
-      return;
-    }
+  const headers = {
+    'Content-Type': 'application/json',
+    Prefer: 'return=representation',
+  };
+  applyVerifyHeaders(headers, verifyHeader, verifySecret);
 
-    const now = Math.floor(Date.now() / 1000);
+  const response = await fetch(`${ticketPostgrestUrl}/rpc/download_seed_ticket`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      p_ticket_hash: ticketHash,
+      p_issued_at: issuedAt,
+      p_hard_expire_at: hardExpireAt,
+      p_ip_hash: ipHash,
+      p_path_hash: pathHash,
+      p_table_name: ticketStateTableName,
+    }),
+  });
 
-    const idlePostgrestUrl =
-      rateLimitConfig?.postgrestUrl || cacheConfig?.postgrestUrl;
-    if (!idlePostgrestUrl) {
-      console.log('[IDLE] PostgREST URL missing');
-      return;
-    }
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => '');
+    throw new Error(`ticket seed failed (${response.status}): ${errorText}`);
+  }
 
-    const headers = {
-      'Content-Type': 'application/json',
-      Prefer: 'return=representation',
-    };
-    applyVerifyHeaders(headers, verifyHeader, verifySecret);
-
-    const response = await fetch(`${idlePostgrestUrl}/rpc/download_update_last_active`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        p_ip_hash: ipHash,
-        p_path_hash: pathHash,
-        p_last_access_time: now,
-        p_table_name: idleTableName,
-      }),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => '');
-      console.log('[IDLE] PostgREST write failed:', response.status, errorText);
-      return;
-    }
-
-    console.log('[IDLE] PostgREST write success');
-  } catch (error) {
-    console.error('[IDLE] Failed to write initial record:', error instanceof Error ? error.message : String(error));
+  const seedResult = await response.json().catch(() => null);
+  if (seedResult?.result !== 'seeded') {
+    throw new Error(`ticket seed rejected: ${seedResult?.result || 'unknown'}`);
   }
 }
 

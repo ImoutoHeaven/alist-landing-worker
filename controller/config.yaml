@@ -202,7 +202,7 @@ envs:
           tableName: "IP_LIMIT_TABLE" # Table storing IP rate limit entries
           fileTableName: "IP_FILE_LIMIT_TABLE" # Table storing file-level limits
           cleanupPercentage: 5 # Chance (0-100) of cleaning rate limit tables
-        idleTable: "DOWNLOAD_LAST_ACTIVE_TABLE" # Table tracking landing idle time (shared with download worker init.sql)
+        ticketStateTable: "DOWNLOAD_TICKET_STATE_TABLE" # Table tracking ticket issuance state (shared with download worker init.sql)
         idleTimeoutSeconds: 0 # Idle timeout before cleanup; 0 disables
       crypt:
         prefix: "" # Path prefix requiring encryption; empty disables
@@ -237,7 +237,7 @@ envs:
         linkTTLSeconds: 1800 # TTL for cached download links; seconds >0
         cleanupPercentage: 1 # Chance (0-100) of running cache cleanup per request
         idleTimeoutSeconds: 0 # Idle timeout before evicting sessions; 0 disables
-        lastActiveTable: "DOWNLOAD_LAST_ACTIVE_TABLE" # Table for tracking last active time (must match init2.sql)
+        ticketStateTable: "DOWNLOAD_TICKET_STATE_TABLE" # Table for tracking ticket state (must match download worker init.sql)
         rateLimit:
           enabled: false # Toggle IP rate limiting on download worker (default=false)
           windowSeconds: 0 # Rate limit window in seconds; >0 when enabled
@@ -592,7 +592,7 @@ envs:
           tableName: "IP_LIMIT_TABLE"
           fileTableName: "IP_FILE_LIMIT_TABLE"
           cleanupPercentage: 5
-        idleTable: "DOWNLOAD_LAST_ACTIVE_TABLE"
+        ticketStateTable: "DOWNLOAD_TICKET_STATE_TABLE"
         idleTimeoutSeconds: 0
       crypt:
         prefix: ""
@@ -627,7 +627,7 @@ envs:
         linkTTLSeconds: 1800
         cleanupPercentage: 1
         idleTimeoutSeconds: 0
-        lastActiveTable: "DOWNLOAD_LAST_ACTIVE_TABLE"
+        ticketStateTable: "DOWNLOAD_TICKET_STATE_TABLE"
         rateLimit:
           enabled: false
           windowSeconds: 0

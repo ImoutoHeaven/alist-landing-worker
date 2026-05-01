@@ -286,6 +286,19 @@ func TestSampleConfigAlignment(t *testing.T) {
 	}
 }
 
+func TestSampleConfigUsesTicketStateTableKeys(t *testing.T) {
+	text := sampleConfigText(t)
+	if !strings.Contains(text, "ticketStateTable:") {
+		t.Fatalf("config.yaml must declare ticketStateTable keys")
+	}
+	if strings.Contains(text, "idleTable:") {
+		t.Fatalf("config.yaml must not keep landing idleTable keys once ticket contract is enabled")
+	}
+	if strings.Contains(text, "lastActiveTable:") {
+		t.Fatalf("config.yaml must not keep download lastActiveTable keys once ticket contract is enabled")
+	}
+}
+
 func TestLoadAllowsCaseInsensitiveSlotHandlerAuthHeaderMatch(t *testing.T) {
 	_, file, _, _ := runtime.Caller(0)
 	cfgPath := filepath.Join(filepath.Dir(file), "..", "..", "config.yaml")
