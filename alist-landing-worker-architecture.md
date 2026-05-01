@@ -96,8 +96,9 @@ Worker 入口逻辑（`fetch`）顺序：
 11. **生成下载 URL**：  
     - 选择 download worker：随机或 HRW（`downloadWorkerHrwEnabled` + 小文件阈值）。  
     - 生成 `bindingStr`（基于 `decision.download.checkOriginMode` 与 `common.binding`）。  
-    - 构造 `payload`（`expireTime/filesize/idle_timeout/encrypt/bindingStr/bindingVer/isCrypted`）并签名为 `payloadSign`。  
-    - 写入可选 `idle` 记录。
+    - 构造 `payload`（`expireTime/filesize/idle_timeout/ticketNonce/encrypt/bindingStr/bindingVer/isCrypted`）并签名为 `payloadSign`。  
+    - 计算 `hardExpireAt = min(payload.expireTime, payloadSign expiry)` 与 `ticketHash = sha256(payload + ":" + payloadSign)`。
+    - 同步调用 `download_seed_ticket` 写入 ticket state；seed 失败会中止签发，不返回下载 URL。
 12. 返回 JSON：包含 `download.url`、`meta`，并在需要时返回 webDownloader / decrypt 参数。
 
 ## 5. 普通路径处理（落地页或快速 302）
@@ -195,6 +196,7 @@ Worker 内部维护 LRU 缓存用于：
 - `expireTime`
 - `filesize`
 - `idle_timeout`
+- `ticketNonce`
 - `encrypt`：AES-256-GCM 加密的 `{ v:2, issuer, workerAddress }`
 - `bindingStr`
 - `bindingVer`
@@ -206,9 +208,13 @@ Worker 内部维护 LRU 缓存用于：
 - 不参与绑定的字段统一填 `any`。  
 - `bindingStr = base64url(HMAC_SHA256(tokenHmacKey, canonical))`（由 `decision.download.checkOriginMode` + `common.binding` 决定参与字段）。
 
-### 8.4 Idle 记录
+### 8.4 Ticket State Seed
 
-当 `landing.db.idleTimeoutSeconds > 0` 时，会调用 `download_update_last_active` 写入 `DOWNLOAD_LAST_ACTIVE_TABLE` 初始记录。
+- landing 在签发前把 `ticketNonce` 与 `idle_timeout` 写入 `payload`，再生成 `payloadSign`
+- ticket 身份固定为 `ticketHash = sha256(payload + ":" + payloadSign)`
+- `hardExpireAt` 取 `payload.expireTime` 与 `payloadSign` expiry 的较小值
+- landing 会同步调用 `download_seed_ticket`，按 `TICKET_HASH` 写入 unused ticket state
+- seed 失败或碰撞会直接中止签发，signed URL 不会返回给客户端
 
 ## 9. 前端与下载模式
 
