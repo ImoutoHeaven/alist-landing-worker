@@ -489,6 +489,21 @@ func TestSampleConfigDocumentsExplicitDownloadAdmissionBlocksPerEnv(t *testing.T
 			"modes:",
 			"acquireTimeoutMs:",
 			"releaseTimeoutMs:",
+			"heartbeat:",
+			"path:",
+			"intervalMs:",
+			"timeoutMs:",
+			"reconnectGraceMs:",
+			"helloTimeoutMs:",
+			"startTimeoutMs:",
+			"ackTimeoutMs:",
+			"initialConnectMaxAttempts:",
+			"initialConnectMaxElapsedMs:",
+			"reconnectMaxAttempts:",
+			"reconnectMaxElapsedMs:",
+			"reconnectBaseDelayMs:",
+			"reconnectMaxDelayMs:",
+			"reconnectSafetyMarginMs:",
 		} {
 			if !strings.Contains(tcBlock, want) {
 				t.Fatalf("config.yaml %s trueConcurrency block missing %s", env, want)
@@ -498,6 +513,31 @@ func TestSampleConfigDocumentsExplicitDownloadAdmissionBlocksPerEnv(t *testing.T
 }
 
 func TestSampleConfigAlignsTrueConcurrencyContract(t *testing.T) {
+	assertHeartbeat := func(t *testing.T, hb DownloadTrueConcurrencyHeartbeatConfig) {
+		t.Helper()
+		if !hb.Enabled || !hb.Required {
+			t.Fatalf("heartbeat must be enabled and required")
+		}
+		if hb.Path != "/api/v1/concurrency/heartbeat" {
+			t.Fatalf("unexpected path: %q", hb.Path)
+		}
+		if hb.IntervalMs != 5000 || hb.TimeoutMs != 15000 || hb.ReconnectGraceMs != 12000 {
+			t.Fatalf("unexpected heartbeat timing: %+v", hb)
+		}
+		if hb.HelloTimeoutMs != 2000 || hb.StartTimeoutMs != 7000 || hb.AckTimeoutMs != 2000 {
+			t.Fatalf("unexpected ack/start timing: %+v", hb)
+		}
+		if hb.InitialConnectMaxAttempts != 3 || hb.InitialConnectMaxElapsedMs != 3000 {
+			t.Fatalf("unexpected initial connect budget: %+v", hb)
+		}
+		if hb.ReconnectMaxAttempts != 3 || hb.ReconnectMaxElapsedMs != 10000 {
+			t.Fatalf("unexpected reconnect budget: %+v", hb)
+		}
+		if hb.ReconnectBaseDelayMs != 250 || hb.ReconnectMaxDelayMs != 2000 || hb.ReconnectSafetyMarginMs != 1000 {
+			t.Fatalf("unexpected reconnect backoff: %+v", hb)
+		}
+	}
+
 	_, file, _, _ := runtime.Caller(0)
 	cfgPath := filepath.Join(filepath.Dir(file), "..", "..", "config.yaml")
 
@@ -534,6 +574,7 @@ func TestSampleConfigAlignsTrueConcurrencyContract(t *testing.T) {
 	if staging.Download.TrueConcurrency.ReleaseTimeoutMs != 1500 {
 		t.Fatalf("staging trueConcurrency releaseTimeoutMs not aligned: %d", staging.Download.TrueConcurrency.ReleaseTimeoutMs)
 	}
+	assertHeartbeat(t, staging.Download.TrueConcurrency.Heartbeat)
 
 	prod := cfg.Envs["prod"]
 	if !prod.Download.TrueConcurrency.Enabled {
@@ -562,6 +603,83 @@ func TestSampleConfigAlignsTrueConcurrencyContract(t *testing.T) {
 	}
 	if prod.Download.TrueConcurrency.ReleaseTimeoutMs != 1500 {
 		t.Fatalf("prod trueConcurrency releaseTimeoutMs not aligned: %d", prod.Download.TrueConcurrency.ReleaseTimeoutMs)
+	}
+	assertHeartbeat(t, prod.Download.TrueConcurrency.Heartbeat)
+}
+
+func TestLoadRejectsInvalidTrueConcurrencyHeartbeatConfig(t *testing.T) {
+	base := sampleConfigText(t)
+	for _, tc := range []struct {
+		name    string
+		mutate  func(string) string
+		wantErr string
+	}{
+		{
+			name: "heartbeat disabled when true concurrency enabled",
+			mutate: func(src string) string {
+				return strings.Replace(src, "          enabled: true\n          required: true\n", "          enabled: false\n          required: true\n", 1)
+			},
+			wantErr: "download.trueConcurrency.heartbeat.enabled",
+		},
+		{
+			name: "heartbeat not required when true concurrency enabled",
+			mutate: func(src string) string {
+				return strings.Replace(src, "          enabled: true\n          required: true\n", "          enabled: true\n          required: false\n", 1)
+			},
+			wantErr: "download.trueConcurrency.heartbeat.required",
+		},
+		{
+			name: "timeout less than interval",
+			mutate: func(src string) string {
+				return strings.Replace(src, "          timeoutMs: 15000\n", "          timeoutMs: 5000\n", 1)
+			},
+			wantErr: "download.trueConcurrency.heartbeat.timeoutMs",
+		},
+		{
+			name: "reconnect grace exceeds timeout",
+			mutate: func(src string) string {
+				return strings.Replace(src, "          reconnectGraceMs: 12000\n", "          reconnectGraceMs: 16000\n", 1)
+			},
+			wantErr: "download.trueConcurrency.heartbeat.reconnectGraceMs",
+		},
+		{
+			name: "reconnect safety margin exceeds grace",
+			mutate: func(src string) string {
+				return strings.Replace(src, "          reconnectSafetyMarginMs: 1000\n", "          reconnectSafetyMarginMs: 12000\n", 1)
+			},
+			wantErr: "download.trueConcurrency.heartbeat.reconnectSafetyMarginMs",
+		},
+		{
+			name: "initial connect budget exceeds start timeout budget",
+			mutate: func(src string) string {
+				return strings.Replace(src, "          initialConnectMaxElapsedMs: 3000\n", "          initialConnectMaxElapsedMs: 5001\n", 1)
+			},
+			wantErr: "download.trueConcurrency.heartbeat.startTimeoutMs",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := loadConfigFromText(t, tc.mutate(base))
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestLoadDefaultsTrueConcurrencyHeartbeatWhenOmitted(t *testing.T) {
+	text := replaceFirstTrueConcurrencyBlock(sampleConfigText(t), "      trueConcurrency:\n        enabled: true\n        hostPatterns:\n          - \"*.sharepoint.com\"\n        handlerUrl: \"https://concurrency-handler-staging.example.com\"\n        handlerAuthKey: \"replace-with-concurrency-handler-key\"\n        handlerAuthHeader: \"X-CQ-Auth\"\n        siteBucket:\n          mode: \"sharepoint\"\n        acquireTimeoutMs: 11500\n        releaseTimeoutMs: 1500\n")
+
+	cfg, err := loadConfigFromText(t, text)
+	if err != nil {
+		t.Fatalf("Load(temp config) failed: %v", err)
+	}
+
+	hb := cfg.Envs["staging"].Download.TrueConcurrency.Heartbeat
+	if !hb.Enabled || !hb.Required {
+		t.Fatalf("expected default heartbeat enabled+required, got %+v", hb)
+	}
+	if hb.Path != "/api/v1/concurrency/heartbeat" {
+		t.Fatalf("expected default heartbeat path, got %q", hb.Path)
 	}
 }
 

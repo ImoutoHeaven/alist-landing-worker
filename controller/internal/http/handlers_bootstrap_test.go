@@ -15,6 +15,31 @@ import (
 	"controller/internal/config"
 )
 
+func sampleConfigText(t *testing.T) string {
+	t.Helper()
+
+	_, file, _, _ := runtime.Caller(0)
+	cfgPath := filepath.Join(filepath.Dir(file), "..", "..", "config.yaml")
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read config.yaml: %v", err)
+	}
+	return string(data)
+}
+
+func loadConfigFromText(t *testing.T, text string) *config.RootConfig {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load(%s) failed: %v", path, err)
+	}
+	return cfg
+}
+
 func bootstrapBodyForRole(t *testing.T, role string) string {
 	t.Helper()
 
@@ -252,6 +277,7 @@ func TestHandleBootstrapDownloadIncludesTrueConcurrencyContract(t *testing.T) {
 		"siteBucket":        {},
 		"acquireTimeoutMs":  {},
 		"releaseTimeoutMs":  {},
+		"heartbeat":         {},
 	}
 	if len(rawResp.Download.TrueConcurrency) != len(expectedKeys) {
 		t.Fatalf("unexpected trueConcurrency field count: got %d want %d (%v)", len(rawResp.Download.TrueConcurrency), len(expectedKeys), rawResp.Download.TrueConcurrency)
@@ -283,7 +309,25 @@ func TestHandleBootstrapDownloadIncludesTrueConcurrencyContract(t *testing.T) {
 				HandlerAuthHeader string   `json:"handlerAuthHeader"`
 				AcquireTimeoutMs  int      `json:"acquireTimeoutMs"`
 				ReleaseTimeoutMs  int      `json:"releaseTimeoutMs"`
-				SiteBucket        struct {
+				Heartbeat         struct {
+					Enabled                    bool   `json:"enabled"`
+					Required                   bool   `json:"required"`
+					Path                       string `json:"path"`
+					IntervalMs                 int    `json:"intervalMs"`
+					TimeoutMs                  int    `json:"timeoutMs"`
+					ReconnectGraceMs           int    `json:"reconnectGraceMs"`
+					HelloTimeoutMs             int    `json:"helloTimeoutMs"`
+					StartTimeoutMs             int    `json:"startTimeoutMs"`
+					AckTimeoutMs               int    `json:"ackTimeoutMs"`
+					InitialConnectMaxAttempts  int    `json:"initialConnectMaxAttempts"`
+					InitialConnectMaxElapsedMs int    `json:"initialConnectMaxElapsedMs"`
+					ReconnectMaxAttempts       int    `json:"reconnectMaxAttempts"`
+					ReconnectMaxElapsedMs      int    `json:"reconnectMaxElapsedMs"`
+					ReconnectBaseDelayMs       int    `json:"reconnectBaseDelayMs"`
+					ReconnectMaxDelayMs        int    `json:"reconnectMaxDelayMs"`
+					ReconnectSafetyMarginMs    int    `json:"reconnectSafetyMarginMs"`
+				} `json:"heartbeat"`
+				SiteBucket struct {
 					Mode  string   `json:"mode"`
 					Modes []string `json:"modes"`
 				} `json:"siteBucket"`
@@ -313,6 +357,27 @@ func TestHandleBootstrapDownloadIncludesTrueConcurrencyContract(t *testing.T) {
 	}
 	if resp.Download.TrueConcurrency.ReleaseTimeoutMs != 1500 {
 		t.Fatalf("unexpected trueConcurrency releaseTimeoutMs: %d", resp.Download.TrueConcurrency.ReleaseTimeoutMs)
+	}
+	if !resp.Download.TrueConcurrency.Heartbeat.Enabled || !resp.Download.TrueConcurrency.Heartbeat.Required {
+		t.Fatalf("unexpected trueConcurrency heartbeat enabled/required: %+v", resp.Download.TrueConcurrency.Heartbeat)
+	}
+	if resp.Download.TrueConcurrency.Heartbeat.Path != "/api/v1/concurrency/heartbeat" {
+		t.Fatalf("unexpected trueConcurrency heartbeat path: %q", resp.Download.TrueConcurrency.Heartbeat.Path)
+	}
+	if resp.Download.TrueConcurrency.Heartbeat.IntervalMs != 5000 || resp.Download.TrueConcurrency.Heartbeat.TimeoutMs != 15000 || resp.Download.TrueConcurrency.Heartbeat.ReconnectGraceMs != 12000 {
+		t.Fatalf("unexpected trueConcurrency heartbeat timing: %+v", resp.Download.TrueConcurrency.Heartbeat)
+	}
+	if resp.Download.TrueConcurrency.Heartbeat.HelloTimeoutMs != 2000 || resp.Download.TrueConcurrency.Heartbeat.StartTimeoutMs != 7000 || resp.Download.TrueConcurrency.Heartbeat.AckTimeoutMs != 2000 {
+		t.Fatalf("unexpected trueConcurrency heartbeat ack/start timing: %+v", resp.Download.TrueConcurrency.Heartbeat)
+	}
+	if resp.Download.TrueConcurrency.Heartbeat.InitialConnectMaxAttempts != 3 || resp.Download.TrueConcurrency.Heartbeat.InitialConnectMaxElapsedMs != 3000 {
+		t.Fatalf("unexpected trueConcurrency heartbeat initial connect budget: %+v", resp.Download.TrueConcurrency.Heartbeat)
+	}
+	if resp.Download.TrueConcurrency.Heartbeat.ReconnectMaxAttempts != 3 || resp.Download.TrueConcurrency.Heartbeat.ReconnectMaxElapsedMs != 10000 {
+		t.Fatalf("unexpected trueConcurrency heartbeat reconnect budget: %+v", resp.Download.TrueConcurrency.Heartbeat)
+	}
+	if resp.Download.TrueConcurrency.Heartbeat.ReconnectBaseDelayMs != 250 || resp.Download.TrueConcurrency.Heartbeat.ReconnectMaxDelayMs != 2000 || resp.Download.TrueConcurrency.Heartbeat.ReconnectSafetyMarginMs != 1000 {
+		t.Fatalf("unexpected trueConcurrency heartbeat reconnect backoff: %+v", resp.Download.TrueConcurrency.Heartbeat)
 	}
 	if resp.Download.FairQueue.SiteBucket.Mode != "sharepoint" {
 		t.Fatalf("unexpected fairQueue siteBucket.mode: %q", resp.Download.FairQueue.SiteBucket.Mode)
@@ -529,6 +594,41 @@ func TestHandleBootstrapDownloadPreservesFirstOccurrenceOrderInMultiModeSiteBuck
 	}
 	if !reflect.DeepEqual(resp.Download.TrueConcurrency.SiteBucket.Modes, []string{"googledrive", "sharepoint"}) {
 		t.Fatalf("expected trueConcurrency multi-mode order to be preserved, got %+v", resp.Download.TrueConcurrency.SiteBucket.Modes)
+	}
+}
+
+func TestHandleBootstrapDownloadDefaultsTrueConcurrencyHeartbeatWhenOmitted(t *testing.T) {
+	text := strings.Replace(sampleConfigText(t), "        releaseTimeoutMs: 1500 # Release timeout budget in milliseconds; >0\n        heartbeat:\n          enabled: true\n          required: true\n          path: \"/api/v1/concurrency/heartbeat\"\n          intervalMs: 5000\n          timeoutMs: 15000\n          reconnectGraceMs: 12000\n          helloTimeoutMs: 2000\n          startTimeoutMs: 7000\n          ackTimeoutMs: 2000\n          initialConnectMaxAttempts: 3\n          initialConnectMaxElapsedMs: 3000\n          reconnectMaxAttempts: 3\n          reconnectMaxElapsedMs: 10000\n          reconnectBaseDelayMs: 250\n          reconnectMaxDelayMs: 2000\n          reconnectSafetyMarginMs: 1000\n", "        releaseTimeoutMs: 1500 # Release timeout budget in milliseconds; >0\n", 1)
+	cfg := loadConfigFromText(t, text)
+
+	ctrl := &Controller{Cfg: cfg}
+	req := httptest.NewRequest(http.MethodPost, "/api/v0/bootstrap", bytes.NewBufferString(`{"role":"download","env":"staging"}`))
+	w := httptest.NewRecorder()
+	ctrl.HandleBootstrap(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, w.Code)
+	}
+
+	var resp struct {
+		Download struct {
+			TrueConcurrency struct {
+				Heartbeat struct {
+					Enabled  bool   `json:"enabled"`
+					Required bool   `json:"required"`
+					Path     string `json:"path"`
+				} `json:"heartbeat"`
+			} `json:"trueConcurrency"`
+		} `json:"download"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode bootstrap response: %v", err)
+	}
+	if !resp.Download.TrueConcurrency.Heartbeat.Enabled || !resp.Download.TrueConcurrency.Heartbeat.Required {
+		t.Fatalf("expected normalized default heartbeat in bootstrap, got %+v", resp.Download.TrueConcurrency.Heartbeat)
+	}
+	if resp.Download.TrueConcurrency.Heartbeat.Path != "/api/v1/concurrency/heartbeat" {
+		t.Fatalf("expected default heartbeat path in bootstrap, got %q", resp.Download.TrueConcurrency.Heartbeat.Path)
 	}
 }
 

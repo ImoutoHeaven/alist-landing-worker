@@ -819,6 +819,20 @@ const normalizeHeaderMap = (value) => {
   return normalized;
 };
 
+const readBootstrapHeartbeatContract = (bootstrap) => {
+  const heartbeat = bootstrap?.download?.trueConcurrency?.heartbeat;
+  return heartbeat && typeof heartbeat === 'object' ? heartbeat : null;
+};
+
+const clonePlainObject = (value) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  return JSON.parse(JSON.stringify(value));
+};
+
+const readResolvedHeartbeatContract = (config) => config?.controllerTrueConcurrencyHeartbeat || null;
+
 const resolveConfig = (env = {}, bootstrap = null) => {
   const normalizeString = (value, defaultValue = '') => {
     if (value === undefined || value === null) return defaultValue;
@@ -873,6 +887,7 @@ const resolveConfig = (env = {}, bootstrap = null) => {
     };
   };
   const bindingConfig = normalizeBindingBootstrap(commonBootstrap.binding, bindingDefaults);
+  const controllerTrueConcurrencyHeartbeat = clonePlainObject(readBootstrapHeartbeatContract(bootstrap));
 
   const landingBootstrap = bootstrap && typeof bootstrap === 'object'
     ? bootstrap.landing || null
@@ -1347,6 +1362,7 @@ const resolveConfig = (env = {}, bootstrap = null) => {
   return {
     token,
     binding: bindingConfig,
+    controllerTrueConcurrencyHeartbeat,
     captchaBinding: captchaBindingConfig,
     workerAddresses: workerAddressesValue,
     landingWorkerAddresses: normalizedLandingWorkerAddresses,
@@ -1440,6 +1456,11 @@ const resolveConfig = (env = {}, bootstrap = null) => {
     clientDecryptEnabled,
     env,
   };
+};
+
+export const __landingTestHooks = {
+  resolveConfig,
+  readResolvedHeartbeatContract,
 };
 
 const verifyTurnstileToken = async (secretKey, token, remoteIP) => {

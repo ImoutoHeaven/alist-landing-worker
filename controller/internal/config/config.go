@@ -95,6 +95,20 @@ const (
 	downloadSiteBucketModeGoogleDrive       = "googledrive"
 	defaultTrueConcurrencyAcquireTimeoutMs  = 11500
 	defaultTrueConcurrencyReleaseTimeoutMs  = 1500
+	defaultTrueConcurrencyHeartbeatPath     = "/api/v1/concurrency/heartbeat"
+	defaultHeartbeatIntervalMs              = 5000
+	defaultHeartbeatTimeoutMs               = 15000
+	defaultHeartbeatReconnectGraceMs        = 12000
+	defaultHeartbeatHelloTimeoutMs          = 2000
+	defaultHeartbeatStartTimeoutMs          = 7000
+	defaultHeartbeatAckTimeoutMs            = 2000
+	defaultHeartbeatInitialConnectAttempts  = 3
+	defaultHeartbeatInitialConnectElapsedMs = 3000
+	defaultHeartbeatReconnectAttempts       = 3
+	defaultHeartbeatReconnectElapsedMs      = 10000
+	defaultHeartbeatReconnectBaseDelayMs    = 250
+	defaultHeartbeatReconnectMaxDelayMs     = 2000
+	defaultHeartbeatReconnectSafetyMs       = 1000
 	defaultSlotHandlerPollInterval          = 500
 	defaultSlotHandlerPollWindow            = 6000
 	defaultSlotHandlerMaxSlotHost           = 5
@@ -779,6 +793,40 @@ type DownloadTrueConcurrencySiteBucketConfig struct {
 	Modes []string `yaml:"modes" json:"modes"`
 }
 
+type DownloadTrueConcurrencyHeartbeatConfig struct {
+	Enabled                    bool   `yaml:"enabled" json:"enabled"`
+	Required                   bool   `yaml:"required" json:"required"`
+	Path                       string `yaml:"path" json:"path"`
+	IntervalMs                 int    `yaml:"intervalMs" json:"intervalMs"`
+	TimeoutMs                  int    `yaml:"timeoutMs" json:"timeoutMs"`
+	ReconnectGraceMs           int    `yaml:"reconnectGraceMs" json:"reconnectGraceMs"`
+	HelloTimeoutMs             int    `yaml:"helloTimeoutMs" json:"helloTimeoutMs"`
+	StartTimeoutMs             int    `yaml:"startTimeoutMs" json:"startTimeoutMs"`
+	AckTimeoutMs               int    `yaml:"ackTimeoutMs" json:"ackTimeoutMs"`
+	InitialConnectMaxAttempts  int    `yaml:"initialConnectMaxAttempts" json:"initialConnectMaxAttempts"`
+	InitialConnectMaxElapsedMs int    `yaml:"initialConnectMaxElapsedMs" json:"initialConnectMaxElapsedMs"`
+	ReconnectMaxAttempts       int    `yaml:"reconnectMaxAttempts" json:"reconnectMaxAttempts"`
+	ReconnectMaxElapsedMs      int    `yaml:"reconnectMaxElapsedMs" json:"reconnectMaxElapsedMs"`
+	ReconnectBaseDelayMs       int    `yaml:"reconnectBaseDelayMs" json:"reconnectBaseDelayMs"`
+	ReconnectMaxDelayMs        int    `yaml:"reconnectMaxDelayMs" json:"reconnectMaxDelayMs"`
+	ReconnectSafetyMarginMs    int    `yaml:"reconnectSafetyMarginMs" json:"reconnectSafetyMarginMs"`
+	enabledSet                 bool   `yaml:"-" json:"-"`
+	requiredSet                bool   `yaml:"-" json:"-"`
+	intervalSet                bool   `yaml:"-" json:"-"`
+	timeoutSet                 bool   `yaml:"-" json:"-"`
+	reconnectGraceSet          bool   `yaml:"-" json:"-"`
+	helloTimeoutSet            bool   `yaml:"-" json:"-"`
+	startTimeoutSet            bool   `yaml:"-" json:"-"`
+	ackTimeoutSet              bool   `yaml:"-" json:"-"`
+	initialConnectAttemptsSet  bool   `yaml:"-" json:"-"`
+	initialConnectElapsedSet   bool   `yaml:"-" json:"-"`
+	reconnectAttemptsSet       bool   `yaml:"-" json:"-"`
+	reconnectElapsedSet        bool   `yaml:"-" json:"-"`
+	reconnectBaseDelaySet      bool   `yaml:"-" json:"-"`
+	reconnectMaxDelaySet       bool   `yaml:"-" json:"-"`
+	reconnectSafetyMarginSet   bool   `yaml:"-" json:"-"`
+}
+
 type DownloadTrueConcurrencyConfig struct {
 	Enabled           bool                                    `yaml:"enabled" json:"enabled"`
 	HostPatterns      []string                                `yaml:"hostPatterns" json:"hostPatterns"`
@@ -786,6 +834,7 @@ type DownloadTrueConcurrencyConfig struct {
 	HandlerAuthKey    string                                  `yaml:"handlerAuthKey" json:"handlerAuthKey"`
 	HandlerAuthHeader string                                  `yaml:"handlerAuthHeader" json:"handlerAuthHeader"`
 	SiteBucket        DownloadTrueConcurrencySiteBucketConfig `yaml:"siteBucket" json:"siteBucket"`
+	Heartbeat         DownloadTrueConcurrencyHeartbeatConfig  `yaml:"heartbeat" json:"heartbeat"`
 	AcquireTimeoutMs  int                                     `yaml:"acquireTimeoutMs" json:"acquireTimeoutMs"`
 	ReleaseTimeoutMs  int                                     `yaml:"releaseTimeoutMs" json:"releaseTimeoutMs"`
 	acquireTimeoutSet bool                                    `yaml:"-" json:"-"`
@@ -857,6 +906,91 @@ func (c *DownloadTrueConcurrencyConfig) UnmarshalYAML(value *yaml.Node) error {
 	*c = DownloadTrueConcurrencyConfig(aux)
 	c.acquireTimeoutSet = acquireTimeoutSet
 	c.releaseTimeoutSet = releaseTimeoutSet
+	return nil
+}
+
+func (h *DownloadTrueConcurrencyHeartbeatConfig) UnmarshalYAML(value *yaml.Node) error {
+	type raw DownloadTrueConcurrencyHeartbeatConfig
+	var aux raw
+	enabledSet, err := hasYAMLMappingKey(value, "enabled")
+	if err != nil {
+		return err
+	}
+	requiredSet, err := hasYAMLMappingKey(value, "required")
+	if err != nil {
+		return err
+	}
+	intervalSet, err := hasYAMLMappingKey(value, "intervalMs")
+	if err != nil {
+		return err
+	}
+	timeoutSet, err := hasYAMLMappingKey(value, "timeoutMs")
+	if err != nil {
+		return err
+	}
+	reconnectGraceSet, err := hasYAMLMappingKey(value, "reconnectGraceMs")
+	if err != nil {
+		return err
+	}
+	helloTimeoutSet, err := hasYAMLMappingKey(value, "helloTimeoutMs")
+	if err != nil {
+		return err
+	}
+	startTimeoutSet, err := hasYAMLMappingKey(value, "startTimeoutMs")
+	if err != nil {
+		return err
+	}
+	ackTimeoutSet, err := hasYAMLMappingKey(value, "ackTimeoutMs")
+	if err != nil {
+		return err
+	}
+	initialConnectAttemptsSet, err := hasYAMLMappingKey(value, "initialConnectMaxAttempts")
+	if err != nil {
+		return err
+	}
+	initialConnectElapsedSet, err := hasYAMLMappingKey(value, "initialConnectMaxElapsedMs")
+	if err != nil {
+		return err
+	}
+	reconnectAttemptsSet, err := hasYAMLMappingKey(value, "reconnectMaxAttempts")
+	if err != nil {
+		return err
+	}
+	reconnectElapsedSet, err := hasYAMLMappingKey(value, "reconnectMaxElapsedMs")
+	if err != nil {
+		return err
+	}
+	reconnectBaseDelaySet, err := hasYAMLMappingKey(value, "reconnectBaseDelayMs")
+	if err != nil {
+		return err
+	}
+	reconnectMaxDelaySet, err := hasYAMLMappingKey(value, "reconnectMaxDelayMs")
+	if err != nil {
+		return err
+	}
+	reconnectSafetyMarginSet, err := hasYAMLMappingKey(value, "reconnectSafetyMarginMs")
+	if err != nil {
+		return err
+	}
+	if err := value.Decode(&aux); err != nil {
+		return err
+	}
+	*h = DownloadTrueConcurrencyHeartbeatConfig(aux)
+	h.enabledSet = enabledSet
+	h.requiredSet = requiredSet
+	h.intervalSet = intervalSet
+	h.timeoutSet = timeoutSet
+	h.reconnectGraceSet = reconnectGraceSet
+	h.helloTimeoutSet = helloTimeoutSet
+	h.startTimeoutSet = startTimeoutSet
+	h.ackTimeoutSet = ackTimeoutSet
+	h.initialConnectAttemptsSet = initialConnectAttemptsSet
+	h.initialConnectElapsedSet = initialConnectElapsedSet
+	h.reconnectAttemptsSet = reconnectAttemptsSet
+	h.reconnectElapsedSet = reconnectElapsedSet
+	h.reconnectBaseDelaySet = reconnectBaseDelaySet
+	h.reconnectMaxDelaySet = reconnectMaxDelaySet
+	h.reconnectSafetyMarginSet = reconnectSafetyMarginSet
 	return nil
 }
 
@@ -1883,6 +2017,9 @@ func (c *DownloadTrueConcurrencyConfig) ensureDefaults(envName string) error {
 	}
 	c.SiteBucket.Mode = mode
 	c.SiteBucket.Modes = modes
+	if err := c.Heartbeat.ensureDefaults(envName, c.Enabled); err != nil {
+		return err
+	}
 	if c.acquireTimeoutSet {
 		if c.AcquireTimeoutMs <= 0 {
 			return fmt.Errorf("download.trueConcurrency.acquireTimeoutMs must be > 0 for env %s", envName)
@@ -1909,6 +2046,94 @@ func (c *DownloadTrueConcurrencyConfig) ensureDefaults(envName string) error {
 		}
 	}
 
+	return nil
+}
+
+func (h *DownloadTrueConcurrencyHeartbeatConfig) ensureDefaults(envName string, trueConcurrencyEnabled bool) error {
+	applyPositiveDefault := func(fieldName string, ptr *int, present bool, fallback int) error {
+		if !present {
+			*ptr = fallback
+			return nil
+		}
+		if *ptr <= 0 {
+			return fmt.Errorf("download.trueConcurrency.heartbeat.%s must be > 0 for env %s", fieldName, envName)
+		}
+		return nil
+	}
+
+	if !h.enabledSet {
+		h.Enabled = true
+	}
+	if !h.requiredSet {
+		h.Required = true
+	}
+	h.Path = strings.TrimSpace(h.Path)
+	if h.Path == "" {
+		h.Path = defaultTrueConcurrencyHeartbeatPath
+	}
+	if err := applyPositiveDefault("intervalMs", &h.IntervalMs, h.intervalSet, defaultHeartbeatIntervalMs); err != nil {
+		return err
+	}
+	if err := applyPositiveDefault("timeoutMs", &h.TimeoutMs, h.timeoutSet, defaultHeartbeatTimeoutMs); err != nil {
+		return err
+	}
+	if err := applyPositiveDefault("reconnectGraceMs", &h.ReconnectGraceMs, h.reconnectGraceSet, defaultHeartbeatReconnectGraceMs); err != nil {
+		return err
+	}
+	if err := applyPositiveDefault("helloTimeoutMs", &h.HelloTimeoutMs, h.helloTimeoutSet, defaultHeartbeatHelloTimeoutMs); err != nil {
+		return err
+	}
+	if err := applyPositiveDefault("startTimeoutMs", &h.StartTimeoutMs, h.startTimeoutSet, defaultHeartbeatStartTimeoutMs); err != nil {
+		return err
+	}
+	if err := applyPositiveDefault("ackTimeoutMs", &h.AckTimeoutMs, h.ackTimeoutSet, defaultHeartbeatAckTimeoutMs); err != nil {
+		return err
+	}
+	if err := applyPositiveDefault("initialConnectMaxAttempts", &h.InitialConnectMaxAttempts, h.initialConnectAttemptsSet, defaultHeartbeatInitialConnectAttempts); err != nil {
+		return err
+	}
+	if err := applyPositiveDefault("initialConnectMaxElapsedMs", &h.InitialConnectMaxElapsedMs, h.initialConnectElapsedSet, defaultHeartbeatInitialConnectElapsedMs); err != nil {
+		return err
+	}
+	if err := applyPositiveDefault("reconnectMaxAttempts", &h.ReconnectMaxAttempts, h.reconnectAttemptsSet, defaultHeartbeatReconnectAttempts); err != nil {
+		return err
+	}
+	if err := applyPositiveDefault("reconnectMaxElapsedMs", &h.ReconnectMaxElapsedMs, h.reconnectElapsedSet, defaultHeartbeatReconnectElapsedMs); err != nil {
+		return err
+	}
+	if err := applyPositiveDefault("reconnectBaseDelayMs", &h.ReconnectBaseDelayMs, h.reconnectBaseDelaySet, defaultHeartbeatReconnectBaseDelayMs); err != nil {
+		return err
+	}
+	if err := applyPositiveDefault("reconnectMaxDelayMs", &h.ReconnectMaxDelayMs, h.reconnectMaxDelaySet, defaultHeartbeatReconnectMaxDelayMs); err != nil {
+		return err
+	}
+	if err := applyPositiveDefault("reconnectSafetyMarginMs", &h.ReconnectSafetyMarginMs, h.reconnectSafetyMarginSet, defaultHeartbeatReconnectSafetyMs); err != nil {
+		return err
+	}
+	if h.Required && !h.Enabled {
+		return fmt.Errorf("download.trueConcurrency.heartbeat.enabled must be true for env %s when heartbeat.required is true", envName)
+	}
+	if trueConcurrencyEnabled && !h.Enabled {
+		return fmt.Errorf("download.trueConcurrency.heartbeat.enabled must be true for env %s when trueConcurrency.enabled is true", envName)
+	}
+	if trueConcurrencyEnabled && !h.Required {
+		return fmt.Errorf("download.trueConcurrency.heartbeat.required must be true for env %s when trueConcurrency.enabled is true", envName)
+	}
+	if h.TimeoutMs <= h.IntervalMs {
+		return fmt.Errorf("download.trueConcurrency.heartbeat.timeoutMs must be > intervalMs for env %s", envName)
+	}
+	if h.ReconnectGraceMs > h.TimeoutMs {
+		return fmt.Errorf("download.trueConcurrency.heartbeat.reconnectGraceMs must be <= timeoutMs for env %s", envName)
+	}
+	if h.ReconnectSafetyMarginMs >= h.ReconnectGraceMs {
+		return fmt.Errorf("download.trueConcurrency.heartbeat.reconnectSafetyMarginMs must be < reconnectGraceMs for env %s", envName)
+	}
+	if h.ReconnectMaxElapsedMs > h.ReconnectGraceMs-h.ReconnectSafetyMarginMs {
+		return fmt.Errorf("download.trueConcurrency.heartbeat.reconnectMaxElapsedMs must be <= reconnectGraceMs - reconnectSafetyMarginMs for env %s", envName)
+	}
+	if h.InitialConnectMaxElapsedMs+h.HelloTimeoutMs > h.StartTimeoutMs-h.ReconnectSafetyMarginMs {
+		return fmt.Errorf("download.trueConcurrency.heartbeat.startTimeoutMs must accommodate initialConnectMaxElapsedMs + helloTimeoutMs + reconnectSafetyMarginMs for env %s", envName)
+	}
 	return nil
 }
 

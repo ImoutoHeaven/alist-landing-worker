@@ -271,6 +271,23 @@ envs:
           modes: ["sharepoint"] # Authoritative provider mode set; allowed values: host|sharepoint|googledrive
         acquireTimeoutMs: 11500 # Acquire timeout budget in milliseconds; >0
         releaseTimeoutMs: 1500 # Release timeout budget in milliseconds; >0
+        heartbeat:
+          enabled: true
+          required: true
+          path: "/api/v1/concurrency/heartbeat"
+          intervalMs: 5000
+          timeoutMs: 15000
+          reconnectGraceMs: 12000
+          helloTimeoutMs: 2000
+          startTimeoutMs: 7000
+          ackTimeoutMs: 2000
+          initialConnectMaxAttempts: 3
+          initialConnectMaxElapsedMs: 3000
+          reconnectMaxAttempts: 3
+          reconnectMaxElapsedMs: 10000
+          reconnectBaseDelayMs: 250
+          reconnectMaxDelayMs: 2000
+          reconnectSafetyMarginMs: 1000
       throttleProfiles:
         default:
           hostPatterns: [] # Host patterns this throttle profile applies to; glob list
@@ -660,6 +677,23 @@ envs:
           modes: ["sharepoint"]
         acquireTimeoutMs: 11500
         releaseTimeoutMs: 1500
+        heartbeat:
+          enabled: true
+          required: true
+          path: "/api/v1/concurrency/heartbeat"
+          intervalMs: 5000
+          timeoutMs: 15000
+          reconnectGraceMs: 12000
+          helloTimeoutMs: 2000
+          startTimeoutMs: 7000
+          ackTimeoutMs: 2000
+          initialConnectMaxAttempts: 3
+          initialConnectMaxElapsedMs: 3000
+          reconnectMaxAttempts: 3
+          reconnectMaxElapsedMs: 10000
+          reconnectBaseDelayMs: 250
+          reconnectMaxDelayMs: 2000
+          reconnectSafetyMarginMs: 1000
       throttleProfiles:
         default:
           hostPatterns: []
