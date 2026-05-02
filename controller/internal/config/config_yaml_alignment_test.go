@@ -85,6 +85,21 @@ func replaceFirstTrueConcurrencyBlockWithMergeTemplate(text string, templateName
 	return replaceFirstTrueConcurrencyBlock(text, merged)
 }
 
+func removeDownloadIdleTimeoutSecondsLines(text string) string {
+	return strings.ReplaceAll(text, "\n        idleTimeoutSeconds: 0 # Idle timeout before evicting sessions; 0 disables", "")
+}
+
+func injectIntoDownloadDBBlock(text string, injectedLine string) string {
+	start := strings.Index(text, "    download:")
+	if start < 0 {
+		return text
+	}
+	tail := text[start:]
+	marker := "        ticketStateTable: \"DOWNLOAD_TICKET_STATE_TABLE\""
+	replaced := strings.Replace(tail, marker, marker+"\n"+injectedLine, 1)
+	return text[:start] + replaced
+}
+
 func envSectionStart(text string, env string) int {
 	return strings.Index(text, "  "+env+":")
 }
@@ -296,6 +311,26 @@ func TestSampleConfigUsesTicketStateTableKeys(t *testing.T) {
 	}
 	if strings.Contains(text, "lastActiveTable:") {
 		t.Fatalf("config.yaml must not keep download lastActiveTable keys once ticket contract is enabled")
+	}
+}
+
+func TestValidateRejectsMixedTicketStateModes(t *testing.T) {
+	text := removeDownloadIdleTimeoutSecondsLines(sampleConfigText(t))
+	text = strings.Replace(text, "        mode: \"custom-pg-rest\"", "        mode: \"\"", 1)
+
+	_, err := loadConfigFromText(t, text)
+	if err == nil || !strings.Contains(err.Error(), "landing.db.mode and download.db.mode must match") {
+		t.Fatalf("expected mixed-mode validation error, got %v", err)
+	}
+}
+
+func TestValidateRejectsDownloadIdleTimeoutSecondsField(t *testing.T) {
+	text := removeDownloadIdleTimeoutSecondsLines(sampleConfigText(t))
+	text = injectIntoDownloadDBBlock(text, "        idleTimeoutSeconds: 60")
+
+	_, err := loadConfigFromText(t, text)
+	if err == nil || !strings.Contains(err.Error(), "download.db.idleTimeoutSeconds is not supported") {
+		t.Fatalf("expected stale download idle-timeout validation error, got %v", err)
 	}
 }
 

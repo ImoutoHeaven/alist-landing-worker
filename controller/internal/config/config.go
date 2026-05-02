@@ -581,18 +581,36 @@ type DownloadRateLimitConfig struct {
 
 // DownloadDBConfig collects PostgREST access and cache settings.
 type DownloadDBConfig struct {
-	Mode               string                  `yaml:"mode" json:"mode"`
-	PostgrestURL       string                  `yaml:"postgrestUrl" json:"postgrestUrl"`
-	VerifyHeader       []string                `yaml:"verifyHeader" json:"verifyHeader"`
-	VerifySecret       []string                `yaml:"verifySecret" json:"verifySecret"`
-	CacheEnabled       *bool                   `yaml:"cacheEnabled" json:"cacheEnabled"`
-	CacheTable         string                  `yaml:"cacheTable" json:"cacheTable"`
-	LinkTTLSeconds     int                     `yaml:"linkTTLSeconds" json:"linkTTLSeconds"`
-	CleanupPercentage  float64                 `yaml:"cleanupPercentage" json:"cleanupPercentage"`
-	IdleTimeoutSeconds int                     `yaml:"idleTimeoutSeconds" json:"idleTimeoutSeconds"`
-	TicketStateTable   string                  `yaml:"ticketStateTable" json:"ticketStateTable"`
-	RateLimit          DownloadRateLimitConfig `yaml:"rateLimit" json:"rateLimit"`
-	Extra              map[string]any          `yaml:",inline" json:"-"`
+	Mode                      string                  `yaml:"mode" json:"mode"`
+	PostgrestURL              string                  `yaml:"postgrestUrl" json:"postgrestUrl"`
+	VerifyHeader              []string                `yaml:"verifyHeader" json:"verifyHeader"`
+	VerifySecret              []string                `yaml:"verifySecret" json:"verifySecret"`
+	CacheEnabled              *bool                   `yaml:"cacheEnabled" json:"cacheEnabled"`
+	CacheTable                string                  `yaml:"cacheTable" json:"cacheTable"`
+	LinkTTLSeconds            int                     `yaml:"linkTTLSeconds" json:"linkTTLSeconds"`
+	CleanupPercentage         float64                 `yaml:"cleanupPercentage" json:"cleanupPercentage"`
+	IdleTimeoutSeconds        int                     `yaml:"-" json:"-"`
+	IdleTimeoutSecondsPresent bool                    `yaml:"-" json:"-"`
+	TicketStateTable          string                  `yaml:"ticketStateTable" json:"ticketStateTable"`
+	RateLimit                 DownloadRateLimitConfig `yaml:"rateLimit" json:"rateLimit"`
+	Extra                     map[string]any          `yaml:",inline" json:"-"`
+}
+
+func (d *DownloadDBConfig) UnmarshalYAML(value *yaml.Node) error {
+	type raw DownloadDBConfig
+	var aux raw
+
+	idleTimeoutPresent, err := hasYAMLMappingKey(value, "idleTimeoutSeconds")
+	if err != nil {
+		return err
+	}
+	if err := value.Decode(&aux); err != nil {
+		return err
+	}
+
+	*d = DownloadDBConfig(aux)
+	d.IdleTimeoutSecondsPresent = idleTimeoutPresent
+	return nil
 }
 
 // DownloadThrottleProfile defines the Stage 1 breaker profile contract.
@@ -1039,6 +1057,10 @@ func (e *EnvConfig) validate(envName string) error {
 		return fmt.Errorf("download config invalid for env %s: %w", envName, err)
 	}
 
+	if err := e.validateTicketStateModeInvariant(envName); err != nil {
+		return err
+	}
+
 	if err := e.Powdet.ensureDefaults(envName); err != nil {
 		return fmt.Errorf("powdet config invalid for env %s: %w", envName, err)
 	}
@@ -1059,6 +1081,16 @@ func (e *EnvConfig) validate(envName string) error {
 		}
 	}
 
+	return nil
+}
+
+func (e *EnvConfig) validateTicketStateModeInvariant(envName string) error {
+	if e.Landing.DB.Mode != e.Download.DB.Mode {
+		return fmt.Errorf("landing.db.mode and download.db.mode must match for env %s", envName)
+	}
+	if e.Download.DB.IdleTimeoutSecondsPresent {
+		return fmt.Errorf("download.db.idleTimeoutSeconds is not supported for env %s", envName)
+	}
 	return nil
 }
 

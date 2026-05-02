@@ -281,6 +281,52 @@ test('issues ticket URL only after synchronous ticket seed completes', async (t)
   assert.match(seedCall.body.p_path_hash, /^[a-f0-9]{64}$/);
 });
 
+test('enabled mode still signs idle_timeout: 0 when landing idleTimeoutSeconds is zero', async (t) => {
+  delete globalThis.bootstrapCache;
+
+  const bootstrap = buildBootstrap({ idleTimeoutSeconds: 0 });
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = async (input, init = {}) => {
+    const url = typeof input === 'string' ? input : input.url;
+    if (url === 'https://controller.example.test/api/v0/bootstrap') {
+      return createJsonResponse(bootstrap);
+    }
+    if (url === 'https://alist.example.test/api/fs/get') {
+      return createJsonResponse({
+        code: 200,
+        data: { size: 2048 },
+      });
+    }
+    if (url.startsWith('https://postgrest.example.test/FILESIZE_CACHE_TABLE?')) {
+      return createJsonResponse([]);
+    }
+    if (url === 'https://postgrest.example.test/rpc/landing_upsert_filesize_cache') {
+      return createJsonResponse([{ ok: true }]);
+    }
+    if (url === 'https://postgrest.example.test/rpc/download_seed_ticket') {
+      return createJsonResponse({ result: 'seeded' });
+    }
+    throw new Error(`Unexpected fetch URL in test: ${url}`);
+  };
+
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+    delete globalThis.bootstrapCache;
+  });
+
+  const response = await worker.fetch(await buildInfoRequest(), buildEnv(), { waitUntil() {} });
+  assert.equal(response.status, 200);
+
+  const body = await readJson(response);
+  const downloadURL = new URL(body?.data?.download?.url);
+  const payload = downloadURL.searchParams.get('payload');
+  assert.ok(payload, 'expected payload query param');
+
+  const payloadData = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+  assert.equal(payloadData.idle_timeout, 0);
+});
+
 test('refuses to issue URL when ticket seed collides', async (t) => {
   delete globalThis.bootstrapCache;
 
@@ -322,14 +368,58 @@ test('refuses to issue URL when ticket seed collides', async (t) => {
   assert.match(body.message, /ticket seed rejected: collision/);
 });
 
-test('refuses to issue URL when ticket-state db wiring is absent', async (t) => {
+test('disabled mode issues a signed URL without ticketNonce and idle_timeout', async (t) => {
   delete globalThis.bootstrapCache;
 
   const bootstrap = buildBootstrap({
     dbMode: '',
-    ticketStateTable: undefined,
   });
   const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = async (input) => {
+    const url = typeof input === 'string' ? input : input.url;
+    if (url === 'https://controller.example.test/api/v0/bootstrap') {
+      return createJsonResponse(bootstrap);
+    }
+    if (url === 'https://alist.example.test/api/fs/get') {
+      return createJsonResponse({
+        code: 200,
+        data: { size: 4096 },
+      });
+    }
+    if (url.startsWith('https://postgrest.example.test/FILESIZE_CACHE_TABLE?')) {
+      return createJsonResponse([]);
+    }
+    if (url === 'https://postgrest.example.test/rpc/landing_upsert_filesize_cache') {
+      return createJsonResponse([{ ok: true }]);
+    }
+    throw new Error(`Unexpected fetch URL in test: ${url}`);
+  };
+
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+    delete globalThis.bootstrapCache;
+  });
+
+  const response = await worker.fetch(await buildInfoRequest(), buildEnv(), { waitUntil() {} });
+  assert.equal(response.status, 200);
+
+  const body = await readJson(response);
+  const downloadURL = new URL(body?.data?.download?.url);
+  const payload = downloadURL.searchParams.get('payload');
+  assert.ok(payload, 'expected payload query param');
+
+  const payloadData = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+  assert.equal(Object.hasOwn(payloadData, 'ticketNonce'), false);
+  assert.equal(Object.hasOwn(payloadData, 'idle_timeout'), false);
+});
+
+test('disabled mode does not call download_seed_ticket', async (t) => {
+  delete globalThis.bootstrapCache;
+
+  const bootstrap = buildBootstrap({ dbMode: '' });
+  const originalFetch = globalThis.fetch;
+  let seedCallCount = 0;
 
   globalThis.fetch = async (input, init = {}) => {
     const url = typeof input === 'string' ? input : input.url;
@@ -342,6 +432,16 @@ test('refuses to issue URL when ticket-state db wiring is absent', async (t) => 
         data: { size: 4096 },
       });
     }
+    if (url.startsWith('https://postgrest.example.test/FILESIZE_CACHE_TABLE?')) {
+      return createJsonResponse([]);
+    }
+    if (url === 'https://postgrest.example.test/rpc/landing_upsert_filesize_cache') {
+      return createJsonResponse([{ ok: true }]);
+    }
+    if (url === 'https://postgrest.example.test/rpc/download_seed_ticket') {
+      seedCallCount += 1;
+      return createJsonResponse({ result: 'seeded' });
+    }
     throw new Error(`Unexpected fetch URL in test: ${url}`);
   };
 
@@ -351,8 +451,53 @@ test('refuses to issue URL when ticket-state db wiring is absent', async (t) => 
   });
 
   const response = await worker.fetch(await buildInfoRequest(), buildEnv(), { waitUntil() {} });
-  assert.equal(response.status, 500);
+  assert.equal(response.status, 200);
+  assert.equal(seedCallCount, 0);
+});
+
+test('disabled mode with no ticket-state db wiring still issues a signed URL', async (t) => {
+  delete globalThis.bootstrapCache;
+
+  const bootstrap = buildBootstrap({
+    dbMode: '',
+    ticketStateTable: undefined,
+  });
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = async (input) => {
+    const url = typeof input === 'string' ? input : input.url;
+    if (url === 'https://controller.example.test/api/v0/bootstrap') {
+      return createJsonResponse(bootstrap);
+    }
+    if (url === 'https://alist.example.test/api/fs/get') {
+      return createJsonResponse({
+        code: 200,
+        data: { size: 4096 },
+      });
+    }
+    if (url.startsWith('https://postgrest.example.test/FILESIZE_CACHE_TABLE?')) {
+      return createJsonResponse([]);
+    }
+    if (url === 'https://postgrest.example.test/rpc/landing_upsert_filesize_cache') {
+      return createJsonResponse([{ ok: true }]);
+    }
+    throw new Error(`Unexpected fetch URL in test: ${url}`);
+  };
+
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+    delete globalThis.bootstrapCache;
+  });
+
+  const response = await worker.fetch(await buildInfoRequest(), buildEnv(), { waitUntil() {} });
+  assert.equal(response.status, 200);
 
   const body = await readJson(response);
-  assert.match(body.message, /ticket-state db configuration missing/);
+  const downloadURL = new URL(body?.data?.download?.url);
+  const payload = downloadURL.searchParams.get('payload');
+  assert.ok(payload, 'expected payload query param');
+
+  const payloadData = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+  assert.equal(Object.hasOwn(payloadData, 'ticketNonce'), false);
+  assert.equal(Object.hasOwn(payloadData, 'idle_timeout'), false);
 });

@@ -13,7 +13,7 @@
 - **Powdet 服务（`powdet/`）**  
   提供 PoW challenge / verify API 与前端静态资源，支持 argon2id/argon2d/randomx 多算法。
 - **PostgREST + PostgreSQL**  
-  提供统一检查（限流 + 缓存 + token 状态），仅支持 `custom-pg-rest` 模式。
+  提供统一检查（限流 + 缓存 + token 状态）与 ticket-state 相关 RPC；仅在 `landing.db.mode="custom-pg-rest"` 时启用，`landing.db.mode=""` 时不参与签发流程。
 - **Cloudflare Rate Limiter**  
   可选的无状态边缘限流。
 - **D1（仅用于 controller bootstrap 缓存）**  
@@ -37,7 +37,15 @@ Worker 启动后会从 controller 拉取 `bootstrap`，并基于 `paths.*` 匹�
 
 没有 controller 或 bootstrap/decision 获取失败时，Worker 会返回 503。
 
-### 2.2 Worker 配置（infra 级）
+### 2.2 Ticket State 双模式约定
+
+controller 只接受两种 ticket-state 模式，且 landing / download 必须归一化到同一个值。
+
+- `landing.db.mode="custom-pg-rest"`：landing 会把 `ticketNonce` 与 `idle_timeout` 写入签名 payload，并在返回 signed URL 前同步调用 `download_seed_ticket` 写入 unused ticket state。
+- `landing.db.mode=""`：landing 不生成 `ticketNonce`、不写入 `idle_timeout`、不执行 ticket-state seed，签发流程仍可正常完成。
+- `landing.db.idleTimeoutSeconds` 是唯一的 idle timeout 配置来源；download 侧不暴露独立的 idle-timeout 配置面。
+
+### 2.3 Worker 配置（infra 级）
 
 - `CONTROLLER_URL` / `CONTROLLER_API_PREFIX` / `CONTROLLER_API_TOKEN`
 - `ENV` / `ROLE` / `INSTANCE_ID` / `APP_NAME` / `APP_VERSION`
@@ -46,7 +54,7 @@ Worker 启动后会从 controller 拉取 `bootstrap`，并基于 `paths.*` 匹�
 - `INNER_AUTH_SECRET` / `INNER_AUTH_HEADER`（入口内网鉴权，可选）
 - `ENABLE_CF_RATELIMITER` / `CF_RATELIMITER_BINDING`（可选）
 
-### 2.3 来源域名限制
+### 2.4 来源域名限制
 
 请求的 `url.origin` 必须在 `common.landingWorkerAddresses` 中，否则返回 403。
 
@@ -96,9 +104,9 @@ Worker 入口逻辑（`fetch`）顺序：
 11. **生成下载 URL**：  
     - 选择 download worker：随机或 HRW（`downloadWorkerHrwEnabled` + 小文件阈值）。  
     - 生成 `bindingStr`（基于 `decision.download.checkOriginMode` 与 `common.binding`）。  
-    - 构造 `payload`（`expireTime/filesize/idle_timeout/ticketNonce/encrypt/bindingStr/bindingVer/isCrypted`）并签名为 `payloadSign`。  
+    - 构造 `payload`（固定字段为 `expireTime/filesize/encrypt/bindingStr/bindingVer/isCrypted`；仅 enabled mode 额外包含 `idle_timeout/ticketNonce`）并签名为 `payloadSign`。  
     - 计算 `hardExpireAt = min(payload.expireTime, payloadSign expiry)` 与 `ticketHash = sha256(payload + ":" + payloadSign)`。
-    - 同步调用 `download_seed_ticket` 写入 ticket state；seed 失败会中止签发，不返回下载 URL。
+    - 仅 enabled mode 会同步调用 `download_seed_ticket` 写入 ticket state；seed 失败会中止签发，不返回下载 URL。
 12. 返回 JSON：包含 `download.url`、`meta`，并在需要时返回 webDownloader / decrypt 参数。
 
 ## 5. 普通路径处理（落地页或快速 302）
@@ -195,8 +203,8 @@ Worker 内部维护 LRU 缓存用于：
 - `v`（当前为 1）
 - `expireTime`
 - `filesize`
-- `idle_timeout`
-- `ticketNonce`
+- `idle_timeout`：仅 `landing.db.mode="custom-pg-rest"` 时存在，值来自 `landing.db.idleTimeoutSeconds`
+- `ticketNonce`：仅 `landing.db.mode="custom-pg-rest"` 时存在
 - `encrypt`：AES-256-GCM 加密的 `{ v:2, issuer, workerAddress }`
 - `bindingStr`
 - `bindingVer`
@@ -210,11 +218,12 @@ Worker 内部维护 LRU 缓存用于：
 
 ### 8.4 Ticket State Seed
 
-- landing 在签发前把 `ticketNonce` 与 `idle_timeout` 写入 `payload`，再生成 `payloadSign`
-- ticket 身份固定为 `ticketHash = sha256(payload + ":" + payloadSign)`
-- `hardExpireAt` 取 `payload.expireTime` 与 `payloadSign` expiry 的较小值
-- landing 会同步调用 `download_seed_ticket`，按 `TICKET_HASH` 写入 unused ticket state
-- seed 失败或碰撞会直接中止签发，signed URL 不会返回给客户端
+- `landing.db.mode="custom-pg-rest"` 时，landing 在签发前把 `ticketNonce` 与 `idle_timeout` 写入 `payload`，再生成 `payloadSign`
+- enabled mode 的 ticket 身份固定为 `ticketHash = sha256(payload + ":" + payloadSign)`
+- enabled mode 的 `hardExpireAt` 取 `payload.expireTime` 与 `payloadSign` expiry 的较小值
+- enabled mode 下，landing 会同步调用 `download_seed_ticket`，按 `TICKET_HASH` 写入 unused ticket state
+- enabled mode 的 seed 失败或碰撞会直接中止签发，signed URL 不会返回给客户端
+- `landing.db.mode=""` 时，不生成 `ticketNonce`，不写入 `idle_timeout`，也不调用 `download_seed_ticket`
 
 ## 9. 前端与下载模式
 

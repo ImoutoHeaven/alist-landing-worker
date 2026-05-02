@@ -112,6 +112,25 @@ func TestBootstrapUsesTicketStateTableContract(t *testing.T) {
 	}
 }
 
+func TestBootstrapOmitsDownloadIdleTimeoutSeconds(t *testing.T) {
+	body := bootstrapBodyForRole(t, "download")
+
+	var resp map[string]any
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		t.Fatalf("decode bootstrap body: %v", err)
+	}
+	download := resp["download"].(map[string]any)
+	downloadDB := download["db"].(map[string]any)
+	if _, ok := downloadDB["idleTimeoutSeconds"]; ok {
+		t.Fatalf("download bootstrap must not expose idleTimeoutSeconds: %s", body)
+	}
+	landing := resp["landing"].(map[string]any)
+	landingDB := landing["db"].(map[string]any)
+	if _, ok := landingDB["idleTimeoutSeconds"]; !ok {
+		t.Fatalf("landing bootstrap must still expose idleTimeoutSeconds: %s", body)
+	}
+}
+
 func TestHandleBootstrapDownloadIncludesSlotHandlerAuthHeader(t *testing.T) {
 	_, file, _, _ := runtime.Caller(0)
 	cfgPath := filepath.Join(filepath.Dir(file), "..", "..", "config.yaml")

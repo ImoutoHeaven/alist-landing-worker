@@ -2281,15 +2281,16 @@ const createDownloadURL = async (
   ctx = null
 ) => {
   // Required behavior for ticket-scoped idle gate refactor:
-  // 1. payload must include ticketNonce and issuance-stable idle_timeout
-  // 2. ticketHash = sha256(payload + ":" + payloadSign)
-  // 3. hardExpireAt = min(payload.expireTime, payloadSign expiry)
-  // 4. landing must seed ticket state synchronously before returning the URL
-  // 5. seed failure must abort issuance instead of logging and continuing
-  // 6. ticket table bootstrap defaults must align across landing and download repos
+  // 1. enabled mode includes ticketNonce and issuance-stable idle_timeout
+  // 2. enabled mode ticketHash = sha256(payload + ":" + payloadSign)
+  // 3. enabled mode hardExpireAt = min(payload.expireTime, payloadSign expiry)
+  // 4. enabled mode seeds ticket state synchronously before returning the URL
+  // 5. enabled-mode seed failure aborts issuance instead of logging and continuing
+  // 6. disabled mode omits ticket-state payload fields and skips seeding entirely
   const workerBaseURL = await selectDownloadWorker(config, decodedPath, sizeBytes, fileInfo);
   const normalizedFilePath = decodedPath.startsWith('/') ? decodedPath : `/${decodedPath}`;
   const normalizedSizeBytes = Number.isFinite(sizeBytes) && sizeBytes > 0 ? sizeBytes : 0;
+  const ticketStateEnabled = getNormalizedDbMode(config) === 'custom-pg-rest';
   const idleTimeoutSeconds =
     Number.isFinite(config.idleTimeoutSeconds) && config.idleTimeoutSeconds >= 0
       ? Math.floor(config.idleTimeoutSeconds)
@@ -2332,49 +2333,54 @@ const createDownloadURL = async (
     { v: 2, issuer, workerAddress: workerOrigin },
     config.token
   );
-  const ticketNonce = generateNonce(16);
+  const ticketNonce = ticketStateEnabled ? generateNonce(16) : '';
 
   const payloadObject = {
     v: 1,
     expireTime: resolvedExpireTime,
     filesize: normalizedSizeBytes,
-    idle_timeout: idleTimeoutSeconds,
-    ticketNonce,
     encrypt,
     bindingStr: bindingResult.bindingStr,
     bindingVer: config.binding?.version || 1,
     isCrypted: isCrypt === true,
+    ...(ticketStateEnabled ? {
+      idle_timeout: idleTimeoutSeconds,
+      ticketNonce,
+    } : {}),
   };
   const payload = encodeJsonToBase64Url(payloadObject);
   const payloadSign = await hmacSha256Sign(config.token, payload, expire);
-  const hardExpireAt = Math.min(resolvedExpireTime, expire);
-  const ticketHash = await sha256Hash(`${payload}:${payloadSign}`);
-  const issuedAt = Math.floor(Date.now() / 1000);
 
-  if (!ticketNonce || !ticketHash || !Number.isFinite(hardExpireAt) || hardExpireAt <= 0) {
-    throw new Error('ticket contract generation failed');
+  if (ticketStateEnabled) {
+    const hardExpireAt = Math.min(resolvedExpireTime, expire);
+    const ticketHash = await sha256Hash(`${payload}:${payloadSign}`);
+    const issuedAt = Math.floor(Date.now() / 1000);
+
+    if (!ticketNonce || !ticketHash || !Number.isFinite(hardExpireAt) || hardExpireAt <= 0) {
+      throw new Error('ticket contract generation failed');
+    }
+
+    if (!config.ticketStateTableName) {
+      throw new Error('ticket-state db configuration missing');
+    }
+
+    await seedTicketRecord({
+      clientIP,
+      path: normalizedFilePath,
+      dbMode: config.dbMode,
+      postgrestUrl: config.postgrestUrl,
+      rateLimitConfig: config.rateLimitConfig,
+      cacheConfig: config.cacheConfig,
+      verifyHeader: config.verifyHeader,
+      verifySecret: config.verifySecret,
+      ticketStateTableName: config.ticketStateTableName,
+      ipv4Suffix: config.ipv4Suffix,
+      ipv6Suffix: config.ipv6Suffix,
+      ticketHash,
+      issuedAt,
+      hardExpireAt,
+    });
   }
-
-  if (config.dbMode !== 'custom-pg-rest' || !config.ticketStateTableName) {
-    throw new Error('ticket-state db configuration missing');
-  }
-
-  await seedTicketRecord({
-    clientIP,
-    path: normalizedFilePath,
-    dbMode: config.dbMode,
-    postgrestUrl: config.postgrestUrl,
-    rateLimitConfig: config.rateLimitConfig,
-    cacheConfig: config.cacheConfig,
-    verifyHeader: config.verifyHeader,
-    verifySecret: config.verifySecret,
-    ticketStateTableName: config.ticketStateTableName,
-    ipv4Suffix: config.ipv4Suffix,
-    ipv6Suffix: config.ipv6Suffix,
-    ticketHash,
-    issuedAt,
-    hardExpireAt,
-  });
 
   const downloadURLObj = new URL(encodedPath, workerBaseURL);
   downloadURLObj.searchParams.set('payload', payload);

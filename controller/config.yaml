@@ -179,7 +179,7 @@ envs:
               levelStep: 1
               maxLevel: 4
       db:
-        mode: "custom-pg-rest" # Database mode; allowed: "" (disabled) | "custom-pg-rest"
+        mode: "custom-pg-rest" # allowed: "" | "custom-pg-rest"; must match download.db.mode
         postgrestUrl: "https://postgrest-staging.example.com" # PostgREST endpoint used by landing; required if mode set
         verifyHeader: ["X-Postgrest-Auth"] # Header names to authenticate PostgREST calls; must align with verifySecret length
         verifySecret: ["replace-with-postgrest-secret"] # Corresponding header values
@@ -203,7 +203,7 @@ envs:
           fileTableName: "IP_FILE_LIMIT_TABLE" # Table storing file-level limits
           cleanupPercentage: 5 # Chance (0-100) of cleaning rate limit tables
         ticketStateTable: "DOWNLOAD_TICKET_STATE_TABLE" # Table tracking ticket issuance state (shared with download worker init.sql)
-        idleTimeoutSeconds: 0 # Idle timeout before cleanup; 0 disables
+        idleTimeoutSeconds: 0 # enabled-mode source of signed payload.idle_timeout; 0 keeps zero-second tolerance semantics
       crypt:
         prefix: "" # Path prefix requiring encryption; empty disables
         includes: [] # Additional path includes for crypt
@@ -228,7 +228,7 @@ envs:
       auth:
         ipv4Only: true # Only allow IPv4 clients for downloads; default=true
       db:
-        mode: "custom-pg-rest" # Database mode used by download worker; allowed: "" | "custom-pg-rest"
+        mode: "custom-pg-rest" # allowed: "" | "custom-pg-rest"; must match landing.db.mode
         postgrestUrl: "https://postgrest-staging.example.com" # PostgREST endpoint for download tables; required if mode set
         verifyHeader: ["X-Postgrest-Auth"] # Headers carrying PostgREST auth; length must match verifySecret
         verifySecret: ["replace-with-postgrest-secret"] # Values for PostgREST auth headers
@@ -236,7 +236,6 @@ envs:
         cacheTable: "DOWNLOAD_CACHE_TABLE" # Table storing download cache entries (must match init2.sql)
         linkTTLSeconds: 1800 # TTL for cached download links; seconds >0
         cleanupPercentage: 1 # Chance (0-100) of running cache cleanup per request
-        idleTimeoutSeconds: 0 # Idle timeout before evicting sessions; 0 disables
         ticketStateTable: "DOWNLOAD_TICKET_STATE_TABLE" # Table for tracking ticket state (must match download worker init.sql)
         rateLimit:
           enabled: false # Toggle IP rate limiting on download worker (default=false)
@@ -626,7 +625,6 @@ envs:
         cacheTable: "DOWNLOAD_CACHE_TABLE"
         linkTTLSeconds: 1800
         cleanupPercentage: 1
-        idleTimeoutSeconds: 0
         ticketStateTable: "DOWNLOAD_TICKET_STATE_TABLE"
         rateLimit:
           enabled: false
