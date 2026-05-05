@@ -489,6 +489,8 @@ func TestSampleConfigDocumentsExplicitDownloadAdmissionBlocksPerEnv(t *testing.T
 			"modes:",
 			"acquireTimeoutMs:",
 			"releaseTimeoutMs:",
+			"waitTotalMaxMs:",
+			"waitMaxAttemptsCap:",
 			"heartbeat:",
 			"path:",
 			"intervalMs:",
@@ -508,6 +510,13 @@ func TestSampleConfigDocumentsExplicitDownloadAdmissionBlocksPerEnv(t *testing.T
 			if !strings.Contains(tcBlock, want) {
 				t.Fatalf("config.yaml %s trueConcurrency block missing %s", env, want)
 			}
+		}
+		releaseIdx := strings.Index(tcBlock, "releaseTimeoutMs:")
+		waitTotalIdx := strings.Index(tcBlock, "waitTotalMaxMs:")
+		waitCapIdx := strings.Index(tcBlock, "waitMaxAttemptsCap:")
+		heartbeatIdx := strings.Index(tcBlock, "heartbeat:")
+		if releaseIdx < 0 || waitTotalIdx < 0 || waitCapIdx < 0 || heartbeatIdx < 0 || !(releaseIdx < waitTotalIdx && waitTotalIdx < waitCapIdx && waitCapIdx < heartbeatIdx) {
+			t.Fatalf("config.yaml %s trueConcurrency wait-budget fields not ordered before heartbeat", env)
 		}
 	}
 }
@@ -574,6 +583,12 @@ func TestSampleConfigAlignsTrueConcurrencyContract(t *testing.T) {
 	if staging.Download.TrueConcurrency.ReleaseTimeoutMs != 1500 {
 		t.Fatalf("staging trueConcurrency releaseTimeoutMs not aligned: %d", staging.Download.TrueConcurrency.ReleaseTimeoutMs)
 	}
+	if staging.Download.TrueConcurrency.WaitTotalMaxMs != 20000 {
+		t.Fatalf("staging trueConcurrency waitTotalMaxMs not aligned: %d", staging.Download.TrueConcurrency.WaitTotalMaxMs)
+	}
+	if staging.Download.TrueConcurrency.WaitMaxAttemptsCap != 35 {
+		t.Fatalf("staging trueConcurrency waitMaxAttemptsCap not aligned: %d", staging.Download.TrueConcurrency.WaitMaxAttemptsCap)
+	}
 	assertHeartbeat(t, staging.Download.TrueConcurrency.Heartbeat)
 
 	prod := cfg.Envs["prod"]
@@ -603,6 +618,12 @@ func TestSampleConfigAlignsTrueConcurrencyContract(t *testing.T) {
 	}
 	if prod.Download.TrueConcurrency.ReleaseTimeoutMs != 1500 {
 		t.Fatalf("prod trueConcurrency releaseTimeoutMs not aligned: %d", prod.Download.TrueConcurrency.ReleaseTimeoutMs)
+	}
+	if prod.Download.TrueConcurrency.WaitTotalMaxMs != 20000 {
+		t.Fatalf("prod trueConcurrency waitTotalMaxMs not aligned: %d", prod.Download.TrueConcurrency.WaitTotalMaxMs)
+	}
+	if prod.Download.TrueConcurrency.WaitMaxAttemptsCap != 35 {
+		t.Fatalf("prod trueConcurrency waitMaxAttemptsCap not aligned: %d", prod.Download.TrueConcurrency.WaitMaxAttemptsCap)
 	}
 	assertHeartbeat(t, prod.Download.TrueConcurrency.Heartbeat)
 }
@@ -680,6 +701,13 @@ func TestLoadDefaultsTrueConcurrencyHeartbeatWhenOmitted(t *testing.T) {
 	}
 	if hb.Path != "/api/v1/concurrency/heartbeat" {
 		t.Fatalf("expected default heartbeat path, got %q", hb.Path)
+	}
+	staging := cfg.Envs["staging"]
+	if staging.Download.TrueConcurrency.WaitTotalMaxMs != 20000 {
+		t.Fatalf("expected default waitTotalMaxMs, got %d", staging.Download.TrueConcurrency.WaitTotalMaxMs)
+	}
+	if staging.Download.TrueConcurrency.WaitMaxAttemptsCap != 35 {
+		t.Fatalf("expected default waitMaxAttemptsCap, got %d", staging.Download.TrueConcurrency.WaitMaxAttemptsCap)
 	}
 }
 
@@ -950,6 +978,20 @@ func TestLoadRejectsInvalidTrueConcurrencyConfig(t *testing.T) {
 			},
 			wantErr: "download.trueConcurrency.releaseTimeoutMs",
 		},
+		{
+			name: "non-integer wait total max ms",
+			mutate: func(src string) string {
+				return replaceFirstTrueConcurrencyBlock(src, "      trueConcurrency:\n        enabled: true\n        hostPatterns:\n          - \"*.sharepoint.com\"\n        handlerUrl: \"https://concurrency-handler-staging.example.com\"\n        handlerAuthKey: \"replace-with-concurrency-handler-key\"\n        handlerAuthHeader: \"X-CQ-Auth\"\n        siteBucket:\n          mode: \"sharepoint\"\n        acquireTimeoutMs: 11500\n        releaseTimeoutMs: 1500\n        waitTotalMaxMs: 12.5\n        waitMaxAttemptsCap: 35\n")
+			},
+			wantErr: "cannot unmarshal",
+		},
+		{
+			name: "explicit zero wait max attempts cap",
+			mutate: func(src string) string {
+				return replaceFirstTrueConcurrencyBlock(src, "      trueConcurrency:\n        enabled: true\n        hostPatterns:\n          - \"*.sharepoint.com\"\n        handlerUrl: \"https://concurrency-handler-staging.example.com\"\n        handlerAuthKey: \"replace-with-concurrency-handler-key\"\n        handlerAuthHeader: \"X-CQ-Auth\"\n        siteBucket:\n          mode: \"sharepoint\"\n        acquireTimeoutMs: 11500\n        releaseTimeoutMs: 1500\n        waitTotalMaxMs: 20000\n        waitMaxAttemptsCap: 0\n")
+			},
+			wantErr: "download.trueConcurrency.waitMaxAttemptsCap",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := loadConfigFromText(t, tc.mutate(base))
@@ -992,6 +1034,12 @@ func TestLoadNormalizesTrueConcurrencyFieldsAndAppliesDefaultsWhenTimeoutsAreOmi
 	}
 	if staging.Download.TrueConcurrency.ReleaseTimeoutMs != 1500 {
 		t.Fatalf("expected default releaseTimeoutMs, got %d", staging.Download.TrueConcurrency.ReleaseTimeoutMs)
+	}
+	if staging.Download.TrueConcurrency.WaitTotalMaxMs != 20000 {
+		t.Fatalf("expected default waitTotalMaxMs, got %d", staging.Download.TrueConcurrency.WaitTotalMaxMs)
+	}
+	if staging.Download.TrueConcurrency.WaitMaxAttemptsCap != 35 {
+		t.Fatalf("expected default waitMaxAttemptsCap, got %d", staging.Download.TrueConcurrency.WaitMaxAttemptsCap)
 	}
 }
 

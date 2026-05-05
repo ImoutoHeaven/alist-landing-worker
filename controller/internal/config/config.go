@@ -12,112 +12,114 @@ import (
 )
 
 const (
-	defaultAltchaDifficulty                 = 250000
-	defaultAltchaTokenExpireSeconds         = 180
-	defaultAltchaDifficultyWindow           = 30
-	defaultAltchaDifficultyReset            = 120
-	defaultAltchaMaxBlockSeconds            = 120
-	defaultAltchaMaxExponent                = 10
-	defaultAltchaMinUpgradeExponent         = 3
-	defaultPowdetExpireSeconds              = 180
-	defaultPowdetClockSkewSeconds           = 60
-	defaultPowdetMaxWindowSeconds           = 600
-	defaultPowdetLevelStep                  = 1
-	defaultPowdetBaseLevelMin               = 12
-	defaultPowdetBaseLevelMax               = 20
-	defaultPowdetMaxLevel                   = 4
-	defaultPowdetDifficultyTable            = "POWDET_DIFFICULTY_STATE"
-	defaultPowdetTicketTable                = "POW_CHALLENGE_TICKET"
-	defaultPowdetListenPort                 = 2370
-	defaultPowdetBatchSize                  = 1000
-	defaultPowdetDeprecateBatches           = 10
-	defaultPowdetArgonMemoryKiB             = 16384
-	defaultPowdetArgonIterations            = 2
-	defaultPowdetArgonParallelism           = 1
-	defaultPowdetArgonKeyLength             = 16
-	defaultPowdetRandomxSeedLen             = 32
-	defaultPowdetRandomxCacheLRU            = 128
-	defaultPowdetRandomxCacheTTL            = 600
-	defaultAltchaTokenBindingTable          = "ALTCHA_TOKEN_LIST"
-	defaultDownloadLinkTTLSeconds           = 1800
-	defaultDownloadCleanupPercent           = 1.0
-	defaultDownloadIdleTimeout              = 0
-	defaultDownloadCacheOverrideMax         = "500MB"
-	defaultRateLimitIPv4Suffix              = "/32"
-	defaultRateLimitIPv6Suffix              = "/60"
-	defaultBindingVersion                   = 1
-	defaultBindingModes                     = "path,asn,country,iprange"
-	defaultBindingIPv4Suffix                = "/32"
-	defaultBindingIPv6Suffix                = "/60"
-	defaultRateLimitBlockSeconds            = 600
-	defaultThrottleOpenCapSeconds           = 60
-	defaultThrottleOpenThresholdPercent     = 30
-	defaultThrottleCloseThresholdPercent    = 15
-	defaultThrottleEwmaSpan                 = 8
-	defaultThrottleConsecutive              = 4
-	defaultThrottleMinSamplesBeforeOpen     = 8
-	defaultThrottleIdleResetSeconds         = 900
-	defaultThrottleHalfOpenSuccessThreshold = 2
-	defaultThrottleHalfOpenCloseMode        = "and"
-	defaultThrottleHalfOpenMaxProbeCount    = 4
-	maxThrottleHalfOpenProbeCount           = 63
-	defaultThrottleHalfOpenMaxSeconds       = 15
-	defaultThrottleHalfOpenTimeoutMode      = "partial-close"
-	defaultSlotHandlerGraceMs               = 4000
-	defaultSlotHandlerUtilWindowSec         = 10
-	defaultSlotHandlerMaxBatch              = 8
-	defaultSlotHandlerMaxProbePar           = 4
-	defaultSlotHandlerMaxProbeQps           = 20
-	defaultSlotHandlerMaxInFlightGlobal     = 300
-	defaultSlotHandlerMaxInFlightHost       = 100
-	defaultSlotHandlerMaxInFlightSite       = 50
-	defaultSlotHandlerMaxInFlightIP         = 10
-	defaultSlotHandlerTimeoutMs             = 20000
-	defaultSlotHandlerPerReqTimeout         = 8000
-	defaultSlotHandlerAttemptsCap           = 35
-	defaultLandingCleanupPercent            = 5.0
-	defaultLandingCacheTTLSeconds           = 86400
-	defaultLandingFileWindowSeconds         = 60
-	defaultLandingFileBlockSeconds          = 240
-	defaultLandingIdleTimeout               = 0
-	defaultLandingCryptFileHeader           = 32
-	defaultLandingCryptBlockHeader          = 16
-	defaultLandingCryptBlockData            = 64 * 1024
-	defaultLandingWebMaxConn                = 16
-	defaultLandingMinBandwidthMbps          = 10
-	defaultLandingMinDurationSec            = 3600
-	defaultLandingHrwMaxSize                = "500MB"
-	defaultSlotHandlerListen                = ":8080"
-	defaultSlotHandlerAuthHeader            = "X-FQ-Auth"
-	defaultTrueConcurrencyAuthHeader        = "X-CQ-Auth"
-	downloadSiteBucketModeHost              = "host"
-	defaultTrueConcurrencySiteBucketMode    = "sharepoint"
-	downloadSiteBucketModeGoogleDrive       = "googledrive"
-	defaultTrueConcurrencyAcquireTimeoutMs  = 11500
-	defaultTrueConcurrencyReleaseTimeoutMs  = 1500
-	defaultTrueConcurrencyHeartbeatPath     = "/api/v1/concurrency/heartbeat"
-	defaultHeartbeatIntervalMs              = 5000
-	defaultHeartbeatTimeoutMs               = 15000
-	defaultHeartbeatReconnectGraceMs        = 12000
-	defaultHeartbeatHelloTimeoutMs          = 2000
-	defaultHeartbeatStartTimeoutMs          = 7000
-	defaultHeartbeatAckTimeoutMs            = 2000
-	defaultHeartbeatInitialConnectAttempts  = 3
-	defaultHeartbeatInitialConnectElapsedMs = 3000
-	defaultHeartbeatReconnectAttempts       = 3
-	defaultHeartbeatReconnectElapsedMs      = 10000
-	defaultHeartbeatReconnectBaseDelayMs    = 250
-	defaultHeartbeatReconnectMaxDelayMs     = 2000
-	defaultHeartbeatReconnectSafetyMs       = 1000
-	defaultSlotHandlerPollInterval          = 500
-	defaultSlotHandlerPollWindow            = 6000
-	defaultSlotHandlerMaxSlotHost           = 5
-	defaultSlotHandlerMaxSlotIP             = 1
-	defaultSlotHandlerZombieTimeout         = 30
-	defaultSlotHandlerCleanupInt            = 1800
-	defaultSlotHandlerTryAcquire            = "fq_admit_batch"
-	defaultSlotHandlerReleaseSlot           = "fq_release_dual"
-	defaultControllerListenAddr             = ":8080"
+	defaultAltchaDifficulty                  = 250000
+	defaultAltchaTokenExpireSeconds          = 180
+	defaultAltchaDifficultyWindow            = 30
+	defaultAltchaDifficultyReset             = 120
+	defaultAltchaMaxBlockSeconds             = 120
+	defaultAltchaMaxExponent                 = 10
+	defaultAltchaMinUpgradeExponent          = 3
+	defaultPowdetExpireSeconds               = 180
+	defaultPowdetClockSkewSeconds            = 60
+	defaultPowdetMaxWindowSeconds            = 600
+	defaultPowdetLevelStep                   = 1
+	defaultPowdetBaseLevelMin                = 12
+	defaultPowdetBaseLevelMax                = 20
+	defaultPowdetMaxLevel                    = 4
+	defaultPowdetDifficultyTable             = "POWDET_DIFFICULTY_STATE"
+	defaultPowdetTicketTable                 = "POW_CHALLENGE_TICKET"
+	defaultPowdetListenPort                  = 2370
+	defaultPowdetBatchSize                   = 1000
+	defaultPowdetDeprecateBatches            = 10
+	defaultPowdetArgonMemoryKiB              = 16384
+	defaultPowdetArgonIterations             = 2
+	defaultPowdetArgonParallelism            = 1
+	defaultPowdetArgonKeyLength              = 16
+	defaultPowdetRandomxSeedLen              = 32
+	defaultPowdetRandomxCacheLRU             = 128
+	defaultPowdetRandomxCacheTTL             = 600
+	defaultAltchaTokenBindingTable           = "ALTCHA_TOKEN_LIST"
+	defaultDownloadLinkTTLSeconds            = 1800
+	defaultDownloadCleanupPercent            = 1.0
+	defaultDownloadIdleTimeout               = 0
+	defaultDownloadCacheOverrideMax          = "500MB"
+	defaultRateLimitIPv4Suffix               = "/32"
+	defaultRateLimitIPv6Suffix               = "/60"
+	defaultBindingVersion                    = 1
+	defaultBindingModes                      = "path,asn,country,iprange"
+	defaultBindingIPv4Suffix                 = "/32"
+	defaultBindingIPv6Suffix                 = "/60"
+	defaultRateLimitBlockSeconds             = 600
+	defaultThrottleOpenCapSeconds            = 60
+	defaultThrottleOpenThresholdPercent      = 30
+	defaultThrottleCloseThresholdPercent     = 15
+	defaultThrottleEwmaSpan                  = 8
+	defaultThrottleConsecutive               = 4
+	defaultThrottleMinSamplesBeforeOpen      = 8
+	defaultThrottleIdleResetSeconds          = 900
+	defaultThrottleHalfOpenSuccessThreshold  = 2
+	defaultThrottleHalfOpenCloseMode         = "and"
+	defaultThrottleHalfOpenMaxProbeCount     = 4
+	maxThrottleHalfOpenProbeCount            = 63
+	defaultThrottleHalfOpenMaxSeconds        = 15
+	defaultThrottleHalfOpenTimeoutMode       = "partial-close"
+	defaultSlotHandlerGraceMs                = 4000
+	defaultSlotHandlerUtilWindowSec          = 10
+	defaultSlotHandlerMaxBatch               = 8
+	defaultSlotHandlerMaxProbePar            = 4
+	defaultSlotHandlerMaxProbeQps            = 20
+	defaultSlotHandlerMaxInFlightGlobal      = 300
+	defaultSlotHandlerMaxInFlightHost        = 100
+	defaultSlotHandlerMaxInFlightSite        = 50
+	defaultSlotHandlerMaxInFlightIP          = 10
+	defaultSlotHandlerTimeoutMs              = 20000
+	defaultSlotHandlerPerReqTimeout          = 8000
+	defaultSlotHandlerAttemptsCap            = 35
+	defaultLandingCleanupPercent             = 5.0
+	defaultLandingCacheTTLSeconds            = 86400
+	defaultLandingFileWindowSeconds          = 60
+	defaultLandingFileBlockSeconds           = 240
+	defaultLandingIdleTimeout                = 0
+	defaultLandingCryptFileHeader            = 32
+	defaultLandingCryptBlockHeader           = 16
+	defaultLandingCryptBlockData             = 64 * 1024
+	defaultLandingWebMaxConn                 = 16
+	defaultLandingMinBandwidthMbps           = 10
+	defaultLandingMinDurationSec             = 3600
+	defaultLandingHrwMaxSize                 = "500MB"
+	defaultSlotHandlerListen                 = ":8080"
+	defaultSlotHandlerAuthHeader             = "X-FQ-Auth"
+	defaultTrueConcurrencyAuthHeader         = "X-CQ-Auth"
+	downloadSiteBucketModeHost               = "host"
+	defaultTrueConcurrencySiteBucketMode     = "sharepoint"
+	downloadSiteBucketModeGoogleDrive        = "googledrive"
+	defaultTrueConcurrencyAcquireTimeoutMs   = 11500
+	defaultTrueConcurrencyReleaseTimeoutMs   = 1500
+	defaultTrueConcurrencyWaitTotalMaxMs     = 20000
+	defaultTrueConcurrencyWaitMaxAttemptsCap = 35
+	defaultTrueConcurrencyHeartbeatPath      = "/api/v1/concurrency/heartbeat"
+	defaultHeartbeatIntervalMs               = 5000
+	defaultHeartbeatTimeoutMs                = 15000
+	defaultHeartbeatReconnectGraceMs         = 12000
+	defaultHeartbeatHelloTimeoutMs           = 2000
+	defaultHeartbeatStartTimeoutMs           = 7000
+	defaultHeartbeatAckTimeoutMs             = 2000
+	defaultHeartbeatInitialConnectAttempts   = 3
+	defaultHeartbeatInitialConnectElapsedMs  = 3000
+	defaultHeartbeatReconnectAttempts        = 3
+	defaultHeartbeatReconnectElapsedMs       = 10000
+	defaultHeartbeatReconnectBaseDelayMs     = 250
+	defaultHeartbeatReconnectMaxDelayMs      = 2000
+	defaultHeartbeatReconnectSafetyMs        = 1000
+	defaultSlotHandlerPollInterval           = 500
+	defaultSlotHandlerPollWindow             = 6000
+	defaultSlotHandlerMaxSlotHost            = 5
+	defaultSlotHandlerMaxSlotIP              = 1
+	defaultSlotHandlerZombieTimeout          = 30
+	defaultSlotHandlerCleanupInt             = 1800
+	defaultSlotHandlerTryAcquire             = "fq_admit_batch"
+	defaultSlotHandlerReleaseSlot            = "fq_release_dual"
+	defaultControllerListenAddr              = ":8080"
 )
 
 func boolPtr(v bool) *bool {
@@ -710,6 +712,10 @@ func hasYAMLMappingKey(value *yaml.Node, key string) (bool, error) {
 	return hasYAMLMappingKeyWithSeen(value, key, map[*yaml.Node]struct{}{})
 }
 
+func yamlMappingValue(value *yaml.Node, key string) (*yaml.Node, error) {
+	return yamlMappingValueWithSeen(value, key, map[*yaml.Node]struct{}{})
+}
+
 func hasYAMLMappingKeyWithSeen(value *yaml.Node, key string, seen map[*yaml.Node]struct{}) (bool, error) {
 	resolved, err := resolveYAMLNodeAliases(value)
 	if err != nil {
@@ -765,6 +771,77 @@ func hasYAMLMappingKeyWithSeen(value *yaml.Node, key string, seen map[*yaml.Node
 	}
 
 	return false, nil
+}
+
+func yamlMappingValueWithSeen(value *yaml.Node, key string, seen map[*yaml.Node]struct{}) (*yaml.Node, error) {
+	resolved, err := resolveYAMLNodeAliases(value)
+	if err != nil {
+		return nil, err
+	}
+	if resolved == nil || resolved.Kind != yaml.MappingNode {
+		return nil, nil
+	}
+	if _, ok := seen[resolved]; ok {
+		return nil, errors.New("yaml merge cycle")
+	}
+	seen[resolved] = struct{}{}
+	defer delete(seen, resolved)
+
+	for i := 0; i+1 < len(resolved.Content); i += 2 {
+		currentKey := strings.TrimSpace(resolved.Content[i].Value)
+		if currentKey == key {
+			return resolved.Content[i+1], nil
+		}
+	}
+
+	for i := 0; i+1 < len(resolved.Content); i += 2 {
+		if strings.TrimSpace(resolved.Content[i].Value) != "<<" {
+			continue
+		}
+		merged := resolved.Content[i+1]
+		mergedResolved, err := resolveYAMLNodeAliases(merged)
+		if err != nil {
+			return nil, err
+		}
+		if mergedResolved == nil {
+			continue
+		}
+		if mergedResolved.Kind == yaml.SequenceNode {
+			for _, item := range mergedResolved.Content {
+				found, err := yamlMappingValueWithSeen(item, key, seen)
+				if err != nil {
+					return nil, err
+				}
+				if found != nil {
+					return found, nil
+				}
+			}
+			continue
+		}
+		found, err := yamlMappingValueWithSeen(mergedResolved, key, seen)
+		if err != nil {
+			return nil, err
+		}
+		if found != nil {
+			return found, nil
+		}
+	}
+
+	return nil, nil
+}
+
+func requireYAMLIntScalar(value *yaml.Node, fieldPath string) error {
+	resolved, err := resolveYAMLNodeAliases(value)
+	if err != nil {
+		return err
+	}
+	if resolved == nil {
+		return nil
+	}
+	if resolved.Kind != yaml.ScalarNode || resolved.Tag != "!!int" {
+		return fmt.Errorf("cannot unmarshal %q into integer field %s", resolved.Value, fieldPath)
+	}
+	return nil
 }
 
 // DownloadFairQueueSiteBucketConfig controls site bucket derivation.
@@ -828,17 +905,21 @@ type DownloadTrueConcurrencyHeartbeatConfig struct {
 }
 
 type DownloadTrueConcurrencyConfig struct {
-	Enabled           bool                                    `yaml:"enabled" json:"enabled"`
-	HostPatterns      []string                                `yaml:"hostPatterns" json:"hostPatterns"`
-	HandlerURL        string                                  `yaml:"handlerUrl" json:"handlerUrl"`
-	HandlerAuthKey    string                                  `yaml:"handlerAuthKey" json:"handlerAuthKey"`
-	HandlerAuthHeader string                                  `yaml:"handlerAuthHeader" json:"handlerAuthHeader"`
-	SiteBucket        DownloadTrueConcurrencySiteBucketConfig `yaml:"siteBucket" json:"siteBucket"`
-	Heartbeat         DownloadTrueConcurrencyHeartbeatConfig  `yaml:"heartbeat" json:"heartbeat"`
-	AcquireTimeoutMs  int                                     `yaml:"acquireTimeoutMs" json:"acquireTimeoutMs"`
-	ReleaseTimeoutMs  int                                     `yaml:"releaseTimeoutMs" json:"releaseTimeoutMs"`
-	acquireTimeoutSet bool                                    `yaml:"-" json:"-"`
-	releaseTimeoutSet bool                                    `yaml:"-" json:"-"`
+	Enabled               bool                                    `yaml:"enabled" json:"enabled"`
+	HostPatterns          []string                                `yaml:"hostPatterns" json:"hostPatterns"`
+	HandlerURL            string                                  `yaml:"handlerUrl" json:"handlerUrl"`
+	HandlerAuthKey        string                                  `yaml:"handlerAuthKey" json:"handlerAuthKey"`
+	HandlerAuthHeader     string                                  `yaml:"handlerAuthHeader" json:"handlerAuthHeader"`
+	SiteBucket            DownloadTrueConcurrencySiteBucketConfig `yaml:"siteBucket" json:"siteBucket"`
+	Heartbeat             DownloadTrueConcurrencyHeartbeatConfig  `yaml:"heartbeat" json:"heartbeat"`
+	AcquireTimeoutMs      int                                     `yaml:"acquireTimeoutMs" json:"acquireTimeoutMs"`
+	ReleaseTimeoutMs      int                                     `yaml:"releaseTimeoutMs" json:"releaseTimeoutMs"`
+	WaitTotalMaxMs        int                                     `yaml:"waitTotalMaxMs" json:"waitTotalMaxMs"`
+	WaitMaxAttemptsCap    int                                     `yaml:"waitMaxAttemptsCap" json:"waitMaxAttemptsCap"`
+	acquireTimeoutSet     bool                                    `yaml:"-" json:"-"`
+	releaseTimeoutSet     bool                                    `yaml:"-" json:"-"`
+	waitTotalMaxMsSet     bool                                    `yaml:"-" json:"-"`
+	waitMaxAttemptsCapSet bool                                    `yaml:"-" json:"-"`
 }
 
 // DownloadAuthConfig controls request integrity checks.
@@ -900,12 +981,40 @@ func (c *DownloadTrueConcurrencyConfig) UnmarshalYAML(value *yaml.Node) error {
 	if err != nil {
 		return err
 	}
+	waitTotalMaxMsSet, err := hasYAMLMappingKey(value, "waitTotalMaxMs")
+	if err != nil {
+		return err
+	}
+	waitMaxAttemptsCapSet, err := hasYAMLMappingKey(value, "waitMaxAttemptsCap")
+	if err != nil {
+		return err
+	}
+	if waitTotalMaxMsSet {
+		waitTotalMaxMsNode, err := yamlMappingValue(value, "waitTotalMaxMs")
+		if err != nil {
+			return err
+		}
+		if err := requireYAMLIntScalar(waitTotalMaxMsNode, "download.trueConcurrency.waitTotalMaxMs"); err != nil {
+			return err
+		}
+	}
+	if waitMaxAttemptsCapSet {
+		waitMaxAttemptsCapNode, err := yamlMappingValue(value, "waitMaxAttemptsCap")
+		if err != nil {
+			return err
+		}
+		if err := requireYAMLIntScalar(waitMaxAttemptsCapNode, "download.trueConcurrency.waitMaxAttemptsCap"); err != nil {
+			return err
+		}
+	}
 	if err := value.Decode(&aux); err != nil {
 		return err
 	}
 	*c = DownloadTrueConcurrencyConfig(aux)
 	c.acquireTimeoutSet = acquireTimeoutSet
 	c.releaseTimeoutSet = releaseTimeoutSet
+	c.waitTotalMaxMsSet = waitTotalMaxMsSet
+	c.waitMaxAttemptsCapSet = waitMaxAttemptsCapSet
 	return nil
 }
 
@@ -2033,6 +2142,20 @@ func (c *DownloadTrueConcurrencyConfig) ensureDefaults(envName string) error {
 		}
 	} else {
 		c.ReleaseTimeoutMs = defaultTrueConcurrencyReleaseTimeoutMs
+	}
+	if c.waitTotalMaxMsSet {
+		if c.WaitTotalMaxMs <= 0 {
+			return fmt.Errorf("download.trueConcurrency.waitTotalMaxMs must be > 0 for env %s", envName)
+		}
+	} else {
+		c.WaitTotalMaxMs = defaultTrueConcurrencyWaitTotalMaxMs
+	}
+	if c.waitMaxAttemptsCapSet {
+		if c.WaitMaxAttemptsCap <= 0 {
+			return fmt.Errorf("download.trueConcurrency.waitMaxAttemptsCap must be > 0 for env %s", envName)
+		}
+	} else {
+		c.WaitMaxAttemptsCap = defaultTrueConcurrencyWaitMaxAttemptsCap
 	}
 	if c.Enabled {
 		if len(c.HostPatterns) == 0 {

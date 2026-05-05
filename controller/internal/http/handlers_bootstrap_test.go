@@ -269,15 +269,17 @@ func TestHandleBootstrapDownloadIncludesTrueConcurrencyContract(t *testing.T) {
 		t.Fatalf("decode bootstrap response: %v", err)
 	}
 	expectedKeys := map[string]struct{}{
-		"enabled":           {},
-		"hostPatterns":      {},
-		"handlerUrl":        {},
-		"handlerAuthKey":    {},
-		"handlerAuthHeader": {},
-		"siteBucket":        {},
-		"acquireTimeoutMs":  {},
-		"releaseTimeoutMs":  {},
-		"heartbeat":         {},
+		"enabled":            {},
+		"hostPatterns":       {},
+		"handlerUrl":         {},
+		"handlerAuthKey":     {},
+		"handlerAuthHeader":  {},
+		"siteBucket":         {},
+		"acquireTimeoutMs":   {},
+		"releaseTimeoutMs":   {},
+		"waitTotalMaxMs":     {},
+		"waitMaxAttemptsCap": {},
+		"heartbeat":          {},
 	}
 	if len(rawResp.Download.TrueConcurrency) != len(expectedKeys) {
 		t.Fatalf("unexpected trueConcurrency field count: got %d want %d (%v)", len(rawResp.Download.TrueConcurrency), len(expectedKeys), rawResp.Download.TrueConcurrency)
@@ -302,14 +304,16 @@ func TestHandleBootstrapDownloadIncludesTrueConcurrencyContract(t *testing.T) {
 				} `json:"siteBucket"`
 			} `json:"fairQueue"`
 			TrueConcurrency struct {
-				Enabled           bool     `json:"enabled"`
-				HostPatterns      []string `json:"hostPatterns"`
-				HandlerURL        string   `json:"handlerUrl"`
-				HandlerAuthKey    string   `json:"handlerAuthKey"`
-				HandlerAuthHeader string   `json:"handlerAuthHeader"`
-				AcquireTimeoutMs  int      `json:"acquireTimeoutMs"`
-				ReleaseTimeoutMs  int      `json:"releaseTimeoutMs"`
-				Heartbeat         struct {
+				Enabled            bool     `json:"enabled"`
+				HostPatterns       []string `json:"hostPatterns"`
+				HandlerURL         string   `json:"handlerUrl"`
+				HandlerAuthKey     string   `json:"handlerAuthKey"`
+				HandlerAuthHeader  string   `json:"handlerAuthHeader"`
+				AcquireTimeoutMs   int      `json:"acquireTimeoutMs"`
+				ReleaseTimeoutMs   int      `json:"releaseTimeoutMs"`
+				WaitTotalMaxMs     int      `json:"waitTotalMaxMs"`
+				WaitMaxAttemptsCap int      `json:"waitMaxAttemptsCap"`
+				Heartbeat          struct {
 					Enabled                    bool   `json:"enabled"`
 					Required                   bool   `json:"required"`
 					Path                       string `json:"path"`
@@ -357,6 +361,12 @@ func TestHandleBootstrapDownloadIncludesTrueConcurrencyContract(t *testing.T) {
 	}
 	if resp.Download.TrueConcurrency.ReleaseTimeoutMs != 1500 {
 		t.Fatalf("unexpected trueConcurrency releaseTimeoutMs: %d", resp.Download.TrueConcurrency.ReleaseTimeoutMs)
+	}
+	if resp.Download.TrueConcurrency.WaitTotalMaxMs != 20000 {
+		t.Fatalf("unexpected trueConcurrency waitTotalMaxMs: %d", resp.Download.TrueConcurrency.WaitTotalMaxMs)
+	}
+	if resp.Download.TrueConcurrency.WaitMaxAttemptsCap != 35 {
+		t.Fatalf("unexpected trueConcurrency waitMaxAttemptsCap: %d", resp.Download.TrueConcurrency.WaitMaxAttemptsCap)
 	}
 	if !resp.Download.TrueConcurrency.Heartbeat.Enabled || !resp.Download.TrueConcurrency.Heartbeat.Required {
 		t.Fatalf("unexpected trueConcurrency heartbeat enabled/required: %+v", resp.Download.TrueConcurrency.Heartbeat)
@@ -598,7 +608,7 @@ func TestHandleBootstrapDownloadPreservesFirstOccurrenceOrderInMultiModeSiteBuck
 }
 
 func TestHandleBootstrapDownloadDefaultsTrueConcurrencyHeartbeatWhenOmitted(t *testing.T) {
-	text := strings.Replace(sampleConfigText(t), "        releaseTimeoutMs: 1500 # Release timeout budget in milliseconds; >0\n        heartbeat:\n          enabled: true\n          required: true\n          path: \"/api/v1/concurrency/heartbeat\"\n          intervalMs: 5000\n          timeoutMs: 15000\n          reconnectGraceMs: 12000\n          helloTimeoutMs: 2000\n          startTimeoutMs: 7000\n          ackTimeoutMs: 2000\n          initialConnectMaxAttempts: 3\n          initialConnectMaxElapsedMs: 3000\n          reconnectMaxAttempts: 3\n          reconnectMaxElapsedMs: 10000\n          reconnectBaseDelayMs: 250\n          reconnectMaxDelayMs: 2000\n          reconnectSafetyMarginMs: 1000\n", "        releaseTimeoutMs: 1500 # Release timeout budget in milliseconds; >0\n", 1)
+	text := strings.Replace(sampleConfigText(t), "        releaseTimeoutMs: 1500 # Release timeout budget in milliseconds; >0\n        waitTotalMaxMs: 20000 # Total CQ wait budget in milliseconds; >0\n        waitMaxAttemptsCap: 35 # Max CQ wait attempts before hard failure; >0\n        heartbeat:\n          enabled: true\n          required: true\n          path: \"/api/v1/concurrency/heartbeat\"\n          intervalMs: 5000\n          timeoutMs: 15000\n          reconnectGraceMs: 12000\n          helloTimeoutMs: 2000\n          startTimeoutMs: 7000\n          ackTimeoutMs: 2000\n          initialConnectMaxAttempts: 3\n          initialConnectMaxElapsedMs: 3000\n          reconnectMaxAttempts: 3\n          reconnectMaxElapsedMs: 10000\n          reconnectBaseDelayMs: 250\n          reconnectMaxDelayMs: 2000\n          reconnectSafetyMarginMs: 1000\n", "        releaseTimeoutMs: 1500 # Release timeout budget in milliseconds; >0\n", 1)
 	cfg := loadConfigFromText(t, text)
 
 	ctrl := &Controller{Cfg: cfg}
@@ -613,7 +623,9 @@ func TestHandleBootstrapDownloadDefaultsTrueConcurrencyHeartbeatWhenOmitted(t *t
 	var resp struct {
 		Download struct {
 			TrueConcurrency struct {
-				Heartbeat struct {
+				WaitTotalMaxMs     int `json:"waitTotalMaxMs"`
+				WaitMaxAttemptsCap int `json:"waitMaxAttemptsCap"`
+				Heartbeat          struct {
 					Enabled  bool   `json:"enabled"`
 					Required bool   `json:"required"`
 					Path     string `json:"path"`
@@ -629,6 +641,12 @@ func TestHandleBootstrapDownloadDefaultsTrueConcurrencyHeartbeatWhenOmitted(t *t
 	}
 	if resp.Download.TrueConcurrency.Heartbeat.Path != "/api/v1/concurrency/heartbeat" {
 		t.Fatalf("expected default heartbeat path in bootstrap, got %q", resp.Download.TrueConcurrency.Heartbeat.Path)
+	}
+	if resp.Download.TrueConcurrency.WaitTotalMaxMs != 20000 {
+		t.Fatalf("expected default waitTotalMaxMs in bootstrap, got %d", resp.Download.TrueConcurrency.WaitTotalMaxMs)
+	}
+	if resp.Download.TrueConcurrency.WaitMaxAttemptsCap != 35 {
+		t.Fatalf("expected default waitMaxAttemptsCap in bootstrap, got %d", resp.Download.TrueConcurrency.WaitMaxAttemptsCap)
 	}
 }
 

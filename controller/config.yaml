@@ -271,6 +271,8 @@ envs:
           modes: ["sharepoint"] # Authoritative provider mode set; allowed values: host|sharepoint|googledrive
         acquireTimeoutMs: 11500 # Acquire timeout budget in milliseconds; >0
         releaseTimeoutMs: 1500 # Release timeout budget in milliseconds; >0
+        waitTotalMaxMs: 20000 # Total CQ wait budget in milliseconds; >0
+        waitMaxAttemptsCap: 35 # Max CQ wait attempts before hard failure; >0
         heartbeat:
           enabled: true
           required: true
@@ -677,6 +679,8 @@ envs:
           modes: ["sharepoint"]
         acquireTimeoutMs: 11500
         releaseTimeoutMs: 1500
+        waitTotalMaxMs: 20000
+        waitMaxAttemptsCap: 35
         heartbeat:
           enabled: true
           required: true
