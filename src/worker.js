@@ -2400,6 +2400,7 @@ const createDownloadURL = async (
       ticketHash,
       issuedAt,
       hardExpireAt,
+      idleTimeoutSeconds,
     });
   }
 
@@ -2430,6 +2431,7 @@ async function seedTicketRecord(config) {
     ticketHash,
     issuedAt,
     hardExpireAt,
+    idleTimeoutSeconds,
   } = config || {};
 
   if (
@@ -2440,6 +2442,8 @@ async function seedTicketRecord(config) {
     || issuedAt <= 0
     || !Number.isFinite(hardExpireAt)
     || hardExpireAt <= 0
+    || !Number.isFinite(idleTimeoutSeconds)
+    || idleTimeoutSeconds < 0
   ) {
     throw new Error('ticket-state db configuration missing');
   }
@@ -2469,6 +2473,7 @@ async function seedTicketRecord(config) {
       p_ticket_hash: ticketHash,
       p_issued_at: issuedAt,
       p_hard_expire_at: hardExpireAt,
+      p_idle_timeout_seconds: idleTimeoutSeconds,
       p_ip_hash: ipHash,
       p_path_hash: pathHash,
       p_table_name: ticketStateTableName,

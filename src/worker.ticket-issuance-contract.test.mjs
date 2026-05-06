@@ -275,6 +275,7 @@ test('issues ticket URL only after synchronous ticket seed completes', async (t)
   assert.equal(seedCall.body.p_table_name, 'DOWNLOAD_TICKET_STATE_TABLE');
   assert.equal(seedCall.body.p_ticket_hash, expectedTicketHash);
   assert.equal(seedCall.body.p_hard_expire_at, Math.min(payloadData.expireTime, payloadSignExpire));
+  assert.equal(seedCall.body.p_idle_timeout_seconds, 600);
   assert.equal(Number.isInteger(seedCall.body.p_issued_at), true);
   assert.equal(seedCall.body.p_issued_at > 0, true);
   assert.match(seedCall.body.p_ip_hash, /^[a-f0-9]{64}$/);
