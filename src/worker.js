@@ -21,6 +21,7 @@ import { createCacheManager } from './cache/factory.js';
 import { unifiedCheck } from './unified-check.js';
 import { handleInternalApiIfAny } from './internal-api.js';
 import { fetchControllerState } from './controller-adapter.js';
+import { bindWaitUntil, logEvent } from './logging.js';
 
 const TURNSTILE_VERIFY_ENDPOINT = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
 const TURNSTILE_HEADER = 'cf-turnstile-response';
@@ -83,6 +84,25 @@ const slowFailDelay = async () => {
 };
 
 const nowMs = () => Date.now();
+
+const logWorkerEvent = (level, event, fields = {}) => logEvent(level, 'Worker', event, fields);
+const logTerminalResponse = (response, reason, phase) => {
+  logEvent('log', 'Terminal', 'response', {
+    status: response?.status,
+    reason,
+    phase,
+  });
+  return response;
+};
+
+const logRequestComplete = (response, reason, phase) => {
+  logWorkerEvent('log', 'request_complete', {
+    status: response?.status,
+    reason,
+    phase,
+  });
+  return logTerminalResponse(response, reason, phase);
+};
 
 const normalizePositiveSeconds = (value, fallback = 0) => {
   const num = Number(value);
@@ -746,7 +766,7 @@ const computeAltchaIpScope = async (clientIP, ipv4Suffix, ipv6Suffix) => {
       ipHash,
     };
   } catch (error) {
-    console.error('[ALTCHA Dynamic] Failed to compute IP scope:', error instanceof Error ? error.message : String(error));
+    logEvent('error', 'ALTCHA', 'dynamic_fetch_failed', { error });
     return { ipRange: '', ipHash: '' };
   }
 };
@@ -1239,7 +1259,7 @@ const resolveConfig = (env = {}, bootstrap = null) => {
   const fileRateLimitActive = Boolean(hasDbMode && rateLimitEnabledFlag && fileWindowTimeSeconds > 0 && fileLimit > 0);
 
   if (hasDbMode && ipSubnetLimit === 0 && !ipRateLimitDisabledLogged) {
-    console.log('IP rate limiting disabled (limit=0)');
+    logWorkerEvent('log', 'rate_limit_disabled', { reason: 'limit_zero', enabled: false });
     ipRateLimitDisabledLogged = true;
   }
 
@@ -1291,7 +1311,7 @@ const resolveConfig = (env = {}, bootstrap = null) => {
         cleanupProbability: cacheCleanupProbability,
       };
     } else {
-      console.warn('[CONFIG] Cache DISABLED: sizeTTLSeconds =', sizeTTLSeconds);
+      logEvent('warn', 'Cache', 'disabled', { ttlSeconds: sizeTTLSeconds, enabled: false });
     }
   }
 
@@ -1621,7 +1641,7 @@ const generateNonce = (byteLength = 16) => {
     crypto.getRandomValues(nonceBytes);
     return encodeUrlSafeBase64(nonceBytes).replace(/=+$/u, '');
   } catch (error) {
-    console.error('[Binding] Failed to generate nonce:', error instanceof Error ? error.message : String(error));
+    logEvent('error', 'Binding', 'nonce_failed', { error });
     return '';
   }
 };
@@ -1663,7 +1683,7 @@ const buildBindingPayload = async (
       expiresAt: normalizedExpires,
     };
   } catch (error) {
-    console.error(`[${context}] Failed to compute binding MAC:`, error instanceof Error ? error.message : String(error));
+    logEvent('error', context === 'ALTCHA' ? 'ALTCHA' : 'Binding', 'mac_failed', { error });
     return {
       bindingStr: normalizedBindingStr,
       bindingMac: '',
@@ -1717,7 +1737,7 @@ const buildTurnstileCData = async (secret, bindingMac, nonce) => {
     const macBytes = await computeHmac(secret, `${bindingMac}:${nonce}`);
     return encodeUrlSafeBase64(macBytes).replace(/=+$/u, '');
   } catch (error) {
-    console.error('[Turnstile Binding] Failed to compute cData:', error instanceof Error ? error.message : String(error));
+    logEvent('error', 'Binding', 'cdata_failed', { error });
     return '';
   }
 };
@@ -1748,7 +1768,7 @@ const fetchAltchaDifficultyState = async (config, env, ipHash) => {
     });
     if (!response.ok) {
       const text = await response.text().catch(() => '');
-      console.error('[ALTCHA Dynamic] PostgREST fetch failed:', response.status, text);
+      logEvent('error', 'ALTCHA', 'dynamic_fetch_failed', { status: response.status, error: text });
       return null;
     }
     const payload = await response.json().catch(() => null);
@@ -1757,7 +1777,7 @@ const fetchAltchaDifficultyState = async (config, env, ipHash) => {
     }
     return null;
   } catch (error) {
-    console.error('[ALTCHA Dynamic] Failed to fetch state:', error instanceof Error ? error.message : String(error));
+    logEvent('error', 'ALTCHA', 'dynamic_fetch_failed', { error });
   }
   return null;
 };
@@ -1796,12 +1816,12 @@ const updateAltchaDifficultyState = async (config, env, scope, nowSeconds) => {
       });
       if (!response.ok) {
         const text = await response.text().catch(() => '');
-        console.error('[ALTCHA Dynamic] PostgREST update failed:', response.status, text);
+        logEvent('error', 'ALTCHA', 'dynamic_update_failed', { status: response.status, error: text });
       }
       return;
     }
   } catch (error) {
-    console.error('[ALTCHA Dynamic] Failed to update state:', error instanceof Error ? error.message : String(error));
+    logEvent('error', 'ALTCHA', 'dynamic_update_failed', { error });
   }
 };
 
@@ -1848,7 +1868,7 @@ const fetchPowdetDifficultyState = async (config, env, ipHash, alg) => {
     });
     if (!response.ok) {
       const text = await response.text().catch(() => '');
-      console.error('[Powdet Dynamic] PostgREST fetch failed:', response.status, text);
+      logEvent('error', 'Powdet', 'dynamic_fetch_failed', { status: response.status, error: text });
       return null;
     }
     const payload = await response.json().catch(() => null);
@@ -1857,7 +1877,7 @@ const fetchPowdetDifficultyState = async (config, env, ipHash, alg) => {
     }
     return null;
   } catch (error) {
-    console.error('[Powdet Dynamic] Failed to fetch state:', error instanceof Error ? error.message : String(error));
+    logEvent('error', 'Powdet', 'dynamic_fetch_failed', { error });
   }
   return null;
 };
@@ -1900,12 +1920,12 @@ const updatePowdetDifficultyState = async (config, env, scope, nowSeconds, alg) 
       });
       if (!response.ok) {
         const text = await response.text().catch(() => '');
-        console.error('[Powdet Dynamic] PostgREST update failed:', response.status, text);
+        logEvent('error', 'Powdet', 'dynamic_update_failed', { status: response.status, error: text });
       }
       return;
     }
   } catch (error) {
-    console.error('[Powdet Dynamic] Failed to update state:', error instanceof Error ? error.message : String(error));
+    logEvent('error', 'Powdet', 'dynamic_update_failed', { error });
   }
 };
 
@@ -2289,7 +2309,7 @@ const fetchFilesizeFromCache = async (config, pathHash) => {
     }
 
   } catch (error) {
-    console.warn('[Landing] Filesize cache lookup failed:', error instanceof Error ? error.message : String(error));
+    logEvent('warn', 'Cache', 'check_failed', { error });
   }
 
   return 0;
@@ -2536,7 +2556,7 @@ const normalizeLandingCaptchaCombo = (landingDecision) => {
       continue;
     }
     if (!VALID_ACTIONS_SET.has(token)) {
-      console.warn(`[controller] unsupported captchaCombo token '${entry}' ignored`);
+      logEvent('warn', 'Controller', 'unsupported_captcha_combo', { reason: 'unsupported_token' });
       continue;
     }
     if (!seen.has(token)) {
@@ -2615,7 +2635,7 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
     try {
       filepathHash = await sha256Hash(decodedPath);
     } catch (error) {
-      console.error('[Path Hash] Failed to hash filepath:', error instanceof Error ? error.message : String(error));
+      logWorkerEvent('error', 'path_hash_failed', { error });
     }
   }
 
@@ -2630,14 +2650,14 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
       );
 
       if (!cfResult.allowed) {
-        console.error(`[CF Rate Limiter] Blocked IP subnet: ${cfResult.ipSubnet}`);
+        logEvent('warn', 'RateLimit', 'cf_blocked', { retryAfter: 60 });
         const response = respondJson(origin, { code: 429, message: 'rate limited' }, 429);
         response.headers.set('Retry-After', '60');
         return response;
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error('[CF Rate Limiter] Error during check (info):', message);
+      logEvent('error', 'RateLimit', 'cf_check_failed', { error: message, phase: 'info' });
       // fail-open
     }
   }
@@ -2685,7 +2705,7 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
       const decodedBinding = base64urlDecode(rawTurnstileBinding);
       turnstileBindingPayload = JSON.parse(decodedBinding);
     } catch (error) {
-      console.error('[Turnstile Binding] Failed to decode binding payload:', error instanceof Error ? error.message : String(error));
+      logEvent('error', 'Binding', 'decode_failed', { error });
       return respondJson(origin, { code: 400, message: 'invalid turnstile binding format' }, 400);
     }
   }
@@ -2696,7 +2716,7 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
       const decoded = base64urlDecode(altChallengeResultParam);
       altchaPayload = JSON.parse(decoded);
     } catch (error) {
-      console.error('[ALTCHA] Failed to decode altChallengeResult:', error instanceof Error ? error.message : String(error));
+      logEvent('error', 'ALTCHA', 'token_rejected', { reason: 'decode_failed', error });
       return new Response('Invalid altChallengeResult format', { status: 400 });
     }
   }
@@ -2711,7 +2731,7 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
       }
       powdetSolutions = parsed;
     } catch (error) {
-      console.error('[Powdet] Failed to decode powdetSolutions:', error instanceof Error ? error.message : String(error));
+      logEvent('error', 'Powdet', 'solution_rejected', { reason: 'decode_failed', error });
       return respondJson(origin, { code: 400, message: 'invalid powdetSolutions format' }, 400);
     }
   }
@@ -2837,7 +2857,7 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
     try {
       tokenHash = await sha256Hash(rawTurnstileToken);
     } catch (error) {
-      console.error('[Turnstile Binding] Failed to hash token:', error instanceof Error ? error.message : String(error));
+      logEvent('error', 'Binding', 'token_rejected', { reason: 'hash_failed', error });
     }
   }
 
@@ -2862,11 +2882,11 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
       return;
     }
     if (!filepathHashValue) {
-      console.error('[Turnstile Binding] Missing filepath hash; cannot insert token binding');
+      logEvent('error', 'Binding', 'token_rejected', { reason: 'missing_filepath_hash' });
       return;
     }
     if (!Number.isFinite(tokenTTLSeconds) || tokenTTLSeconds <= 0) {
-      console.warn('[Turnstile Binding] Skipping token insert due to invalid TTL:', tokenTTLSeconds);
+      logEvent('warn', 'Binding', 'token_rejected', { reason: 'invalid_ttl', ttlSeconds: tokenTTLSeconds });
       return;
     }
     const nowSeconds = Math.floor(Date.now() / 1000);
@@ -2875,7 +2895,7 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
     if (config.dbMode === 'custom-pg-rest') {
       const postgrestUrl = config.rateLimitConfig?.postgrestUrl;
       if (!postgrestUrl) {
-        console.error('[Turnstile Binding] PostgREST URL missing; cannot insert token binding');
+        logEvent('error', 'Binding', 'token_rejected', { reason: 'postgrest_url_missing' });
         return;
       }
       const headers = {
@@ -2892,7 +2912,7 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
         UPDATED_AT: nowSeconds,
         EXPIRES_AT: expiresAt,
       };
-      ctx.waitUntil((async () => {
+      bindWaitUntil(ctx, (async () => {
         try {
           const endpoint = new URL(`${postgrestUrl}/${tokenTableName}`);
           const response = await fetch(endpoint.toString(), {
@@ -2902,12 +2922,12 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
           });
           if (!response.ok && response.status !== 409) {
             const errorText = await response.text().catch(() => '');
-            console.error('[Turnstile Binding] PostgREST insert failed:', response.status, errorText);
+            logEvent('error', 'Binding', 'token_rejected', { reason: 'insert_failed', status: response.status, error: errorText });
           }
         } catch (error) {
-          console.error('[Turnstile Binding] PostgREST insert error:', error instanceof Error ? error.message : String(error));
+          logEvent('error', 'Binding', 'token_rejected', { reason: 'insert_error', error });
         }
-      })());
+      })(), 'Binding', 'token_insert', { table: tokenTableName, ttlSeconds: tokenTTLSeconds });
     }
   };
 
@@ -2916,11 +2936,11 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
       return;
     }
     if (!filepathHashValue) {
-      console.error('[Turnstile Binding] Missing filepath hash; cannot update token binding');
+      logEvent('error', 'Binding', 'token_rejected', { reason: 'missing_filepath_hash' });
       return;
     }
     if (!Number.isFinite(tokenTTLSeconds) || tokenTTLSeconds <= 0) {
-      console.warn('[Turnstile Binding] Skipping token update due to invalid TTL:', tokenTTLSeconds);
+      logEvent('warn', 'Binding', 'token_rejected', { reason: 'invalid_ttl', ttlSeconds: tokenTTLSeconds });
       return;
     }
     const nowSeconds = Math.floor(Date.now() / 1000);
@@ -2929,7 +2949,7 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
     if (config.dbMode === 'custom-pg-rest') {
       const postgrestUrl = config.rateLimitConfig?.postgrestUrl;
       if (!postgrestUrl) {
-        console.error('[Turnstile Binding] PostgREST URL missing; cannot update token binding');
+        logEvent('error', 'Binding', 'token_rejected', { reason: 'postgrest_url_missing' });
         return;
       }
       const headers = {
@@ -2937,7 +2957,7 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
         Prefer: 'return=minimal',
       };
       applyVerifyHeaders(headers, config.verifyHeader, config.verifySecret);
-      ctx.waitUntil((async () => {
+      bindWaitUntil(ctx, (async () => {
         try {
           const endpoint = new URL(`${postgrestUrl}/${tokenTableName}`);
           endpoint.searchParams.set('TOKEN_HASH', `eq.${tokenHash}`);
@@ -2954,12 +2974,12 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
           });
           if (!response.ok) {
             const errorText = await response.text().catch(() => '');
-            console.error('[Turnstile Binding] PostgREST update failed:', response.status, errorText);
+            logEvent('error', 'Binding', 'token_rejected', { reason: 'update_failed', status: response.status, error: errorText });
           }
         } catch (error) {
-          console.error('[Turnstile Binding] PostgREST update error:', error instanceof Error ? error.message : String(error));
+          logEvent('error', 'Binding', 'token_rejected', { reason: 'update_error', error });
         }
-      })());
+      })(), 'Binding', 'token_update', { table: tokenTableName, ttlSeconds: tokenTTLSeconds });
     }
   };
 
@@ -3189,7 +3209,7 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
         };
         expectedHmac = await computePowdetHmac(config, bindingPayload);
       } catch (error) {
-        console.error('[Powdet] Failed to compute HMAC:', error instanceof Error ? error.message : String(error));
+        logEvent('error', 'Powdet', 'solution_rejected', { reason: 'hmac_failed', error });
         return respondJson(origin, { code: 500, message: 'powdet verification unavailable' }, 500);
       }
 
@@ -3201,7 +3221,7 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
       try {
         challengeHash = await sha256Hash(payloadChallenge);
       } catch (error) {
-        console.error('[Powdet] Failed to hash challenge:', error instanceof Error ? error.message : String(error));
+        logEvent('error', 'Powdet', 'solution_rejected', { reason: 'hash_failed', error });
         if (hasDbMode) {
           return respondJson(origin, { code: 500, message: 'powdet hashing failed' }, 500);
         }
@@ -3270,7 +3290,7 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
       const challengeFingerprint = `${altchaPayload.algorithm}:${altchaPayload.challenge}:${altchaPayload.salt}`;
       altchaTokenHash = await sha256Hash(challengeFingerprint);
     } catch (error) {
-      console.error('[ALTCHA] Failed to compute token hash:', error instanceof Error ? error.message : String(error));
+      logEvent('error', 'ALTCHA', 'token_rejected', { reason: 'hash_failed', error });
       if (hasDbMode) {
         return respondJson(origin, { code: 500, message: 'ALTCHA token hashing failed' }, 500);
       }
@@ -3371,21 +3391,21 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
   const canUseUnified = Boolean(unifiedEligible && hasDbMode && clientIP);
 
   if (requiresAltchaStateful && !filepathHash) {
-    console.error('[ALTCHA] Missing filepath hash for stateful verification');
+    logEvent('error', 'ALTCHA', 'token_rejected', { reason: 'missing_filepath_hash' });
     return respondJson(origin, { code: 500, message: 'ALTCHA token validation unavailable' }, 500);
   }
 
   if (shouldBindToken && !canUseUnified) {
-    console.error('[Turnstile Binding] Token binding enabled but unified check is unavailable');
+    logEvent('error', 'Binding', 'token_rejected', { reason: 'unified_unavailable' });
     return respondJson(origin, { code: 500, message: 'turnstile token binding unavailable' }, 500);
   }
 
   if (requiresAltchaStateful && !canUseUnified) {
-    console.error('[ALTCHA] Token validation enabled but unified check is unavailable');
+    logEvent('error', 'ALTCHA', 'token_rejected', { reason: 'unified_unavailable' });
     return respondJson(origin, { code: 500, message: 'ALTCHA token validation unavailable' }, 500);
   }
   if (requiresPowdetStateful && !canUseUnified) {
-    console.error('[Powdet] Challenge validation enabled but unified check is unavailable');
+    logEvent('error', 'Powdet', 'solution_rejected', { reason: 'unified_unavailable' });
     return respondJson(origin, { code: 500, message: 'powdet validation unavailable' }, 500);
   }
 
@@ -3440,7 +3460,7 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
 
           if (!tokenBindingAllowed) {
             const tokenMessage = TOKEN_BINDING_ERROR_MESSAGES[tokenBindingErrorCode] || 'turnstile token binding failed';
-            console.warn('[Turnstile Binding] Token rejected:', tokenMessage);
+            logEvent('warn', 'Binding', 'token_rejected', { reason: tokenMessage });
             return respondJson(origin, { code: 463, message: tokenMessage }, 403);
           }
 
@@ -3460,7 +3480,7 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
               4: 'ALTCHA token filepath mismatch',
             };
             const message = altchaErrorMessages[altchaResult.errorCode] || 'ALTCHA token validation failed';
-            console.warn('[ALTCHA] Token rejected:', message);
+            logEvent('warn', 'ALTCHA', 'token_rejected', { reason: message });
             const expiresAt = Number.isFinite(altchaResult.expiresAt) ? altchaResult.expiresAt : null;
             const nowSeconds = Math.floor(Date.now() / 1000);
             let ttlSeconds = 0;
@@ -3547,14 +3567,14 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
         }
       }
     } catch (error) {
-      console.error('[Unified Check] Failed:', error instanceof Error ? error.message : String(error));
+      logEvent('error', 'UnifiedCheck', 'rpc_error', { error });
       const pgHandle = config.rateLimitConfig?.pgErrorHandle || 'fail-closed';
       if (pgHandle === 'fail-open') {
-      console.warn('[Unified Check] fail-open: continuing with standalone checks');
+      logEvent('warn', 'UnifiedCheck', 'fail_open', { reason: 'standalone_checks' });
       unifiedResult = null;
       cacheHit = false;
       if (shouldBindToken) {
-        console.warn('[Unified Check] Token binding DB unavailable, falling back to stateless protection');
+        logEvent('warn', 'Binding', 'token_rejected', { reason: 'db_unavailable_fail_open' });
         tokenBindingAllowed = true;
         shouldBindToken = false;
         shouldRecordTokenBinding = false;
@@ -3577,7 +3597,7 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
       clientIP
     );
     if (!verification.ok) {
-      console.error('[Turnstile] Stateless verification failed:', verification.message);
+      logEvent('error', 'Binding', 'token_rejected', { reason: verification.message });
       return respondJson(origin, {
         code: 462,
         message: verification.message || 'turnstile verification failed'
@@ -3588,21 +3608,21 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
         ? verification.cdata.replace(/=+$/u, '')
         : '';
       if (!responseCData || responseCData !== expectedTurnstileCData) {
-        console.error('[Turnstile] Stateless verification cdata mismatch');
+        logEvent('error', 'Binding', 'cdata_failed', { reason: 'mismatch' });
         return respondJson(origin, { code: 463, message: 'turnstile cdata mismatch' }, 403);
       }
     }
     if (config.turnstileEnforceAction) {
       const action = typeof verification.action === 'string' ? verification.action : '';
       if (action !== config.turnstileExpectedAction) {
-        console.error('[Turnstile] Stateless verification action mismatch:', action);
+        logEvent('error', 'Binding', 'token_rejected', { reason: 'action_mismatch' });
         return respondJson(origin, { code: 463, message: 'turnstile action mismatch' }, 403);
       }
     }
     if (config.turnstileEnforceHostname) {
       const hostname = typeof verification.hostname === 'string' ? verification.hostname.toLowerCase().trim() : '';
       if (!hostname || !config.turnstileAllowedHostnamesSet.has(hostname)) {
-        console.error('[Turnstile] Stateless verification hostname mismatch:', hostname);
+        logEvent('error', 'Binding', 'token_rejected', { reason: 'hostname_mismatch' });
         return respondJson(origin, { code: 463, message: 'turnstile hostname mismatch' }, 403);
       }
     }
@@ -3611,9 +3631,9 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
   if (shouldBindToken && !tokenBindingAllowed) {
     const pgHandle = config.rateLimitConfig?.pgErrorHandle || 'fail-closed';
     if (pgHandle === 'fail-open') {
-      console.warn('[Turnstile Binding] Token binding unavailable; continuing without binding');
+      logEvent('warn', 'Binding', 'token_rejected', { reason: 'unavailable_fail_open' });
     } else {
-      console.error('[Turnstile Binding] Token binding could not be validated');
+      logEvent('error', 'Binding', 'token_rejected', { reason: 'validation_unavailable' });
       return respondJson(origin, { code: 500, message: 'turnstile token binding unavailable' }, 500);
     }
   }
@@ -3655,7 +3675,7 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
           cacheHit = true;
         }
       } catch (error) {
-        console.error('[Filesize Cache] Standalone cache check failed:', error instanceof Error ? error.message : String(error));
+        logEvent('error', 'Cache', 'check_failed', { error });
       }
     }
   }
@@ -3669,12 +3689,12 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
     }
     sizeBytes = parseFileSize(fileInfo?.size);
     if (cacheManager && cacheConfigWithCtx) {
-      ctx.waitUntil(
-        cacheManager
-          .saveCache(decodedPath, sizeBytes, cacheConfigWithCtx)
-          .catch((error) => {
-            console.error('[Filesize Cache] Save failed:', error instanceof Error ? error.message : String(error));
-          })
+      bindWaitUntil(
+        ctx,
+        cacheManager.saveCache(decodedPath, sizeBytes, cacheConfigWithCtx),
+        'Cache',
+        'save',
+        { table: cacheConfigWithCtx.tableName || config.filesizeCacheTableName, count: 1 }
       );
     }
   }
@@ -3784,21 +3804,21 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
     responsePayload.data.settings.clientDecrypt = true;
   }
   if (needAltcha && altchaTokenHash && canUseUnified) {
-    ctx.waitUntil(
+    bindWaitUntil(ctx,
       (async () => {
         if (!filepathHash) {
-          console.warn('[ALTCHA Token Recording] Skipped: missing filepath hash');
+          logEvent('warn', 'ALTCHA', 'token_rejected', { reason: 'missing_filepath_hash' });
           return;
         }
         if (!clientIP) {
-          console.warn('[ALTCHA Token Recording] Skipped: missing client IP');
+          logEvent('warn', 'ALTCHA', 'token_rejected', { reason: 'missing_client' });
           return;
         }
         const ttlSeconds = Number.isFinite(config.altchaTokenExpire) && config.altchaTokenExpire > 0
           ? Math.floor(config.altchaTokenExpire)
           : 180;
         if (!Number.isFinite(ttlSeconds) || ttlSeconds <= 0) {
-          console.warn('[ALTCHA Token Recording] Skipped: invalid TTL', config.altchaTokenExpire);
+          logEvent('warn', 'ALTCHA', 'token_rejected', { reason: 'invalid_ttl', ttlSeconds: config.altchaTokenExpire });
           return;
         }
         const nowSeconds = Math.floor(Date.now() / 1000);
@@ -3808,7 +3828,7 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
           if (normalizedDbMode === 'custom-pg-rest') {
             const postgrestUrl = config.rateLimitConfig?.postgrestUrl;
             if (!postgrestUrl) {
-              console.warn('[ALTCHA Token Recording] PostgREST URL missing');
+              logEvent('warn', 'ALTCHA', 'token_rejected', { reason: 'postgrest_url_missing' });
               return;
             }
             const rpcUrl = `${postgrestUrl}/rpc/landing_record_altcha_token`;
@@ -3829,13 +3849,16 @@ const handleInfo = async (request, env, config, rateLimiter, ctx) => {
             });
             if (!response.ok) {
               const text = await response.text().catch(() => '');
-              console.error('[ALTCHA Token Recording] PostgREST failed:', response.status, text);
+              logEvent('error', 'ALTCHA', 'token_rejected', { reason: 'record_failed', status: response.status, error: text });
             }
           }
         } catch (error) {
-          console.error('[ALTCHA Token Recording] Failed:', error instanceof Error ? error.message : String(error));
+          logEvent('error', 'ALTCHA', 'token_rejected', { reason: 'record_error', error });
         }
-      })()
+      })(),
+      'ALTCHA',
+      'token_record',
+      { table: altchaTableName, ttlSeconds: config.altchaTokenExpire }
     );
   }
 
@@ -3855,7 +3878,7 @@ async function cleanupExpiredAltchaTokens(config, env) {
     if (config.dbMode === 'custom-pg-rest') {
       const postgrestUrl = config.rateLimitConfig?.postgrestUrl;
       if (!postgrestUrl) {
-        console.error('[ALTCHA Cleanup] PostgREST URL missing');
+        logEvent('error', 'ALTCHA', 'cleanup_failed', { reason: 'postgrest_url_missing' });
         return;
       }
       const rpcUrl = `${postgrestUrl}/rpc/landing_cleanup_expired_altcha_tokens`;
@@ -3871,13 +3894,13 @@ async function cleanupExpiredAltchaTokens(config, env) {
       });
       if (!response.ok) {
         const text = await response.text().catch(() => '');
-        console.error('[ALTCHA Cleanup] PostgREST RPC failed:', response.status, text);
+        logEvent('error', 'ALTCHA', 'cleanup_failed', { status: response.status, error: text });
       }
       return;
     }
 
   } catch (error) {
-    console.error('[ALTCHA Cleanup] Failed:', error instanceof Error ? error.message : String(error));
+    logEvent('error', 'ALTCHA', 'cleanup_failed', { error });
   }
 }
 
@@ -3910,12 +3933,12 @@ async function cleanupAltchaDifficultyState(config, env) {
       });
       if (!response.ok) {
         const text = await response.text().catch(() => '');
-        console.error('[ALTCHA Dynamic] Cleanup RPC failed:', response.status, text);
+        logEvent('error', 'ALTCHA', 'cleanup_failed', { status: response.status, error: text });
       }
       return;
     }
   } catch (error) {
-    console.error('[ALTCHA Dynamic] Cleanup failed:', error instanceof Error ? error.message : String(error));
+    logEvent('error', 'ALTCHA', 'cleanup_failed', { error });
   }
 }
 
@@ -3946,12 +3969,12 @@ async function cleanupExpiredPowdetTickets(config, env) {
           p_table_name: tableName,
         }),
       }).catch((error) => {
-        console.error('[Powdet Cleanup] PostgREST RPC failed:', error instanceof Error ? error.message : String(error));
+        logEvent('error', 'Powdet', 'cleanup_failed', { error });
       });
       return;
     }
   } catch (error) {
-    console.error('[Powdet Cleanup] Failed:', error instanceof Error ? error.message : String(error));
+    logEvent('error', 'Powdet', 'cleanup_failed', { error });
   }
 }
 
@@ -3994,13 +4017,13 @@ async function cleanupPowdetDifficultyState(config, env) {
         });
         if (!response.ok) {
           const text = await response.text().catch(() => '');
-          console.error('[Powdet Dynamic] Cleanup RPC failed:', response.status, text);
+          logEvent('error', 'Powdet', 'cleanup_failed', { status: response.status, error: text });
         }
       }
       return;
     }
   } catch (error) {
-    console.error('[Powdet Dynamic] Cleanup failed:', error instanceof Error ? error.message : String(error));
+    logEvent('error', 'Powdet', 'cleanup_failed', { error });
   }
 }
 
@@ -4017,7 +4040,7 @@ async function cleanupExpiredTurnstileTokens(config, env) {
     if (config.dbMode === 'custom-pg-rest') {
       const postgrestUrl = config.rateLimitConfig?.postgrestUrl;
       if (!postgrestUrl) {
-        console.error('[Turnstile Cleanup] PostgREST URL missing');
+        logEvent('error', 'Binding', 'token_rejected', { reason: 'cleanup_postgrest_url_missing' });
         return;
       }
       const rpcUrl = `${postgrestUrl}/rpc/landing_cleanup_expired_tokens`;
@@ -4033,12 +4056,12 @@ async function cleanupExpiredTurnstileTokens(config, env) {
       });
       if (!response.ok) {
         const text = await response.text().catch(() => '');
-        console.error('[Turnstile Cleanup] PostgREST RPC failed:', response.status, text);
+        logEvent('error', 'Binding', 'token_rejected', { reason: 'cleanup_failed', status: response.status, error: text });
       }
       return;
     }
   } catch (error) {
-    console.error('[Turnstile Cleanup] Failed:', error instanceof Error ? error.message : String(error));
+    logEvent('error', 'Binding', 'token_rejected', { reason: 'cleanup_failed', error });
   }
 }
 
@@ -4073,7 +4096,7 @@ async function cleanupExpiredRateLimits(config, env) {
       )
     );
   } catch (error) {
-    console.error('[Rate Limit Cleanup] Failed:', error instanceof Error ? error.message : String(error));
+    logEvent('error', 'RateLimit', 'cleanup_failed', { error });
   }
 }
 
@@ -4087,7 +4110,7 @@ async function cleanupSingleRateLimitTable(config, env, tableName, windowTimeSec
   if (config.dbMode === 'custom-pg-rest') {
     const postgrestUrl = config.rateLimitConfig?.postgrestUrl;
     if (!postgrestUrl) {
-      console.error('[Rate Limit Cleanup] PostgREST URL missing');
+      logEvent('error', 'RateLimit', 'cleanup_failed', { reason: 'postgrest_url_missing' });
       return;
     }
 
@@ -4115,11 +4138,11 @@ async function cleanupSingleRateLimitTable(config, env, tableName, windowTimeSec
 
     if (!response.ok) {
       const text = await response.text().catch(() => '');
-      console.error('[Rate Limit Cleanup] PostgREST RPC failed:', response.status, text);
+      logEvent('error', 'RateLimit', 'cleanup_failed', { status: response.status, error: text });
     } else {
       const result = await response.json().catch(() => null);
       if (result !== null && typeof result === 'number') {
-        console.log('[Rate Limit Cleanup] Deleted', result, 'rows from table:', tableName);
+        logEvent('log', 'RateLimit', 'cleanup_done', { count: result, table: tableName });
       }
     }
     return;
@@ -4145,9 +4168,10 @@ async function cleanupExpiredCache(config, env) {
     if (config.dbMode === 'custom-pg-rest') {
       const postgrestUrl = config.cacheConfig?.postgrestUrl || config.rateLimitConfig?.postgrestUrl;
       if (!postgrestUrl) {
-        console.error('[Cache Cleanup] PostgREST URL missing');
+        logEvent('error', 'Cache', 'cleanup_failed', { reason: 'postgrest_url_missing' });
         return;
       }
+      logEvent('log', 'Cache', 'cleanup_triggered', { table: tableName, ttlSeconds: sizeTTL });
       const rpcUrl = `${postgrestUrl}/rpc/landing_cleanup_expired_cache`;
       const headers = { 'Content-Type': 'application/json' };
       applyVerifyHeaders(headers, config.verifyHeader, config.verifySecret);
@@ -4161,12 +4185,14 @@ async function cleanupExpiredCache(config, env) {
       });
     if (!response.ok) {
       const text = await response.text().catch(() => '');
-      console.error('[Cache Cleanup] PostgREST RPC failed:', response.status, text);
+      logEvent('error', 'Cache', 'cleanup_failed', { status: response.status, error: text });
+    } else {
+      logEvent('log', 'Cache', 'cleanup_done', { status: response.status, table: tableName, ttlSeconds: sizeTTL });
     }
     return;
   }
   } catch (error) {
-    console.error('[Cache Cleanup] Failed:', error instanceof Error ? error.message : String(error));
+    logEvent('error', 'Cache', 'cleanup_failed', { error });
   }
 }
 
@@ -4205,16 +4231,22 @@ async function scheduleAllCleanups(config, env, ctx) {
     return;
   }
 
+  logEvent('log', 'CleanupScheduler', 'scheduled', { count: cleanupTasks.length });
+
   const cleanupPromise = Promise.allSettled(
     cleanupTasks.map(task =>
-      task.fn().catch(error => {
-        console.error(`[Cleanup Scheduler] ${task.name} failed:`, error instanceof Error ? error.message : String(error));
-      })
+      task.fn()
+        .then(() => {
+          logEvent('log', 'CleanupScheduler', 'task_done', { reason: task.name });
+        })
+        .catch(error => {
+          logEvent('error', 'CleanupScheduler', 'task_failed', { reason: task.name, error });
+        })
     )
   );
 
   if (ctx && ctx.waitUntil) {
-    ctx.waitUntil(cleanupPromise);
+    bindWaitUntil(ctx, cleanupPromise, 'CleanupScheduler', 'scheduled', { count: cleanupTasks.length });
   } else {
     await cleanupPromise;
   }
@@ -4244,7 +4276,7 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
         config.cfRatelimiterBinding
       );
       if (!cfResult.allowed) {
-        console.error(`[CF Rate Limiter] Blocked IP subnet: ${cfResult.ipSubnet}`);
+        logEvent('warn', 'RateLimit', 'cf_blocked', { retryAfter: 60 });
         const headers = safeHeaders(origin);
         headers.set('content-type', 'text/plain');
         headers.set('Retry-After', '60');
@@ -4255,7 +4287,7 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error('[CF Rate Limiter] Error during check:', message);
+      logEvent('error', 'RateLimit', 'cf_check_failed', { error: message });
       // fail-open
     }
     return null;
@@ -4304,7 +4336,7 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
     try {
       filepathHash = await sha256Hash(decodedPath);
     } catch (error) {
-      console.error('[Rate Limit] Failed to hash filepath:', error instanceof Error ? error.message : String(error));
+      logEvent('error', 'RateLimit', 'path_hash_failed', { error });
     }
   }
 
@@ -4462,10 +4494,10 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
           }
         }
       } catch (error) {
-        console.error('[Fast Redirect][Unified Check] Failed:', error instanceof Error ? error.message : String(error));
+        logEvent('error', 'UnifiedCheck', 'rpc_error', { phase: 'fast_redirect', error });
         const pgHandle = config.rateLimitConfig?.pgErrorHandle || 'fail-closed';
         if (pgHandle === 'fail-open') {
-          console.warn('[Fast Redirect][Unified Check] fail-open: continuing with standalone checks');
+          logEvent('warn', 'UnifiedCheck', 'fail_open', { phase: 'fast_redirect' });
           unifiedResult = null;
           cacheHit = false;
         } else {
@@ -4510,7 +4542,7 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
             cacheHit = true;
           }
         } catch (error) {
-          console.error('[Fast Redirect][Filesize Cache] Standalone cache check failed:', error instanceof Error ? error.message : String(error));
+          logEvent('error', 'Cache', 'check_failed', { phase: 'fast_redirect', error });
         }
       }
     }
@@ -4520,15 +4552,15 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
         fileInfo = await fetchAlistFileInfo(config, decodedPath, clientIP);
         sizeBytes = parseFileSize(fileInfo?.size);
       } catch (error) {
-        console.error('[Fast Redirect] Failed to fetch file info:', error instanceof Error ? error.message : String(error));
+        logWorkerEvent('error', 'file_info_failed', { phase: 'fast_redirect', error });
       }
       if (cacheManager && cacheConfigWithCtx && fileInfo) {
-        ctx.waitUntil(
-          cacheManager
-            .saveCache(decodedPath, sizeBytes, cacheConfigWithCtx)
-            .catch((error) => {
-              console.error('[Fast Redirect][Filesize Cache] Save failed:', error instanceof Error ? error.message : String(error));
-            })
+        bindWaitUntil(
+          ctx,
+          cacheManager.saveCache(decodedPath, sizeBytes, cacheConfigWithCtx),
+          'Cache',
+          'save',
+          { phase: 'fast_redirect', table: cacheConfigWithCtx.tableName || config.filesizeCacheTableName, count: 1 }
         );
       }
     }
@@ -4642,10 +4674,7 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
         try {
           await updateAltchaDifficultyState(config, env, altchaScopeForChallenge, nowSeconds);
         } catch (error) {
-          console.error(
-            '[ALTCHA Dynamic] Difficulty update failed in handleFileRequest:',
-            error instanceof Error ? error.message : String(error)
-          );
+          logEvent('error', 'ALTCHA', 'dynamic_update_failed', { error });
         }
       }
     } else {
@@ -4687,14 +4716,14 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
               link: challengeLink,
             };
           } else {
-            console.error('[Turnstile Binding] Failed to generate nonce or cData for binding');
+            logEvent('error', 'Binding', 'cdata_failed', { reason: 'generate_failed' });
           }
         } else {
-          console.error('[Turnstile Binding] Missing binding MAC; cannot emit binding payload');
+          logEvent('error', 'Binding', 'mac_failed', { reason: 'missing_mac' });
         }
       }
     } catch (error) {
-      console.error('[Turnstile Binding] Failed to generate challenge binding:', error instanceof Error ? error.message : String(error));
+      logEvent('error', 'Binding', 'mac_failed', { reason: 'challenge_binding_failed', error });
     }
   }
 
@@ -4729,8 +4758,12 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
         bindingExpiresAt: challengeBinding.expiresAt,
         link: challengeLink,
       };
+      logEvent('log', 'ALTCHA', 'challenge_created', {
+        algorithm: challenge.algorithm,
+        ttlSeconds: configuredTtlSeconds,
+      });
     } catch (error) {
-      console.error('[ALTCHA] Failed to create challenge:', error instanceof Error ? error.message : String(error));
+      logEvent('error', 'ALTCHA', 'challenge_failed', { error });
     }
   }
 
@@ -4781,7 +4814,7 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
             try {
               await updatePowdetDifficultyState(config, env, powdetScopeForChallenge, nowSeconds, alg);
             } catch (error) {
-              console.error('[Powdet Dynamic] Difficulty update failed in handleFileRequest:', error instanceof Error ? error.message : String(error));
+              logEvent('error', 'Powdet', 'dynamic_update_failed', { error });
             }
           }
         }
@@ -4816,9 +4849,13 @@ const handleFileRequest = async (request, env, config, rateLimiter, ctx) => {
           link: challengeLink,
           staticBase,
         });
+        logEvent('log', 'Powdet', 'challenge_created', {
+          algorithm: alg,
+          ttlSeconds: expireSeconds,
+        });
       }
     } catch (error) {
-      console.error('[Powdet] Failed to create challenge:', error instanceof Error ? error.message : String(error));
+      logEvent('error', 'Powdet', 'challenge_failed', { error });
       return respondJson(origin, { code: 500, message: 'powdet challenge unavailable' }, 500);
     }
   }
@@ -4865,12 +4902,16 @@ export default {
     try {
       const url = new URL(request.url);
       const pathname = url.pathname || '/';
+      logWorkerEvent('log', 'request_start', {
+        phase: 'start',
+        method: request.method,
+      });
 
       const isInternalPath = pathname.startsWith('/api/v0/');
       if (isInternalPath) {
         const internalResponse = await handleInternalApiIfAny(request, env, ctx);
         if (internalResponse) {
-          return internalResponse;
+          return logRequestComplete(internalResponse, 'internal_api', 'internal');
         }
       }
 
@@ -4880,7 +4921,7 @@ export default {
         const headerName = headerNameRaw || 'X-Inner-Auth';
         const provided = request.headers.get(headerName) || '';
         if (provided !== innerAuthSecret) {
-          return new Response('Forbidden', { status: 403 });
+          return logRequestComplete(new Response('Forbidden', { status: 403 }), 'forbidden', 'auth');
         }
       }
 
@@ -4888,7 +4929,7 @@ export default {
 
       if (isInfoPath && request.method !== 'GET') {
         const origin = request.headers.get('origin') || '*';
-        return respondJson(origin, { code: 405, message: 'method not allowed' }, 405);
+        return logRequestComplete(respondJson(origin, { code: 405, message: 'method not allowed' }, 405), 'method_not_allowed', 'route');
       }
 
       let filepathOverride = null;
@@ -4896,14 +4937,14 @@ export default {
         const rawPath = url.searchParams.get('path');
         if (!rawPath) {
           const origin = request.headers.get('origin') || '*';
-          return respondJson(origin, { code: 400, message: 'path is required' }, 400);
+          return logRequestComplete(respondJson(origin, { code: 400, message: 'path is required' }, 400), 'path_required', 'route');
         }
         try {
           const decodedPath = decodeURIComponent(rawPath);
           filepathOverride = decodedPath.startsWith('/') ? decodedPath : `/${decodedPath}`;
         } catch {
           const origin = request.headers.get('origin') || '*';
-          return respondJson(origin, { code: 400, message: 'invalid path encoding' }, 400);
+          return logRequestComplete(respondJson(origin, { code: 400, message: 'invalid path encoding' }, 400), 'invalid_path_encoding', 'route');
         }
       }
 
@@ -4911,37 +4952,52 @@ export default {
       try {
         controllerState = await fetchControllerState(request, env, filepathOverride ? { filepathOverride } : undefined);
       } catch (error) {
-        console.error('[controller] state fetch error:', error instanceof Error ? error.message : String(error));
+        logEvent('error', 'Controller', 'fetch_failed', { error });
       }
 
       if (!controllerState || !controllerState.bootstrap || !controllerState.decision) {
         const origin = request.headers.get('origin') || '*';
-        return respondJson(origin, { code: 503, message: 'controller state unavailable' }, 503);
+        return logRequestComplete(respondJson(origin, { code: 503, message: 'controller state unavailable' }, 503), 'controller_state_unavailable', 'controller');
       }
+      logEvent('log', 'Controller', 'state_loaded', {
+        configVersion: controllerState.bootstrap?.configVersion,
+      });
 
       const config = resolveConfig(env || {}, controllerState.bootstrap);
+      logWorkerEvent('log', 'bootstrap_loaded', {
+        configVersion: controllerState.bootstrap?.configVersion,
+      });
       // Create rate limiter instance based on DB_MODE
       const rateLimiter = config.rateLimitEnabled ? createRateLimiter(config.dbMode) : null;
 
       ctx.controllerState = controllerState;
+      logWorkerEvent('log', 'controller_decision', {
+        configVersion: controllerState.bootstrap?.configVersion,
+        enabled: Boolean(controllerState.decision),
+      });
 
       const requestOrigin = url.origin;
       if (!config.landingWorkerAddresses.includes(requestOrigin)) {
         const origin = request.headers.get('origin') || '*';
-        return respondJson(origin, { code: 403, message: 'prohibited source' }, 403);
+        return logRequestComplete(respondJson(origin, { code: 403, message: 'prohibited source' }, 403), 'prohibited_source', 'origin');
       }
 
+      let response;
       if (isInfoPath) {
         const ipv4Error = ensureIPv4(request, config.ipv4Only);
-        if (ipv4Error) return ipv4Error;
-        return handleInfo(request, env, config, rateLimiter, ctx);
+        if (ipv4Error) {
+          return logRequestComplete(ipv4Error, 'ipv4_required', 'route');
+        }
+        response = await handleInfo(request, env, config, rateLimiter, ctx);
+      } else {
+        response = await routeRequest(request, env, config, rateLimiter, ctx);
       }
 
-      return await routeRequest(request, env, config, rateLimiter, ctx);
+      return logRequestComplete(response, response?.status === 200 ? 'ok' : 'non_success', 'complete');
     } catch (error) {
       const origin = request.headers.get('origin') || '*';
       const message = error instanceof Error ? error.message : String(error);
-      return respondJson(origin, { code: 500, message }, 500);
+      return logRequestComplete(respondJson(origin, { code: 500, message }, 500), 'error', 'exception');
     }
   },
 };

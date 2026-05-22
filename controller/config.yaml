@@ -255,8 +255,6 @@ envs:
         slotHandlerAuthKey: "replace-with-slot-handler-key" # Auth key sent to slot-handler; required if enabled
         slotHandlerAuthHeader: "X-FQ-Auth" # Header name sent to slot-handler; must match slotHandler.auth.header
         slotHandlerTimeoutMs: 20000 # Total wait budget before giving up; ms >0
-        perRequestTimeoutMs: 8000 # Timeout per slot-handler request; ms >0
-        maxAttemptsCap: 35 # Max retry attempts for slot acquisition; >=1
         siteBucket:
           mode: "sharepoint" # Legacy-compatible projection field; defaults to the first effective provider mode
           modes: ["sharepoint"] # Authoritative provider mode set; allowed values: host|sharepoint|googledrive
@@ -272,7 +270,6 @@ envs:
         acquireTimeoutMs: 11500 # Acquire timeout budget in milliseconds; >0
         releaseTimeoutMs: 1500 # Release timeout budget in milliseconds; >0
         waitTotalMaxMs: 20000 # Total CQ wait budget in milliseconds; >0
-        waitMaxAttemptsCap: 35 # Max CQ wait attempts before hard failure; >0
         heartbeat:
           enabled: true
           required: true
@@ -396,7 +393,7 @@ envs:
           cacheLRUSize: 128
           cacheTTL: 600
       adminApiToken: "replace-with-admin-token" # Token to protect powdet admin endpoints; required if admin API exposed
-    slotHandler: # slot-handler config for staging (prod mirrors structure)
+    slotHandler:
       listen: ":8080" # Slot-handler listen address; host:port
       logLevel: "info" # Logging level for slot-handler; allowed: debug|info|warn|error
       auth:
@@ -412,10 +409,12 @@ envs:
           dsn: "postgres://user:pass@host:5432/dbname?sslmode=disable" # Direct Postgres DSN (optional when using postgres mode)
       fairQueue:
         pollIntervalMs: 500 # Poll interval when waiting for slot; ms >0
-        pollWindowMs: 6000 # Poll window length; ms >0
+        terminalCleanupGraceMs: 4000 # Grace window for terminal cleanup; ms >0
+        wait:
+          maxStreamMs: 10000 # Max accepted SSE stream duration; ms >0
+          keepaliveMs: 1500 # SSE keepalive interval; ms >0
         minSlotHoldMs: 800 # Minimum hold time after grant before release; ms >=0
         smoothReleaseIntervalMs: null # Interval for gradual release smoothing; null disables
-        graceMs: 4000 # Grace window for recent grants before utilization; ms >0
         utilWindowSec: 10 # Utilization window length used by scheduler; seconds >0; source: simple-alist-cf-proxy@845175d/slot-handler/main.go utilWindowSeconds() (current implementation clips >30 to 30)
         maxBatch: 8 # Max number of acquire requests per batch; >=1
         maxProbeParallel: 4 # Max parallel probe calls per host; >=1
@@ -663,8 +662,6 @@ envs:
         slotHandlerAuthKey: "replace-with-slot-handler-key"
         slotHandlerAuthHeader: "X-FQ-Auth"
         slotHandlerTimeoutMs: 20000
-        perRequestTimeoutMs: 8000
-        maxAttemptsCap: 35
         siteBucket:
           mode: "sharepoint"
           modes: ["sharepoint"]
@@ -680,7 +677,6 @@ envs:
         acquireTimeoutMs: 11500
         releaseTimeoutMs: 1500
         waitTotalMaxMs: 20000
-        waitMaxAttemptsCap: 35
         heartbeat:
           enabled: true
           required: true
@@ -785,7 +781,7 @@ envs:
           cacheLRUSize: 128
           cacheTTL: 600
       adminApiToken: "replace-with-admin-token"
-    slotHandler: # slot-handler config for prod; mirrors staging structure
+    slotHandler:
       listen: ":8080"
       logLevel: "info"
       auth:
@@ -801,10 +797,12 @@ envs:
           dsn: "postgres://user:pass@host:5432/dbname?sslmode=disable"
       fairQueue:
         pollIntervalMs: 500
-        pollWindowMs: 6000
+        terminalCleanupGraceMs: 4000 # Grace window for terminal cleanup; ms >0
+        wait:
+          maxStreamMs: 10000 # Max accepted SSE stream duration; ms >0
+          keepaliveMs: 1500 # SSE keepalive interval; ms >0
         minSlotHoldMs: 800
         smoothReleaseIntervalMs: null
-        graceMs: 4000
         utilWindowSec: 10 # Utilization window length used by scheduler; seconds >0; source: simple-alist-cf-proxy@845175d/slot-handler/main.go utilWindowSeconds() (current implementation clips >30 to 30)
         maxBatch: 8
         maxProbeParallel: 4

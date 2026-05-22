@@ -1,4 +1,5 @@
 import { sha256Hash, applyVerifyHeaders, hasVerifyCredentials } from '../utils.js';
+import { logEvent } from '../logging.js';
 
 const executeQuery = async (postgrestUrl, verifyHeader, verifySecret, tableName, method, filters = '', body = null, extraHeaders = {}) => {
   const url = `${postgrestUrl}/${tableName}${filters ? `?${filters}` : ''}`;
@@ -83,7 +84,8 @@ const callRpc = async (postgrestUrl, verifyHeader, verifySecret, rpcName, payloa
 
 export const checkCache = async (path, config) => {
   if (!config?.postgrestUrl || !hasVerifyCredentials(config.verifyHeader, config.verifySecret)) {
-    console.warn('[Filesize Cache] checkCache skipped: missing postgrestUrl or credentials', {
+    logEvent('warn', 'Cache', 'check_failed', {
+      reason: 'missing_config_or_credentials',
       hasPostgrestUrl: !!config?.postgrestUrl,
       hasVerifyHeader: config?.verifyHeader ? (Array.isArray(config.verifyHeader) ? config.verifyHeader.length > 0 : !!config.verifyHeader) : false,
       hasVerifySecret: config?.verifySecret ? (Array.isArray(config.verifySecret) ? config.verifySecret.length > 0 : !!config.verifySecret) : false,
@@ -93,16 +95,14 @@ export const checkCache = async (path, config) => {
 
   const sizeTTL = Number(config.sizeTTL) || 0;
   if (sizeTTL <= 0) {
-    console.warn('[Filesize Cache] checkCache skipped: invalid sizeTTL', { sizeTTL: config.sizeTTL, parsedTTL: sizeTTL });
+    logEvent('warn', 'Cache', 'check_failed', { reason: 'invalid_ttl', sizeTTL: config.sizeTTL, parsedTTL: sizeTTL });
     return null;
   }
 
   if (!path || typeof path !== 'string') {
-    console.warn('[Filesize Cache] checkCache skipped: invalid path', { path });
+    logEvent('warn', 'Cache', 'check_failed', { reason: 'invalid_path', pathProvided: Boolean(path) });
     return null;
   }
-
-  console.log('[Filesize Cache] checkCache starting for path:', path);
 
   try {
     const { postgrestUrl, verifyHeader, verifySecret } = config;
@@ -125,7 +125,6 @@ export const checkCache = async (path, config) => {
 
     const records = queryResult.data || [];
     if (records.length === 0) {
-      console.log('[Filesize Cache] MISS (no record)');
       return null;
     }
 
@@ -136,28 +135,26 @@ export const checkCache = async (path, config) => {
     const age = now - timestamp;
 
     if (!Number.isFinite(timestamp) || age > sizeTTL) {
-      console.log('[Filesize Cache] MISS (expired)');
       return null;
     }
 
     if (!Number.isFinite(sizeValue) || sizeValue < 0) {
-      console.warn('[Filesize Cache] Invalid size stored, treating as miss');
+      logEvent('warn', 'Cache', 'parse_failed', { reason: 'invalid_size', tableName });
       return null;
     }
 
-    console.log('[Filesize Cache] HIT (PostgREST)');
     return { size: sizeValue };
   } catch (error) {
-    console.error('[Filesize Cache] Check failed:', error instanceof Error ? error.message : String(error));
+    logEvent('error', 'Cache', 'check_failed', { error });
     return null;
   }
 };
 
 export const saveCache = async (path, size, config) => {
-  console.log('[Filesize Cache] saveCache called:', { path, size, hasConfig: !!config });
-
   if (!config?.postgrestUrl || !hasVerifyCredentials(config.verifyHeader, config.verifySecret)) {
-    console.warn('[Filesize Cache] saveCache skipped: missing postgrestUrl or credentials', {
+    logEvent('warn', 'Cache', 'save_failed', {
+      reason: 'missing_config_or_credentials',
+      hasConfig: !!config,
       hasPostgrestUrl: !!config?.postgrestUrl,
       hasVerifyHeader: config?.verifyHeader ? (Array.isArray(config.verifyHeader) ? config.verifyHeader.length > 0 : !!config.verifyHeader) : false,
       hasVerifySecret: config?.verifySecret ? (Array.isArray(config.verifySecret) ? config.verifySecret.length > 0 : !!config.verifySecret) : false,
@@ -167,27 +164,20 @@ export const saveCache = async (path, size, config) => {
 
   const sizeTTL = Number(config.sizeTTL) || 0;
   if (sizeTTL <= 0) {
-    console.warn('[Filesize Cache] saveCache skipped: invalid sizeTTL', { sizeTTL: config.sizeTTL, parsedTTL: sizeTTL });
+    logEvent('warn', 'Cache', 'save_failed', { reason: 'invalid_ttl', sizeTTL: config.sizeTTL, parsedTTL: sizeTTL });
     return;
   }
 
   if (!path || typeof path !== 'string') {
-    console.warn('[Filesize Cache] saveCache skipped: invalid path', { path });
+    logEvent('warn', 'Cache', 'save_failed', { reason: 'invalid_path', pathProvided: Boolean(path) });
     return;
   }
 
   const normalizedSize = Number(size);
   if (!Number.isFinite(normalizedSize) || normalizedSize < 0) {
-    console.warn('[Filesize Cache] saveCache skipped: invalid size value', { size, normalizedSize });
+    logEvent('warn', 'Cache', 'save_failed', { reason: 'invalid_size', size, normalizedSize });
     return;
   }
-
-  console.log('[Filesize Cache] saveCache proceeding with:', {
-    path,
-    size: normalizedSize,
-    tableName: config.tableName || 'FILESIZE_CACHE_TABLE',
-    postgrestUrl: config.postgrestUrl,
-  });
 
   try {
     const { postgrestUrl, verifyHeader, verifySecret } = config;
@@ -198,7 +188,6 @@ export const saveCache = async (path, size, config) => {
     }
 
     const now = Math.floor(Date.now() / 1000);
-    console.log('[Filesize Cache] Calling landing_upsert_filesize_cache RPC...');
     const rpcResult = await callRpc(
       postgrestUrl,
       verifyHeader,
@@ -213,15 +202,10 @@ export const saveCache = async (path, size, config) => {
       }
     );
 
-    console.log('[Filesize Cache] RPC result:', rpcResult);
-
     if (!rpcResult || rpcResult.length === 0) {
       throw new Error('landing_upsert_filesize_cache returned no rows');
     }
-
-    console.log('[Filesize Cache] Successfully saved to database');
-
   } catch (error) {
-    console.error('[Filesize Cache] Save failed:', error instanceof Error ? error.message : String(error));
+    logEvent('error', 'Cache', 'save_failed', { error, tableName: config.tableName || 'FILESIZE_CACHE_TABLE' });
   }
 };

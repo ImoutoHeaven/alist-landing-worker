@@ -63,7 +63,9 @@ const (
 	maxThrottleHalfOpenProbeCount            = 63
 	defaultThrottleHalfOpenMaxSeconds        = 15
 	defaultThrottleHalfOpenTimeoutMode       = "partial-close"
-	defaultSlotHandlerGraceMs                = 4000
+	defaultSlotHandlerTerminalCleanupGraceMs = 4000
+	defaultSlotHandlerWaitMaxStreamMs        = 10000
+	defaultSlotHandlerWaitKeepaliveMs        = 1500
 	defaultSlotHandlerUtilWindowSec          = 10
 	defaultSlotHandlerMaxBatch               = 8
 	defaultSlotHandlerMaxProbePar            = 4
@@ -73,8 +75,6 @@ const (
 	defaultSlotHandlerMaxInFlightSite        = 50
 	defaultSlotHandlerMaxInFlightIP          = 10
 	defaultSlotHandlerTimeoutMs              = 20000
-	defaultSlotHandlerPerReqTimeout          = 8000
-	defaultSlotHandlerAttemptsCap            = 35
 	defaultLandingCleanupPercent             = 5.0
 	defaultLandingCacheTTLSeconds            = 86400
 	defaultLandingFileWindowSeconds          = 60
@@ -96,7 +96,6 @@ const (
 	defaultTrueConcurrencyAcquireTimeoutMs   = 11500
 	defaultTrueConcurrencyReleaseTimeoutMs   = 1500
 	defaultTrueConcurrencyWaitTotalMaxMs     = 20000
-	defaultTrueConcurrencyWaitMaxAttemptsCap = 35
 	defaultTrueConcurrencyHeartbeatPath      = "/api/v1/concurrency/heartbeat"
 	defaultHeartbeatIntervalMs               = 5000
 	defaultHeartbeatTimeoutMs                = 15000
@@ -112,7 +111,6 @@ const (
 	defaultHeartbeatReconnectMaxDelayMs      = 2000
 	defaultHeartbeatReconnectSafetyMs        = 1000
 	defaultSlotHandlerPollInterval           = 500
-	defaultSlotHandlerPollWindow             = 6000
 	defaultSlotHandlerMaxSlotHost            = 5
 	defaultSlotHandlerMaxSlotIP              = 1
 	defaultSlotHandlerZombieTimeout          = 30
@@ -859,8 +857,6 @@ type DownloadFairQueueConfig struct {
 	SlotHandlerAuthKey    string                            `yaml:"slotHandlerAuthKey" json:"slotHandlerAuthKey"`
 	SlotHandlerAuthHeader string                            `yaml:"slotHandlerAuthHeader" json:"slotHandlerAuthHeader"`
 	SlotHandlerTimeoutMs  int                               `yaml:"slotHandlerTimeoutMs" json:"slotHandlerTimeoutMs"`
-	PerRequestTimeoutMs   int                               `yaml:"perRequestTimeoutMs" json:"perRequestTimeoutMs"`
-	MaxAttemptsCap        int                               `yaml:"maxAttemptsCap" json:"maxAttemptsCap"`
 	SiteBucket            DownloadFairQueueSiteBucketConfig `yaml:"siteBucket" json:"siteBucket"`
 	Extra                 map[string]any                    `yaml:",inline" json:"-"`
 }
@@ -905,21 +901,19 @@ type DownloadTrueConcurrencyHeartbeatConfig struct {
 }
 
 type DownloadTrueConcurrencyConfig struct {
-	Enabled               bool                                    `yaml:"enabled" json:"enabled"`
-	HostPatterns          []string                                `yaml:"hostPatterns" json:"hostPatterns"`
-	HandlerURL            string                                  `yaml:"handlerUrl" json:"handlerUrl"`
-	HandlerAuthKey        string                                  `yaml:"handlerAuthKey" json:"handlerAuthKey"`
-	HandlerAuthHeader     string                                  `yaml:"handlerAuthHeader" json:"handlerAuthHeader"`
-	SiteBucket            DownloadTrueConcurrencySiteBucketConfig `yaml:"siteBucket" json:"siteBucket"`
-	Heartbeat             DownloadTrueConcurrencyHeartbeatConfig  `yaml:"heartbeat" json:"heartbeat"`
-	AcquireTimeoutMs      int                                     `yaml:"acquireTimeoutMs" json:"acquireTimeoutMs"`
-	ReleaseTimeoutMs      int                                     `yaml:"releaseTimeoutMs" json:"releaseTimeoutMs"`
-	WaitTotalMaxMs        int                                     `yaml:"waitTotalMaxMs" json:"waitTotalMaxMs"`
-	WaitMaxAttemptsCap    int                                     `yaml:"waitMaxAttemptsCap" json:"waitMaxAttemptsCap"`
-	acquireTimeoutSet     bool                                    `yaml:"-" json:"-"`
-	releaseTimeoutSet     bool                                    `yaml:"-" json:"-"`
-	waitTotalMaxMsSet     bool                                    `yaml:"-" json:"-"`
-	waitMaxAttemptsCapSet bool                                    `yaml:"-" json:"-"`
+	Enabled           bool                                    `yaml:"enabled" json:"enabled"`
+	HostPatterns      []string                                `yaml:"hostPatterns" json:"hostPatterns"`
+	HandlerURL        string                                  `yaml:"handlerUrl" json:"handlerUrl"`
+	HandlerAuthKey    string                                  `yaml:"handlerAuthKey" json:"handlerAuthKey"`
+	HandlerAuthHeader string                                  `yaml:"handlerAuthHeader" json:"handlerAuthHeader"`
+	SiteBucket        DownloadTrueConcurrencySiteBucketConfig `yaml:"siteBucket" json:"siteBucket"`
+	Heartbeat         DownloadTrueConcurrencyHeartbeatConfig  `yaml:"heartbeat" json:"heartbeat"`
+	AcquireTimeoutMs  int                                     `yaml:"acquireTimeoutMs" json:"acquireTimeoutMs"`
+	ReleaseTimeoutMs  int                                     `yaml:"releaseTimeoutMs" json:"releaseTimeoutMs"`
+	WaitTotalMaxMs    int                                     `yaml:"waitTotalMaxMs" json:"waitTotalMaxMs"`
+	acquireTimeoutSet bool                                    `yaml:"-" json:"-"`
+	releaseTimeoutSet bool                                    `yaml:"-" json:"-"`
+	waitTotalMaxMsSet bool                                    `yaml:"-" json:"-"`
 }
 
 // DownloadAuthConfig controls request integrity checks.
@@ -985,25 +979,12 @@ func (c *DownloadTrueConcurrencyConfig) UnmarshalYAML(value *yaml.Node) error {
 	if err != nil {
 		return err
 	}
-	waitMaxAttemptsCapSet, err := hasYAMLMappingKey(value, "waitMaxAttemptsCap")
-	if err != nil {
-		return err
-	}
 	if waitTotalMaxMsSet {
 		waitTotalMaxMsNode, err := yamlMappingValue(value, "waitTotalMaxMs")
 		if err != nil {
 			return err
 		}
 		if err := requireYAMLIntScalar(waitTotalMaxMsNode, "download.trueConcurrency.waitTotalMaxMs"); err != nil {
-			return err
-		}
-	}
-	if waitMaxAttemptsCapSet {
-		waitMaxAttemptsCapNode, err := yamlMappingValue(value, "waitMaxAttemptsCap")
-		if err != nil {
-			return err
-		}
-		if err := requireYAMLIntScalar(waitMaxAttemptsCapNode, "download.trueConcurrency.waitMaxAttemptsCap"); err != nil {
 			return err
 		}
 	}
@@ -1014,7 +995,6 @@ func (c *DownloadTrueConcurrencyConfig) UnmarshalYAML(value *yaml.Node) error {
 	c.acquireTimeoutSet = acquireTimeoutSet
 	c.releaseTimeoutSet = releaseTimeoutSet
 	c.waitTotalMaxMsSet = waitTotalMaxMsSet
-	c.waitMaxAttemptsCapSet = waitMaxAttemptsCapSet
 	return nil
 }
 
@@ -1143,13 +1123,18 @@ type SlotHandlerFairQueueCleanupConfig struct {
 	intervalSet     bool `yaml:"-" json:"-"`
 }
 
+type SlotHandlerFairQueueWaitConfig struct {
+	MaxStreamMs int64 `yaml:"maxStreamMs" json:"maxStreamMs"`
+	KeepaliveMs int64 `yaml:"keepaliveMs" json:"keepaliveMs"`
+}
+
 // SlotHandlerFairQueueConfig matches slot-handler fair queue tuning.
 type SlotHandlerFairQueueConfig struct {
 	PollIntervalMs          int64                             `yaml:"pollIntervalMs" json:"pollIntervalMs"`
-	PollWindowMs            int64                             `yaml:"pollWindowMs" json:"pollWindowMs"`
+	TerminalCleanupGraceMs  int64                             `yaml:"terminalCleanupGraceMs" json:"terminalCleanupGraceMs"`
+	Wait                    SlotHandlerFairQueueWaitConfig    `yaml:"wait" json:"wait"`
 	MinSlotHoldMs           int64                             `yaml:"minSlotHoldMs" json:"minSlotHoldMs"`
-	SmoothReleaseIntervalMs *int64                            `yaml:"smoothReleaseIntervalMs" json:"smoothReleaseIntervalMs,omitempty"`
-	GraceMs                 int64                             `yaml:"graceMs" json:"graceMs"`
+	SmoothReleaseIntervalMs *int64                            `yaml:"smoothReleaseIntervalMs" json:"smoothReleaseIntervalMs"`
 	UtilWindowSec           int                               `yaml:"utilWindowSec" json:"utilWindowSec"`
 	MaxBatch                int                               `yaml:"maxBatch" json:"maxBatch"`
 	MaxProbeParallel        int                               `yaml:"maxProbeParallel" json:"maxProbeParallel"`
@@ -1164,6 +1149,9 @@ type SlotHandlerFairQueueConfig struct {
 	SiteCaps                SlotHandlerSiteCapsConfig         `yaml:"siteCaps" json:"siteCaps"`
 	RPC                     SlotHandlerRPCConfig              `yaml:"rpc" json:"rpc"`
 	Cleanup                 SlotHandlerFairQueueCleanupConfig `yaml:"cleanup" json:"cleanup"`
+	terminalCleanupGraceSet bool                              `yaml:"-" json:"-"`
+	waitMaxStreamSet        bool                              `yaml:"-" json:"-"`
+	waitKeepaliveSet        bool                              `yaml:"-" json:"-"`
 }
 
 type SlotHandlerHostCapsConfig struct {
@@ -1204,6 +1192,65 @@ func (c *SlotHandlerFairQueueCleanupConfig) UnmarshalYAML(value *yaml.Node) erro
 			}
 		}
 	}
+	return nil
+}
+
+func (f *SlotHandlerFairQueueConfig) UnmarshalYAML(value *yaml.Node) error {
+	type raw SlotHandlerFairQueueConfig
+	var aux raw
+
+	terminalCleanupGraceSet, err := hasYAMLMappingKey(value, "terminalCleanupGraceMs")
+	if err != nil {
+		return err
+	}
+	if terminalCleanupGraceSet {
+		terminalCleanupGraceNode, err := yamlMappingValue(value, "terminalCleanupGraceMs")
+		if err != nil {
+			return err
+		}
+		if err := requireYAMLIntScalar(terminalCleanupGraceNode, "slotHandler.fairQueue.terminalCleanupGraceMs"); err != nil {
+			return err
+		}
+	}
+
+	waitNode, err := yamlMappingValue(value, "wait")
+	if err != nil {
+		return err
+	}
+	waitMaxStreamSet, err := hasYAMLMappingKey(waitNode, "maxStreamMs")
+	if err != nil {
+		return err
+	}
+	if waitMaxStreamSet {
+		maxStreamNode, err := yamlMappingValue(waitNode, "maxStreamMs")
+		if err != nil {
+			return err
+		}
+		if err := requireYAMLIntScalar(maxStreamNode, "slotHandler.fairQueue.wait.maxStreamMs"); err != nil {
+			return err
+		}
+	}
+	waitKeepaliveSet, err := hasYAMLMappingKey(waitNode, "keepaliveMs")
+	if err != nil {
+		return err
+	}
+	if waitKeepaliveSet {
+		keepaliveNode, err := yamlMappingValue(waitNode, "keepaliveMs")
+		if err != nil {
+			return err
+		}
+		if err := requireYAMLIntScalar(keepaliveNode, "slotHandler.fairQueue.wait.keepaliveMs"); err != nil {
+			return err
+		}
+	}
+
+	if err := value.Decode(&aux); err != nil {
+		return err
+	}
+	*f = SlotHandlerFairQueueConfig(aux)
+	f.terminalCleanupGraceSet = terminalCleanupGraceSet
+	f.waitMaxStreamSet = waitMaxStreamSet
+	f.waitKeepaliveSet = waitKeepaliveSet
 	return nil
 }
 
@@ -2070,12 +2117,6 @@ func (f *DownloadFairQueueConfig) ensureDefaults(envName string) error {
 	if f.SlotHandlerTimeoutMs <= 0 {
 		f.SlotHandlerTimeoutMs = defaultSlotHandlerTimeoutMs
 	}
-	if f.PerRequestTimeoutMs <= 0 {
-		f.PerRequestTimeoutMs = defaultSlotHandlerPerReqTimeout
-	}
-	if f.MaxAttemptsCap <= 0 {
-		f.MaxAttemptsCap = defaultSlotHandlerAttemptsCap
-	}
 	if f.Backend == "" {
 		f.Backend = "slot-handler"
 	}
@@ -2149,13 +2190,6 @@ func (c *DownloadTrueConcurrencyConfig) ensureDefaults(envName string) error {
 		}
 	} else {
 		c.WaitTotalMaxMs = defaultTrueConcurrencyWaitTotalMaxMs
-	}
-	if c.waitMaxAttemptsCapSet {
-		if c.WaitMaxAttemptsCap <= 0 {
-			return fmt.Errorf("download.trueConcurrency.waitMaxAttemptsCap must be > 0 for env %s", envName)
-		}
-	} else {
-		c.WaitMaxAttemptsCap = defaultTrueConcurrencyWaitMaxAttemptsCap
 	}
 	if c.Enabled {
 		if len(c.HostPatterns) == 0 {
@@ -2337,11 +2371,26 @@ func (f *SlotHandlerFairQueueConfig) ensureDefaults() error {
 	if f.PollIntervalMs <= 0 {
 		f.PollIntervalMs = defaultSlotHandlerPollInterval
 	}
-	if f.PollWindowMs <= 0 {
-		f.PollWindowMs = defaultSlotHandlerPollWindow
+	if f.terminalCleanupGraceSet {
+		if f.TerminalCleanupGraceMs <= 0 {
+			return fmt.Errorf("slotHandler.fairQueue.terminalCleanupGraceMs must be > 0")
+		}
+	} else {
+		f.TerminalCleanupGraceMs = defaultSlotHandlerTerminalCleanupGraceMs
 	}
-	if f.GraceMs <= 0 {
-		f.GraceMs = defaultSlotHandlerGraceMs
+	if f.waitMaxStreamSet {
+		if f.Wait.MaxStreamMs <= 0 {
+			return fmt.Errorf("slotHandler.fairQueue.wait.maxStreamMs must be > 0")
+		}
+	} else {
+		f.Wait.MaxStreamMs = defaultSlotHandlerWaitMaxStreamMs
+	}
+	if f.waitKeepaliveSet {
+		if f.Wait.KeepaliveMs <= 0 {
+			return fmt.Errorf("slotHandler.fairQueue.wait.keepaliveMs must be > 0")
+		}
+	} else {
+		f.Wait.KeepaliveMs = defaultSlotHandlerWaitKeepaliveMs
 	}
 	if f.UtilWindowSec <= 0 {
 		f.UtilWindowSec = defaultSlotHandlerUtilWindowSec

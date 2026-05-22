@@ -12,13 +12,13 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -197,19 +197,19 @@ func main() {
 	if strings.TrimSpace(configPathArg) != "" {
 		configPathAbs, err := filepath.Abs(configPathArg)
 		if err != nil {
-			log.Fatalf("invalid --config path: %v", err)
+			powdetFatal("startup", map[string]any{"reason": err})
 		}
 		if _, err := os.Stat(configPathAbs); err != nil {
-			log.Fatalf("config file not found: %v", err)
+			powdetFatal("startup", map[string]any{"reason": err})
 		}
 		if err := os.Chdir(filepath.Dir(configPathAbs)); err != nil {
-			log.Fatalf("failed to set working directory: %v", err)
+			powdetFatal("startup", map[string]any{"reason": err})
 		}
 		configFilePath = configPathAbs
 	}
 
 	if err := readConfiguration(); err != nil {
-		log.Fatalf("failed to load configuration: %v", err)
+		powdetFatal("startup", map[string]any{"reason": err})
 	}
 
 	startMetricsReporter()
@@ -266,7 +266,7 @@ func main() {
 	myHTTPHandleFunc("/Tokens", requireMethod("GET"), requireAdmin, func(responseWriter http.ResponseWriter, request *http.Request) bool {
 		fileInfos, err := ioutil.ReadDir(apiTokensFolder)
 		if err != nil {
-			log.Printf("failed to list the apiTokensFolder (%s): %v", apiTokensFolder, err)
+			powdetLog("error", "server_error", map[string]any{"action": "list_tokens", "reason": err})
 			http.Error(responseWriter, "500 internal server error", http.StatusInternalServerError)
 			return true
 		}
@@ -279,7 +279,7 @@ func main() {
 				filepath := path.Join(apiTokensFolder, fileInfo.Name())
 				content, err := ioutil.ReadFile(filepath)
 				if err != nil {
-					log.Printf("failed to read the token file (%s): %v", filepath, err)
+					powdetLog("error", "server_error", map[string]any{"action": "read_token_file", "reason": err})
 					http.Error(responseWriter, "500 internal server error", http.StatusInternalServerError)
 					return true
 				}
@@ -345,7 +345,7 @@ func main() {
 
 		fileInfos, err := ioutil.ReadDir(apiTokensFolder)
 		if err != nil {
-			log.Printf("failed to list the apiTokensFolder (%s): %v", apiTokensFolder, err)
+			powdetLog("error", "server_error", map[string]any{"action": "revoke_token", "reason": err})
 			http.Error(responseWriter, "500 internal server error", http.StatusInternalServerError)
 			return true
 		}
@@ -426,7 +426,7 @@ func main() {
 			_, err := rand.Read(preimageBytes)
 			if err != nil {
 				metricsAdd("challenges_generate_error")
-				log.Printf("read random bytes failed: %v", err)
+				powdetLog("error", "server_error", map[string]any{"action": "challenge_preimage_random", "reason": err})
 				http.Error(responseWriter, "500 internal server error", http.StatusInternalServerError)
 				return true
 			}
@@ -454,7 +454,7 @@ func main() {
 				seedKey := make([]byte, algoCfg.SeedLen)
 				if _, err := rand.Read(seedKey); err != nil {
 					metricsAdd("challenges_generate_error")
-					log.Printf("read random bytes failed: %v", err)
+					powdetLog("error", "server_error", map[string]any{"action": "randomx_seed_random", "reason": err})
 					http.Error(responseWriter, "500 internal server error", http.StatusInternalServerError)
 					return true
 				}
@@ -470,7 +470,7 @@ func main() {
 			challengeBytes, err := json.Marshal(challenge)
 			if err != nil {
 				metricsAdd("challenges_generate_error")
-				log.Printf("serialize challenge as json failed: %v", err)
+				powdetLog("error", "server_error", map[string]any{"action": "serialize_challenge", "reason": err})
 				http.Error(responseWriter, "500 internal server error", http.StatusInternalServerError)
 				return true
 			}
@@ -498,12 +498,13 @@ func main() {
 		responseBytes, err := json.Marshal(toReturn)
 		if err != nil {
 			metricsAdd("challenges_generate_error")
-			log.Printf("json marshal failed: %v", err)
+			powdetLog("error", "server_error", map[string]any{"action": "marshal_challenge_batch", "reason": err})
 			http.Error(responseWriter, "500 internal server error", http.StatusInternalServerError)
 			return true
 		}
 
 		metricsAdd("challenges_generated", int64(len(toReturn)))
+		powdetLog("info", "challenge_issued", map[string]any{"alg": algo, "batchSize": len(toReturn), "difficultyLevel": difficultyLevel})
 
 		responseWriter.Write(responseBytes)
 
@@ -520,6 +521,7 @@ func main() {
 		algo := normalizeAlgo(requestQuery.Get("algo"))
 		if algo == "" {
 			metricsAdd("verify_bad_request")
+			powdetLog("warn", "verify_failed", map[string]any{"alg": "unknown", "reason": "missing_algo"})
 			http.Error(responseWriter, "400 url param ?algo is required", http.StatusBadRequest)
 			return true
 		}
@@ -530,6 +532,7 @@ func main() {
 		algoCfg, ok := getEnabledAlgorithm(cfg, algo)
 		if !ok {
 			metricsAdd("verify_bad_request")
+			powdetLog("warn", "verify_failed", map[string]any{"alg": algo, "reason": "unsupported_algorithm"})
 			http.Error(responseWriter, "400 unsupported powdet algorithm", http.StatusBadRequest)
 			return true
 		}
@@ -540,6 +543,7 @@ func main() {
 		if !hasAnyChallenges || !hasChallenge {
 			challengesMu.Unlock()
 			metricsAdd("verify_not_found")
+			powdetLog("warn", "verify_failed", map[string]any{"alg": algo, "reason": "challenge_not_found", "challenge": challengeBase64})
 			errorMessage := fmt.Sprintf("404 challenge given by url param ?challenge=%s was not found", challengeBase64)
 			http.Error(responseWriter, errorMessage, http.StatusNotFound)
 			return true
@@ -550,6 +554,7 @@ func main() {
 		nonceBytes, err := hex.DecodeString(nonceHex)
 		if nonceHex == "" || err != nil || len(nonceBytes) == 0 {
 			metricsAdd("verify_bad_nonce")
+			powdetLog("warn", "verify_failed", map[string]any{"alg": algo, "reason": "bad_nonce", "nonce": nonceHex})
 			errorMessage := fmt.Sprintf("400 bad request: nonce given by url param ?nonce=%s could not be hex decoded", nonceHex)
 			http.Error(responseWriter, errorMessage, http.StatusBadRequest)
 			return true
@@ -557,14 +562,14 @@ func main() {
 
 		challengeJSON, err := base64.StdEncoding.DecodeString(challengeBase64)
 		if err != nil {
-			log.Printf("challenge %s couldn't be parsed: %v\n", challengeBase64, err)
+			powdetLog("warn", "verify_failed", map[string]any{"alg": algo, "reason": err, "challenge": challengeBase64})
 			http.Error(responseWriter, "500 challenge couldn't be decoded", http.StatusInternalServerError)
 			return true
 		}
 		var challenge Challenge
 		err = json.Unmarshal([]byte(challengeJSON), &challenge)
 		if err != nil {
-			log.Printf("challenge %s (%s) couldn't be parsed: %v\n", string(challengeJSON), challengeBase64, err)
+			powdetLog("warn", "verify_failed", map[string]any{"alg": algo, "reason": err, "challenge": challengeBase64})
 			http.Error(responseWriter, "500 challenge couldn't be parsed", http.StatusInternalServerError)
 			return true
 		}
@@ -572,6 +577,7 @@ func main() {
 		challengeAlg := normalizeAlgo(challenge.Alg)
 		if challengeAlg == "" || challengeAlg != algo {
 			metricsAdd("verify_bad_request")
+			powdetLog("warn", "verify_failed", map[string]any{"alg": algo, "reason": "algorithm_mismatch"})
 			http.Error(responseWriter, "400 challenge algorithm mismatch", http.StatusBadRequest)
 			return true
 		}
@@ -580,13 +586,14 @@ func main() {
 		case algoArgon2id, algoArgon2d:
 			if challenge.Argon2Parameters == nil {
 				metricsAdd("verify_bad_request")
+				powdetLog("warn", "verify_failed", map[string]any{"alg": challengeAlg, "reason": "missing_argon2_parameters"})
 				http.Error(responseWriter, "400 argon2 challenge missing parameters", http.StatusBadRequest)
 				return true
 			}
 			preimageBytes, err := decodeBase64Fixed(challenge.Preimage, 8)
 			if err != nil {
 				metricsAdd("verify_invalid_preimage")
-				log.Printf("invalid preimage %s: %v\n", challenge.Preimage, err)
+				powdetLog("warn", "verify_failed", map[string]any{"alg": challengeAlg, "reason": err, "preimage": challenge.Preimage})
 				http.Error(responseWriter, "500 invalid preimage", http.StatusInternalServerError)
 				return true
 			}
@@ -615,12 +622,13 @@ func main() {
 			ok, err := hashMeetsDifficulty(hashHex, challenge.Difficulty)
 			if err != nil {
 				metricsAdd("verify_fail")
+				powdetLog("warn", "verify_failed", map[string]any{"alg": challengeAlg, "reason": err})
 				http.Error(responseWriter, "500 invalid difficulty", http.StatusInternalServerError)
 				return true
 			}
-			log.Printf("endOfHash ok=%t <= Difficulty: %s", ok, challenge.Difficulty)
 			if !ok {
 				metricsAdd("verify_fail")
+				powdetLog("warn", "verify_failed", map[string]any{"alg": challengeAlg, "reason": "difficulty_not_met", "nonce": nonceHex})
 				errorMessage := fmt.Sprintf(
 					"400 bad request: nonce given by url param ?nonce=%s did not result in a hash that meets the required difficulty",
 					nonceHex,
@@ -631,19 +639,21 @@ func main() {
 		case algoRandomx:
 			if challenge.RandomxParameters == nil || challenge.RandomxParameters.SeedKey == "" {
 				metricsAdd("verify_bad_request")
+				powdetLog("warn", "verify_failed", map[string]any{"alg": challengeAlg, "reason": "missing_randomx_seed_key"})
 				http.Error(responseWriter, "400 randomx challenge missing seed key", http.StatusBadRequest)
 				return true
 			}
 			preimageBytes, err := decodeBase64Fixed(challenge.Preimage, 8)
 			if err != nil {
 				metricsAdd("verify_invalid_preimage")
-				log.Printf("invalid preimage %s: %v\n", challenge.Preimage, err)
+				powdetLog("warn", "verify_failed", map[string]any{"alg": challengeAlg, "reason": err, "preimage": challenge.Preimage})
 				http.Error(responseWriter, "500 invalid preimage", http.StatusInternalServerError)
 				return true
 			}
 			seedKeyBytes, err := base64.StdEncoding.DecodeString(challenge.RandomxParameters.SeedKey)
 			if err != nil || len(seedKeyBytes) == 0 || len(seedKeyBytes) > randomxSeedMaxLen {
 				metricsAdd("verify_bad_request")
+				powdetLog("warn", "verify_failed", map[string]any{"alg": challengeAlg, "reason": "invalid_randomx_seed_key", "seed": challenge.RandomxParameters.SeedKey})
 				http.Error(responseWriter, "400 randomx seed key invalid", http.StatusBadRequest)
 				return true
 			}
@@ -666,6 +676,7 @@ func main() {
 			})
 			if err != nil {
 				metricsAdd("verify_fail")
+				powdetLog("warn", "verify_failed", map[string]any{"alg": challengeAlg, "reason": err})
 				http.Error(responseWriter, "500 randomx cache init failed", http.StatusInternalServerError)
 				return true
 			}
@@ -674,6 +685,7 @@ func main() {
 			vm, err := randomx.NewVM(flags, cache, nil)
 			if err != nil {
 				metricsAdd("verify_fail")
+				powdetLog("warn", "verify_failed", map[string]any{"alg": challengeAlg, "reason": err})
 				http.Error(responseWriter, "500 randomx vm init failed", http.StatusInternalServerError)
 				return true
 			}
@@ -688,12 +700,13 @@ func main() {
 			ok, err := hashMeetsDifficulty(hashHex, challenge.Difficulty)
 			if err != nil {
 				metricsAdd("verify_fail")
+				powdetLog("warn", "verify_failed", map[string]any{"alg": challengeAlg, "reason": err})
 				http.Error(responseWriter, "500 invalid difficulty", http.StatusInternalServerError)
 				return true
 			}
-			log.Printf("endOfHash ok=%t <= Difficulty: %s", ok, challenge.Difficulty)
 			if !ok {
 				metricsAdd("verify_fail")
+				powdetLog("warn", "verify_failed", map[string]any{"alg": challengeAlg, "reason": "difficulty_not_met", "nonce": nonceHex})
 				errorMessage := fmt.Sprintf(
 					"400 bad request: nonce given by url param ?nonce=%s did not result in a hash that meets the required difficulty",
 					nonceHex,
@@ -703,11 +716,13 @@ func main() {
 			}
 		default:
 			metricsAdd("verify_bad_request")
+			powdetLog("warn", "verify_failed", map[string]any{"alg": challengeAlg, "reason": "unsupported_algorithm"})
 			http.Error(responseWriter, "400 unsupported powdet algorithm", http.StatusBadRequest)
 			return true
 		}
 
 		metricsAdd("verify_ok")
+		powdetLog("info", "verify_ok", map[string]any{"alg": challengeAlg})
 		responseWriter.WriteHeader(200)
 		responseWriter.Write([]byte("OK"))
 		return true
@@ -728,12 +743,12 @@ func main() {
 	http.Handle("/powdet/static/", http.StripPrefix("/powdet/static/", http.FileServer(http.Dir("./static/"))))
 
 	cfg := currentConfig()
-	log.Printf("💥  PoW! Bot Deterrent server listening on port %d (configVersion=%s)", cfg.ListenPort, currentConfigVersion())
+	powdetLog("info", "startup", map[string]any{"configVersion": currentConfigVersion(), "listenPort": cfg.ListenPort})
 
 	err := http.ListenAndServe(fmt.Sprintf(":%d", cfg.ListenPort), nil)
 
 	// if got this far it means server crashed!
-	panic(err)
+	powdetFatal("server_error", map[string]any{"reason": err})
 }
 
 func myHTTPHandleFunc(path string, stack ...func(http.ResponseWriter, *http.Request) bool) {
@@ -749,11 +764,11 @@ func myHTTPHandleFunc(path string, stack ...func(http.ResponseWriter, *http.Requ
 func locateAPITokensFolder() string {
 	workingDirectory, err := os.Getwd()
 	if err != nil {
-		log.Fatalf("locateAPITokensFolder(): can't os.Getwd(): %v", err)
+		powdetFatal("startup", map[string]any{"action": "locate_api_tokens", "reason": err})
 	}
 	executableDirectory, err := getCurrentExecDir()
 	if err != nil {
-		log.Fatalf("locateAPITokensFolder(): can't getCurrentExecDir(): %v", err)
+		powdetFatal("startup", map[string]any{"action": "locate_api_tokens", "reason": err})
 	}
 
 	nextToExecutable := filepath.Join(executableDirectory, "PoW_Bot_Deterrent_API_Tokens")
@@ -764,10 +779,7 @@ func locateAPITokensFolder() string {
 	inWorkingDirectoryStat, err := os.Stat(inWorkingDirectory)
 	foundKeysInWorkingDirectory := err == nil && inWorkingDirectoryStat.IsDir()
 	if foundKeysNextToExecutable && foundKeysInWorkingDirectory && workingDirectory != executableDirectory {
-		log.Fatalf(`locateAPITokensFolder(): Something went wrong with your installation, 
-			I found two PoW_Bot_Deterrent_API_Tokens folders and I'm not sure which one to use.
-			One of them is located at %s
-			and the other is at %s`, inWorkingDirectory, nextToExecutable)
+		powdetFatal("startup", map[string]any{"action": "locate_api_tokens", "reason": "multiple token folders found"})
 	}
 	if foundKeysInWorkingDirectory {
 		return inWorkingDirectory
@@ -775,8 +787,7 @@ func locateAPITokensFolder() string {
 		return nextToExecutable
 	}
 
-	log.Fatalf(`locateAPITokensFolder(): I didn't find a PoW_Bot_Deterrent_API_Tokens folder 
-		in the current working directory (in %s) or next to the executable (in %s)`, workingDirectory, executableDirectory)
+	powdetFatal("startup", map[string]any{"action": "locate_api_tokens", "reason": "token folder not found"})
 
 	return ""
 }
@@ -784,13 +795,13 @@ func locateAPITokensFolder() string {
 func getCurrentExecDir() (dir string, err error) {
 	path, err := exec.LookPath(os.Args[0])
 	if err != nil {
-		fmt.Printf("exec.LookPath(%s) returned %s\n", os.Args[0], err)
+		powdetLog("error", "server_error", map[string]any{"action": "lookup_executable", "reason": err})
 		return "", err
 	}
 
 	absPath, err := filepath.Abs(path)
 	if err != nil {
-		fmt.Printf("filepath.Abs(%s) returned %s\n", path, err)
+		powdetLog("error", "server_error", map[string]any{"action": "resolve_executable", "reason": err})
 		return "", err
 	}
 
@@ -826,7 +837,7 @@ func tokenExists(token string) bool {
 	}
 	// refresh once on miss (handles manual token file changes)
 	if err := loadAPITokens(); err != nil {
-		log.Printf("failed to reload API tokens: %v", err)
+		powdetLog("warn", "refresh_failed", map[string]any{"action": "reload_api_tokens", "reason": err})
 		return false
 	}
 	apiTokensCache.mu.RLock()
@@ -1258,7 +1269,7 @@ func (m *metricsReporter) loop() {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		if err := m.sendSnapshot(ctx, snap); err != nil {
-			log.Printf("metrics flush failed: %v", err)
+			powdetLog("warn", "flush_failed", map[string]any{"action": "metrics_flush", "reason": err})
 		}
 		cancel()
 	}
@@ -1433,15 +1444,23 @@ func normalizeConfig(cfg Config) (Config, error) {
 }
 
 func logEffectiveConfig(cfg Config, version string) {
-	log.Printf("💥 PoW Bot Deterrent starting up with config (version=%s):", version)
-	configToLogBytes, _ := json.MarshalIndent(cfg, "", "  ")
-	configToLogString := regexp.MustCompile(
-		`("adminApiToken": ")[^"]+(",)`,
-	).ReplaceAllString(
-		string(configToLogBytes),
-		"$1******$2",
-	)
-	log.Println(configToLogString)
+	powdetLog("info", "config_loaded", map[string]any{
+		"configVersion":     version,
+		"enabledAlgorithms": enabledAlgorithmNames(cfg),
+		"listenPort":        cfg.ListenPort,
+		"batchSize":         cfg.BatchSize,
+	})
+}
+
+func enabledAlgorithmNames(cfg Config) string {
+	names := make([]string, 0, len(cfg.Algorithms))
+	for name, algo := range cfg.Algorithms {
+		if algo.Enabled {
+			names = append(names, normalizeAlgo(name))
+		}
+	}
+	sort.Strings(names)
+	return strings.Join(names, ",")
 }
 
 func readConfiguration() error {
@@ -1644,7 +1663,7 @@ func handleInternalHealth(w http.ResponseWriter, r *http.Request) {
 func handleInternalRefresh(w http.ResponseWriter, r *http.Request) {
 	metricsAdd("refresh_requests")
 	if err := readConfiguration(); err != nil {
-		log.Printf("refresh config failed: %v", err)
+		powdetLog("warn", "refresh_failed", map[string]any{"action": "read_configuration", "reason": err})
 		metricsAdd("refresh_failed")
 		http.Error(w, "refresh failed", http.StatusBadGateway)
 		return
@@ -1659,7 +1678,7 @@ func handleInternalFlush(w http.ResponseWriter, r *http.Request) {
 	if metricsReporterInstance != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		if err := metricsReporterInstance.sendSnapshot(ctx, snap); err != nil {
-			log.Printf("flush metrics failed: %v", err)
+			powdetLog("warn", "flush_failed", map[string]any{"action": "send_snapshot", "reason": err})
 			metricsAdd("flush_failed")
 			cancel()
 			http.Error(w, "flush failed", http.StatusBadGateway)
@@ -1669,7 +1688,7 @@ func handleInternalFlush(w http.ResponseWriter, r *http.Request) {
 	}
 	clearChallenges()
 	if err := loadAPITokens(); err != nil {
-		log.Printf("flush load API tokens failed: %v", err)
+		powdetLog("warn", "flush_failed", map[string]any{"action": "load_api_tokens", "reason": err})
 		metricsAdd("flush_failed")
 		http.Error(w, "flush failed", http.StatusBadGateway)
 		return

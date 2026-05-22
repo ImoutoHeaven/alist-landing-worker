@@ -1,3 +1,5 @@
+import { logEvent } from './logging.js';
+
 const CONTROL_PREFIX = '/api/v0/';
 
 const extractBearer = (authorization) => {
@@ -37,17 +39,17 @@ const clearD1CacheIfAny = (env, targets) => {
   const role = env?.ROLE || '';
 
   return (async () => {
-  const statements = [];
-  if (shouldClearBootstrap) {
-    statements.push(
-      db.prepare('DELETE FROM bootstrap_cache WHERE env = ? AND role = ?;').bind(envName, role)
-    );
-  }
-  if (statements.length) {
-    await db.batch(statements);
-  }
+    const statements = [];
+    if (shouldClearBootstrap) {
+      statements.push(
+        db.prepare('DELETE FROM bootstrap_cache WHERE env = ? AND role = ?;').bind(envName, role)
+      );
+    }
+    if (statements.length) {
+      await db.batch(statements);
+    }
   })().catch((error) => {
-    console.warn('[internal-api] clear D1 cache failed', error);
+    logEvent('warn', 'InternalApi', 'd1_cache_clear_failed', { error });
   });
 };
 

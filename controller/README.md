@@ -41,18 +41,23 @@ download true-concurrency 相关：
 - `download.trueConcurrency.siteBucket.modes`：authoritative provider mode set；controller 会 trim、转小写、移除空项、按首次出现顺序去重；允许值固定为 `host|sharepoint|googledrive`；当 `modes` 非空时它优先于 `mode`，当两者都为空时默认回落到 `sharepoint`。
 - `download.trueConcurrency.acquireTimeoutMs`：controller 下发给 worker 的 acquire 超时；默认 `11500`，显式值必须为正数，缺省值由 controller 补齐。
 - `download.trueConcurrency.releaseTimeoutMs`：controller 下发给 worker 的 release 超时；默认 `1500`，显式值必须为正数，缺省值由 controller 补齐。
+- `download.trueConcurrency.waitTotalMaxMs`：download worker 使用的 true-concurrency 总等待预算；默认 `20000`，显式值必须为正数，缺省值由 controller 补齐。
 - `role=download` 的 bootstrap 响应会下发完整、已归一化的 `download.trueConcurrency` block；`siteBucket` 总是同时包含 `mode` 与 `modes`，其中 modes is authoritative，mode is legacy-compatible；`config.yaml` 里的 staging/prod 示例只是镜像 controller 当前合同与默认值。
+- `concurrency-handler` has an SSE wait config shape of `concurrency.wait.maxStreamMs` and `concurrency.wait.keepaliveMs` in the reference repo, but controller does not emit a `concurrencyHandler` bootstrap block in this pass.
 
 Powdet 相关：`landing.powdet.algorithms` 控制可用算法（argon2id/argon2d/randomx），`captchaCombo` 可用 `verify-powdet-argon2id`/`verify-powdet-argon2d`/`verify-powdet-randomx` 指定实际启用算法。
 
 slot-handler 相关：
 
 - `download.fairQueue.slotHandlerAuthHeader`：download bootstrap 下发给 worker 的 slot-handler 认证请求头名；默认 `X-FQ-Auth`，启用 Fair Queue 时必须与 `slotHandler.auth.header` 保持一致。
+- `download.fairQueue.slotHandlerTimeoutMs`：download worker 使用的 Fair Queue 总等待预算；默认 `20000`，显式值必须为正数，缺省值由 controller 补齐。
 - `download.fairQueue.siteBucket.mode`：legacy-compatible 单值输入与投影字段；controller 会先 trim 再转小写；允许值固定为 `host|sharepoint|googledrive`；当 `modes` 只有一个值时输出该值，多值时输出 `modes[0]`。
 - `download.fairQueue.siteBucket.modes`：authoritative provider mode set；controller 会 trim、转小写、移除空项、按首次出现顺序去重；允许值固定为 `host|sharepoint|googledrive`；当 `modes` 非空时它优先于 `mode`，当两者都为空时默认回落到 `sharepoint`。
 - `slotHandler.fairQueue.minSlotHoldMs`：最小持有时间，避免刚授予就释放。
 - `slotHandler.fairQueue.smoothReleaseIntervalMs`：平滑释放间隔，`null` 表示禁用。
-- `slotHandler.fairQueue.graceMs`：授予后宽限窗口，用于延迟利用率计算。
+- `slotHandler.fairQueue.terminalCleanupGraceMs`: terminal cleanup grace window after accepted SSE wait termination; default `4000`.
+- `slotHandler.fairQueue.wait.maxStreamMs`: max accepted SSE stream duration; default `10000`.
+- `slotHandler.fairQueue.wait.keepaliveMs`: SSE keepalive interval; default `1500`.
 - `slotHandler.fairQueue.utilWindowSec`：利用率统计窗口长度；来源：simple-alist-cf-proxy@845175d/slot-handler/main.go utilWindowSeconds()（当前实现将 >30 裁剪到 30）。
 - `slotHandler.fairQueue.maxBatch`：batch tryAcquire 每批最多条目数。
 - `slotHandler.fairQueue.maxProbeParallel`：每 host 并行 probe 上限。

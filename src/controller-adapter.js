@@ -1,4 +1,5 @@
 import { getBootstrapConfig, getDecisionForRequest } from './controller-client.js';
+import { logEvent } from './logging.js';
 import { getClientIp } from './origin-binding.js';
 
 const hasControllerBase = (env) =>
@@ -275,8 +276,10 @@ export async function fetchControllerState(request, env, options = {}) {
     return null;
   }
 
+  let configVersion;
   try {
     const bootstrap = await getBootstrapConfig(env);
+    configVersion = bootstrap?.configVersion;
     const ctx = buildDecisionContext(request);
     const effectivePath = options.filepathOverride ? normalizePath(options.filepathOverride) : normalizePath(ctx.path || '/');
     ctx.path = effectivePath;
@@ -358,7 +361,11 @@ export async function fetchControllerState(request, env, options = {}) {
       pathRule: rule,
     };
   } catch (error) {
-    console.error('[controller] fetch failed:', error instanceof Error ? error.message : String(error));
+    logEvent('error', 'Controller', 'fetch_failed', {
+      message: error instanceof Error ? error.message : String(error),
+      status: error?.status,
+      configVersion: error?.configVersion || configVersion,
+    });
     return null;
   }
 }

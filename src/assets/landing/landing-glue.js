@@ -1,3 +1,4 @@
+import { landingLogEvent } from './landing-logging.js';
 (async () => {
   'use strict';
 
@@ -680,7 +681,7 @@
         try {
           this.adapter.unmount();
         } catch (error) {
-          console.error('Theme unmount error', error);
+          landingLogEvent('warn', 'theme_unmount_failed', { error });
         }
       }
 
@@ -934,11 +935,11 @@
         try {
           await root.removeEntry(name, { recursive: false });
         } catch (error) {
-          console.warn('删除 OPFS 临时文件失败', name, error);
+          landingLogEvent('warn', 'opfs_temp_remove_failed', { name, error });
         }
       }
     } catch (error) {
-      console.warn('获取 OPFS 根目录失败，无法清理 OPFS 临时文件', error);
+      landingLogEvent('warn', 'opfs_cleanup_failed', { error });
     } finally {
       activeOpfsTempFiles.clear();
     }
@@ -1074,7 +1075,7 @@
           anchor.click();
           document.body.removeChild(anchor);
         } catch (error) {
-          console.warn('触发 OPFS 下载失败', error);
+          landingLogEvent('warn', 'opfs_download_trigger_failed', { error });
           throw error instanceof Error ? error : new Error(String(error));
         } finally {
           fileHandle = null;
@@ -1194,7 +1195,7 @@
             controller = ctrl;
           },
           cancel(reason) {
-            console.warn('memstream canceled by consumer', reason);
+            landingLogEvent('warn', 'memstream_consumer_cancelled', { reason });
           },
         });
 
@@ -1275,7 +1276,7 @@
       await sink.start(options);
       return sink;
     } catch (error) {
-      console.warn('sink ' + mode + ' start failed', error);
+      landingLogEvent('warn', 'sink_start_failed', { mode, error });
       await markCapabilityBroken(mode);
       return null;
     }
@@ -1381,7 +1382,7 @@
       return sodiumInstance;
     })().catch((error) => {
       sodiumInitError = error;
-      console.error('加载 libsodium 失败', error);
+      landingLogEvent('error', 'libsodium_load_failed', { error });
       throw error;
     });
     return sodiumPromise;
@@ -1725,7 +1726,7 @@
     if (typeof log === 'function') {
       log('启动 Web Worker 解密池，数量：' + workerCount);
     } else {
-      console.info('[landing] 启动 Web Worker 解密池，数量:', workerCount);
+      landingLogEvent('log', 'decrypt_worker_pool_started', { workerCount });
     }
     let nextToAssign = 0;
     let nextToWrite = 0;
@@ -1857,7 +1858,7 @@
       try {
         return atob(download.urlBase64);
       } catch (error) {
-        console.warn('download.urlBase64 解码失败，回退到 url', error);
+        landingLogEvent('warn', 'download_url_base64_decode_failed', { error });
       }
     }
     return download.url;
@@ -1962,7 +1963,7 @@
         button.textContent = originalText;
       }, 1500);
     } catch (error) {
-      console.error('复制失败', error);
+      landingLogEvent('error', 'clipboard_copy_failed', { error });
       const originalText = button.textContent;
       button.textContent = '复制失败';
       setTimeout(() => {
@@ -2149,7 +2150,7 @@
                   await table.clear();
                 }
               } catch (upgradeError) {
-                console.warn('升级 Dexie 存储结构失败', upgradeError);
+                landingLogEvent('warn', 'dexie_schema_upgrade_failed', { error: upgradeError });
               }
             });
           db
@@ -2172,12 +2173,12 @@
                   });
                 }
               } catch (upgradeError) {
-                console.warn('升级 Dexie 存储结构失败', upgradeError);
+                landingLogEvent('warn', 'dexie_schema_upgrade_failed', { error: upgradeError });
               }
             });
           return db;
         })().catch((error) => {
-          console.warn('初始化 webDownloader Dexie 存储失败', error);
+          landingLogEvent('warn', 'web_downloader_dexie_init_failed', { error });
           return null;
         });
         return promise;
@@ -2195,7 +2196,7 @@
             try {
               hasActiveSession = window.sessionStorage.getItem(STORAGE_SESSION_FLAG) === '1';
             } catch (error) {
-              console.warn('读取 sessionStorage 状态失败', error);
+              landingLogEvent('warn', 'session_storage_read_failed', { error });
             }
           }
           if (!hasActiveSession) {
@@ -2212,7 +2213,7 @@
                   try {
                     await db.table(tableName).clear();
                   } catch (error) {
-                    console.warn('清理 Dexie 表 ' + tableName + ' 失败', error);
+                    landingLogEvent('warn', 'dexie_table_clear_failed', { tableName, error });
                   }
                 }),
               );
@@ -2222,7 +2223,7 @@
             try {
               window.sessionStorage.setItem(STORAGE_SESSION_FLAG, '1');
             } catch (error) {
-              console.warn('写入 sessionStorage 状态失败', error);
+              landingLogEvent('warn', 'session_storage_write_failed', { error });
             }
           }
         })();
@@ -2276,7 +2277,7 @@
           userAgentHash: uaHashNow,
         };
       } catch (error) {
-        console.warn('加载 capabilities 配置失败', error);
+        landingLogEvent('warn', 'capabilities_load_failed', { error });
         return {};
       }
     };
@@ -2312,7 +2313,7 @@
           },
         });
       } catch (error) {
-        console.warn('标记 capability broken 失败', error);
+        landingLogEvent('warn', 'capability_mark_broken_failed', { error });
       }
     };
 
@@ -2334,7 +2335,7 @@
       try {
         return await executor(db.table(tableName));
       } catch (error) {
-        console.warn('访问 webDownloader Dexie 表 ' + tableName + ' 时出错', error);
+        landingLogEvent('warn', 'web_downloader_dexie_table_failed', { tableName, error });
         return defaultValue;
       }
     };
@@ -2653,13 +2654,13 @@
         try {
           await clearSegmentsForKey(key);
         } catch (error) {
-          console.warn('清理已完成分段失败', error);
+          landingLogEvent('warn', 'completed_segments_cleanup_failed', { error });
           return false;
         }
         try {
           await deleteWriterHandle(key);
         } catch (error) {
-          console.warn('清理已完成分段时删除 writer handle 失败', error);
+          landingLogEvent('warn', 'completed_segments_writer_handle_delete_failed', { error });
         }
         return true;
       }
@@ -2683,7 +2684,7 @@
           try {
             await db.table(tableName).clear();
           } catch (error) {
-            console.warn('清理 Dexie 表 ' + tableName + ' 失败', error);
+            landingLogEvent('warn', 'dexie_table_clear_failed', { tableName, error });
           }
         }),
       );
@@ -2818,7 +2819,7 @@
       try {
         return await ensure('readwrite');
       } catch (error) {
-        console.warn('文件权限请求失败', error);
+        landingLogEvent('warn', 'file_permission_request_failed', { error });
         return false;
       }
     };
@@ -2893,7 +2894,7 @@
       try {
         await cleanupExpiredData();
       } catch (cleanupError) {
-        console.warn('清理 webDownloader 过期数据失败', cleanupError);
+        landingLogEvent('warn', 'web_downloader_expired_cleanup_failed', { error: cleanupError });
       }
     })();
 
@@ -2941,7 +2942,7 @@
         }
         syncSaveModeHint(window.__landingState.saveMode);
       } catch (error) {
-        console.warn('加载 webDownloader 设置失败', error);
+        landingLogEvent('warn', 'web_downloader_settings_load_failed', { error });
       }
     };
 
@@ -2962,7 +2963,7 @@
         try {
           resolve();
         } catch (error) {
-          console.error('pending segment waiter failed', error);
+          landingLogEvent('error', 'pending_segment_waiter_failed', { error });
         }
       });
     };
@@ -2981,7 +2982,7 @@
         try {
           resolve();
         } catch (error) {
-          console.error('resume waiter failed', error);
+          landingLogEvent('error', 'resume_waiter_failed', { error });
         }
       });
     };
@@ -3146,7 +3147,7 @@
             await saveWriterHandle(key, handle);
             state.writerKey = key;
           } catch (error) {
-            console.warn('持久化写入句柄失败', error);
+            landingLogEvent('warn', 'writer_handle_persist_failed', { error });
           }
         }
         const name = (handle && handle.name) || sink.fileName || state.fileName;
@@ -3176,7 +3177,7 @@
             await state.writer.abort(error);
           }
         } catch (abortError) {
-          console.warn('关闭写入器失败', abortError);
+          landingLogEvent('warn', 'writer_close_failed', { error: abortError });
         }
         throw error instanceof Error ? error : new Error(String(error));
       }
@@ -3189,7 +3190,7 @@
         await deleteWriterHandle(state.cacheKey);
         log('已清理下载分段数据');
       } catch (error) {
-        console.warn('下载完成后清理缓存分段失败', error);
+        landingLogEvent('warn', 'post_download_segment_cleanup_failed', { error });
       }
     };
 
@@ -3219,7 +3220,7 @@
           await state.writer.abort(reason);
         }
       } catch (error) {
-        console.warn('取消时关闭 writer 失败', error);
+        landingLogEvent('warn', 'cancel_writer_close_failed', { error });
       } finally {
         setWriter(null);
         state.writerHandle = null;
@@ -3232,7 +3233,7 @@
         try {
           return atob(download.urlBase64);
         } catch (error) {
-          console.warn('download.urlBase64 解码失败，回退到 url', error);
+          landingLogEvent('warn', 'download_url_base64_decode_failed', { error });
         }
       }
       return download.url;
@@ -3461,7 +3462,7 @@
             try {
               controller.abort();
             } catch (abortError) {
-              console.warn('TTFB 超时取消请求失败', abortError);
+              landingLogEvent('warn', 'ttfb_timeout_abort_failed', { error: abortError });
             }
           }, ttfbTimeoutMs);
         }
@@ -3578,7 +3579,7 @@
           try {
             controller.abort();
           } catch (abortError) {
-            console.warn('中止分段请求失败', abortError);
+            landingLogEvent('warn', 'segment_request_abort_failed', { error: abortError });
           }
         }
       }
@@ -3843,7 +3844,7 @@
             } else {
               setStatus('下载失败：' + message);
             }
-            console.error(error);
+            landingLogEvent('error', 'unhandled_error', { error });
           }
           throw error;
         } finally {
@@ -3878,7 +3879,7 @@
         try {
           controller.abort();
         } catch (error) {
-          console.warn('取消请求失败', error);
+          landingLogEvent('warn', 'cancel_request_failed', { error });
         }
       });
       state.abortControllers = new Set();
@@ -3898,7 +3899,7 @@
         try {
           controller.abort();
         } catch (error) {
-          console.warn('暂停下载时中止请求失败', error);
+          landingLogEvent('warn', 'pause_download_abort_failed', { error });
         }
       });
       if (downloadBtn) {
@@ -4075,7 +4076,7 @@
         downloadBtn.disabled = false;
       }
       if (autoStart) {
-        startWorkflow().catch((error) => console.error(error));
+        startWorkflow().catch((error) => landingLogEvent('error', 'workflow_start_failed', { error }));
       }
     };
 
@@ -4159,7 +4160,7 @@
       }
       // 未运行 → 开始下载
       startWorkflow().catch((error) => {
-        console.error(error);
+        landingLogEvent('error', 'unhandled_error', { error });
         setStatus('下载失败：' + (error && error.message ? error.message : '未知错误'));
       });
     };
@@ -4907,7 +4908,7 @@
         return true;
       }
     } catch (error) {
-      console.warn('自动打开密文下载失败', error);
+      landingLogEvent('warn', 'cipher_download_auto_open_failed', { error });
     }
     return false;
   };
@@ -5005,7 +5006,7 @@
         await writer.abort('aborted');
       }
     } catch (error) {
-      console.warn('终止文件写入失败', error);
+      landingLogEvent('warn', 'file_write_abort_failed', { error });
     } finally {
       clientDecryptSink = null;
     }
@@ -5149,7 +5150,7 @@
     turnstileResultTimer = setTimeout(() => {
       turnstileResultTimer = null;
       refreshTurnstileWidget().catch((error) => {
-        console.warn('Turnstile 重新刷新失败', error);
+        landingLogEvent('warn', 'turnstile_refresh_failed', { error });
       });
     }, TURNSTILE_FAILURE_RETRY_MS);
   };
@@ -5295,7 +5296,7 @@
       try {
         resolver(token);
       } catch (error) {
-        console.error('Turnstile resolver failed', error);
+        landingLogEvent('error', 'turnstile_resolver_failed', { error });
       }
     });
   };
@@ -5519,7 +5520,7 @@
           try {
             window.turnstile.reset(state.security.widgetId);
           } catch (error) {
-            console.warn('Turnstile reset 失败', error);
+            landingLogEvent('warn', 'turnstile_reset_failed', { error });
           }
         }
       },
@@ -5538,7 +5539,7 @@
         window.turnstile.reset(state.security.widgetId);
         resetOk = true;
       } catch (error) {
-        console.warn('Turnstile reset 失败', error);
+        landingLogEvent('warn', 'turnstile_reset_failed', { error });
       }
     }
     if (!resetOk) {
@@ -5546,7 +5547,7 @@
       try {
         await renderTurnstileWidget();
       } catch (error) {
-        console.warn('Turnstile 重新渲染失败', error);
+        landingLogEvent('warn', 'turnstile_rerender_failed', { error });
       }
     }
     syncTurnstilePrompt();
@@ -5648,7 +5649,7 @@
       try {
         fn(solutions);
       } catch (err) {
-        console.error('powdet resolver error', err);
+        landingLogEvent('error', 'powdet_resolver_failed', { error: err });
       }
     });
   };
@@ -5788,7 +5789,7 @@
       try {
         window.turnstile.reset(state.security.widgetId);
       } catch (error) {
-        console.warn('Turnstile reset 失败', error);
+        landingLogEvent('warn', 'turnstile_reset_failed', { error });
       }
     }
   };
@@ -5819,7 +5820,7 @@
     }
     const normalizedBase = staticBase ? staticBase.replace(/\/+$/u, '') : '';
     if (powdetScriptBase && powdetScriptBase !== normalizedBase) {
-      console.warn('powdet static base changed after script load, using previous base:', powdetScriptBase);
+      landingLogEvent('warn', 'powdet_static_base_changed_after_load', { powdetScriptBase });
     }
     powdetScriptBase = normalizedBase;
     powdetScriptPromise = new Promise((resolve) => {
@@ -5829,7 +5830,7 @@
         existing.addEventListener(
           'error',
           () => {
-            console.error('powdet script failed to load (existing tag)');
+            landingLogEvent('error', 'powdet_script_existing_tag_load_failed');
             resolve(false);
           },
           { once: true },
@@ -5842,7 +5843,7 @@
       script.defer = true;
       script.onload = () => resolve(true);
       script.onerror = () => {
-        console.error('powdet script failed to load');
+        landingLogEvent('error', 'powdet_script_load_failed');
         resolve(false);
       };
       document.head.appendChild(script);
@@ -5862,7 +5863,7 @@
       const decoded = atob(base64);
       return JSON.parse(decoded);
     } catch (error) {
-      console.error('powdet challenge decode failed', error);
+      landingLogEvent('error', 'powdet_challenge_decode_failed', { error });
       return null;
     }
   };
@@ -5893,12 +5894,12 @@
       try {
         worker.postMessage({ type: 'cancel', reason: reason || 'cancelled' });
       } catch (error) {
-        console.warn('powdet worker cancel post failed', alg, error);
+        landingLogEvent('warn', 'powdet_worker_cancel_post_failed', { alg, error });
       }
       try {
         worker.terminate();
       } catch (error) {
-        console.warn('powdet worker terminate failed', alg, error);
+        landingLogEvent('warn', 'powdet_worker_terminate_failed', { alg, error });
       }
       delete workers[alg];
     }
@@ -6016,11 +6017,11 @@
     }
     const payload = decodePowdetChallengePayload(powdetChallenge.challenge);
     if (!payload || payload.alg !== POWDET_ALGO_RANDOMX) {
-      console.error('randomx challenge payload invalid');
+      landingLogEvent('error', 'randomx_challenge_payload_invalid');
       return;
     }
     if (!payload.i || !payload.k || !payload.d) {
-      console.error('randomx challenge payload incomplete');
+      landingLogEvent('error', 'randomx_challenge_payload_incomplete');
       return;
     }
     const moduleUrl = (() => {
@@ -6044,11 +6045,11 @@
         return;
       }
       if (data && data.error) {
-        console.error('randomx worker failed:', data.error);
+        landingLogEvent('error', 'randomx_worker_failed', { error: data.error });
       }
     };
     worker.onerror = (event) => {
-      console.error('randomx worker error', event);
+      landingLogEvent('error', 'randomx_worker_error', { event });
     };
     worker.postMessage({
       moduleUrl,
@@ -6076,7 +6077,7 @@
     }
     const { challenge, expireAt, randomStr, hmac } = powdetChallenge;
     if (!challenge || !expireAt || !randomStr || !hmac) {
-      console.warn('powdet challenge payload incomplete');
+      landingLogEvent('warn', 'powdet_challenge_payload_incomplete');
       return;
     }
 
@@ -6148,7 +6149,7 @@
                 if (Date.now() < triggerDeadline) {
                   window.setTimeout(triggerWhenReady, 50);
                 } else {
-                  console.warn('powdet widget markup not ready, skip trigger');
+                  landingLogEvent('warn', 'powdet_widget_markup_not_ready');
                   try {
                     const fallback = document.createElement('div');
                     fallback.className = 'pow-bot-deterrent';
@@ -6165,7 +6166,7 @@
                     col.appendChild(document.createElement('div')).className = 'pow-checkmark-icon';
                     widget.appendChild(fallback);
                   } catch (err) {
-                    console.warn('powdet fallback markup insert failed', err);
+                    landingLogEvent('warn', 'powdet_fallback_markup_insert_failed', { error: err });
                   }
                 }
                 return;
@@ -6180,18 +6181,18 @@
                 if (Date.now() < triggerDeadline) {
                   window.setTimeout(triggerWhenReady, 50);
                 } else {
-                  console.error('powdet trigger failed', err);
+                  landingLogEvent('error', 'powdet_trigger_failed', { error: err });
                 }
               }
             };
             triggerWhenReady();
           } catch (e) {
-            console.error('powdet init failed', e);
+            landingLogEvent('error', 'powdet_init_failed', { error: e });
           }
           return;
         }
         if (Date.now() - start > maxWaitMs) {
-          console.warn('powdet script did not initialize in time');
+          landingLogEvent('warn', 'powdet_script_init_timeout');
           return;
         }
         window.setTimeout(waitInit, 100);
@@ -6201,13 +6202,13 @@
     ensurePowdetScriptLoaded(staticBase)
       .then((loaded) => {
         if (!loaded) {
-          console.warn('powdet script load failed, skip powdet verification');
+          landingLogEvent('warn', 'powdet_script_load_failed_skip_verification');
           return;
         }
         startTriggering();
       })
       .catch((err) => {
-        console.error('powdet script load error', err);
+        landingLogEvent('error', 'powdet_script_load_error', { error: err });
       });
   };
 
@@ -6240,7 +6241,7 @@
       } else if (alg === POWDET_ALGO_RANDOMX) {
         startPowdetRandomxSolver(challenge);
       } else {
-        console.warn('unsupported powdet algorithm', alg);
+        landingLogEvent('warn', 'powdet_algorithm_unsupported', { alg });
       }
     }
   };
@@ -6256,7 +6257,7 @@
         markPowdetSolved(key, nonce);
       }
     } catch (error) {
-      console.error('powdet callback failed', error);
+      landingLogEvent('error', 'powdet_callback_failed', { error });
     }
   };
 
@@ -6376,7 +6377,7 @@
             worker.terminate();
           }
         } catch (error) {
-          console.warn('randomx worker terminate failed', error);
+          landingLogEvent('warn', 'randomx_worker_terminate_failed', { error });
         }
       });
     }
@@ -6388,7 +6389,7 @@
     updateButtonState();
     if (state.verification.needAltcha) {
       startAltchaComputation().catch((error) => {
-        console.error('ALTCHA 初始化失败:', error && error.message ? error.message : error);
+        landingLogEvent('error', 'altcha_init_failed', { error });
       });
     }
     initPowdetIfNeeded();
@@ -6410,7 +6411,7 @@
       if (promise) return promise;
       promise = (async () => {
         if (typeof window === 'undefined' || !window.indexedDB || !window.Dexie) {
-          console.warn('Dexie 或 IndexedDB 不可用，本地设置将无法保存');
+          landingLogEvent('warn', 'local_settings_storage_unavailable');
           return null;
         }
         const DexieClass = window.Dexie;
@@ -6437,7 +6438,7 @@
       state.verification.altchaReady = false;
       if (state.verification.needAltcha) {
         startAltchaComputation().catch((altchaError) => {
-          console.error('ALTCHA 重新计算失败:', altchaError && altchaError.message ? altchaError.message : altchaError);
+          landingLogEvent('error', 'altcha_recompute_failed', { error: altchaError });
         });
       }
     }
@@ -6542,7 +6543,7 @@
           notifyAutoRedirectForWeb();
         }
       } catch (cacheError) {
-        console.warn('从缓存恢复 webDownloader 失败', cacheError);
+        landingLogEvent('warn', 'web_downloader_cache_restore_failed', { error: cacheError });
         webDownloader.reset();
         state.mode = 'legacy';
         syncBodyModeClasses();
@@ -6706,7 +6707,7 @@
       try {
         await ensureMainSodiumReady();
       } catch (sodiumError) {
-        console.error('无法初始化 libsodium，离线解密不可用', sodiumError);
+        landingLogEvent('error', 'libsodium_init_failed_offline_decrypt_unavailable', { error: sodiumError });
         throw new Error('浏览器不支持本地解密（libsodium 初始化失败）');
       }
       clearClientDecryptFile();
@@ -6816,7 +6817,7 @@
           try {
             newSecurityConfig = JSON.parse(match[1]);
           } catch (parseError) {
-            console.warn('解析新的安全配置失败', parseError);
+            landingLogEvent('warn', 'security_config_parse_failed', { error: parseError });
           }
           break;
         }
@@ -6828,7 +6829,7 @@
           try {
             window.turnstile.reset(state.security.widgetId);
           } catch (resetError) {
-            console.warn('Turnstile reset 失败', resetError);
+            landingLogEvent('warn', 'turnstile_reset_failed', { error: resetError });
           }
         }
       }
@@ -6839,7 +6840,7 @@
       updateButtonState();
       await fetchInfo({ forceRefresh: true });
     } catch (error) {
-      console.error('Retry failed:', error);
+      landingLogEvent('error', 'retry_failed', { error });
       const rawMessage =
         (error && typeof error.message === 'string' && error.message) || String(error || '未知错误');
       log('重试失败：' + rawMessage);
@@ -6862,7 +6863,7 @@
       state.downloadBtnMode = 'copy';
       downloadBtn.textContent = '复制链接';
     } catch (error) {
-      console.error('跳转下载失败', error);
+      landingLogEvent('error', 'redirect_download_failed', { error });
       setStatus('跳转下载失败：' + (error && error.message ? error.message : '未知错误'));
       state.downloadBtnMode = 'download';
       downloadBtn.disabled = false;
@@ -6889,7 +6890,7 @@
     try {
       await ensureMainSodiumReady();
     } catch (error) {
-      console.error('libsodium 初始化失败，无法解密', error);
+      landingLogEvent('error', 'libsodium_init_failed_decrypt_unavailable', { error });
       setStatus('libsodium 初始化失败，无法解密');
       clientDecryptUiState.failed = true;
       clientDecryptUiState.completed = false;
@@ -6952,7 +6953,7 @@
         } else {
           setStatus('解密失败：' + message);
         }
-        console.error(error);
+        landingLogEvent('error', 'unhandled_error', { error });
         clientDecryptUiState.failed = true;
         syncClientDecryptSavePath();
         updateClientDecryptStatusHint('error');
@@ -7043,7 +7044,7 @@
   if (clientDecryptStartBtn) {
     clientDecryptStartBtn.addEventListener('click', () => {
       startClientDecryptFlow().catch((error) => {
-        console.error('离线解密失败', error);
+        landingLogEvent('error', 'offline_decrypt_failed', { error });
       });
     });
   }
@@ -7051,7 +7052,7 @@
   if (clientDecryptCancelBtn) {
     clientDecryptCancelBtn.addEventListener('click', () => {
       cancelClientDecryptFlow().catch((error) => {
-        console.warn('取消离线解密失败', error);
+        landingLogEvent('warn', 'offline_decrypt_cancel_failed', { error });
       });
     });
   }
@@ -7065,7 +7066,7 @@
     try {
       await retryDownload();
     } catch (error) {
-      console.error(error);
+      landingLogEvent('error', 'unhandled_error', { error });
       handleInfoError(error, 'retry');
     }
   });
@@ -7100,7 +7101,7 @@
       fetchAttempted = true;
       await fetchInfo({ forceRefresh: true });
     } catch (error) {
-      console.error(error);
+      landingLogEvent('error', 'unhandled_error', { error });
       if (fetchAttempted) {
         handleInfoError(error, 'clearCache');
       } else {
@@ -7121,14 +7122,14 @@
       if (state.mode === 'client-decrypt') {
         cancelClientDecryptFlow().catch((error) => {
           if (error) {
-            console.warn('取消离线解密失败', error);
+            landingLogEvent('warn', 'offline_decrypt_cancel_failed', { error });
           }
         });
         return;
       }
       webDownloader.cancelDownload().catch((error) => {
         if (error) {
-          console.error('取消下载失败', error);
+          landingLogEvent('error', 'cancel_download_failed', { error });
         }
       });
     });
@@ -7159,7 +7160,7 @@
         }
         updateButtonState();
       } catch (error) {
-        console.error('清理任务失败', error);
+        landingLogEvent('error', 'cleanup_task_failed', { error });
         setStatus('清理任务失败：' + (error && error.message ? error.message : '未知错误'));
       }
     });
@@ -7244,7 +7245,7 @@
       keygenOutputEl.textContent = output;
       keygenStatusEl.textContent = '完成';
     } catch (error) {
-      console.error('keygen 失败', error);
+      landingLogEvent('error', 'keygen_failed', { error });
       keygenStatusEl.textContent = '生成失败';
     } finally {
       if (keygenRunBtn) keygenRunBtn.disabled = false;
@@ -7306,7 +7307,7 @@
     try {
       await fetchInfo({ forceRefresh: false });
     } catch (error) {
-      console.error(error);
+      landingLogEvent('error', 'unhandled_error', { error });
       handleInfoError(error, 'init');
     }
   };

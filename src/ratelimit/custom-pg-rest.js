@@ -1,4 +1,5 @@
 import { calculateIPSubnet, sha256Hash, applyVerifyHeaders, hasVerifyCredentials } from '../utils.js';
+import { logEvent } from '../logging.js';
 
 /**
  * Execute query via PostgREST API
@@ -253,9 +254,11 @@ export const checkRateLimit = async (ip, path, config) => {
     const errorMessage = error instanceof Error ? error.message : String(error);
 
     if (config.pgErrorHandle === 'fail-open') {
-      console.error('Rate limit check failed (fail-open):', errorMessage);
+      logEvent('error', 'RateLimit', 'check_failed_fail_open', { error: errorMessage });
       return { allowed: true, ipAllowed: true, fileAllowed: true };
     }
+
+    logEvent('error', 'RateLimit', 'check_failed_fail_closed', { error: errorMessage });
 
     return {
       allowed: false,
@@ -282,7 +285,7 @@ const cleanupExpiredRecords = async (postgrestUrl, verifyHeader, verifySecret, t
   const cutoffTime = now - (windowTimeSeconds * 2);
 
   try {
-    console.log(`[Rate Limit Cleanup] Executing DELETE query (cutoff: ${cutoffTime}, windowTime: ${windowTimeSeconds}s)`);
+    logEvent('log', 'RateLimit', 'cleanup_triggered', { tableName, cutoffTime, windowTimeSeconds });
 
     // Delete records where:
     // 1. LAST_WINDOW_TIME is older than cutoff (window expired)
@@ -303,12 +306,11 @@ const cleanupExpiredRecords = async (postgrestUrl, verifyHeader, verifySecret, t
     );
 
     const deletedCount = result.affectedRows || 0;
-    console.log(`[Rate Limit Cleanup] DELETE completed: ${deletedCount} expired records deleted (older than ${windowTimeSeconds * 2}s and not blocked)`);
+    logEvent('log', 'RateLimit', 'cleanup_done', { tableName, deletedCount });
 
     return deletedCount;
   } catch (error) {
-    // Log error but don't propagate (cleanup failure shouldn't block requests)
-    console.error('[Rate Limit Cleanup] DELETE failed:', error instanceof Error ? error.message : String(error));
+    logEvent('error', 'RateLimit', 'cleanup_failed', { tableName, error });
     return 0;
   }
 };

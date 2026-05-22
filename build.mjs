@@ -1,5 +1,5 @@
 import { build } from 'esbuild';
-import { mkdir, rm } from 'fs/promises';
+import { copyFile, mkdir, rm } from 'fs/promises';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -20,4 +20,16 @@ await build({
   sourcemap: true,
   minify: true,
 });
+const landingAssetsDir = resolve(outdir, 'assets', 'landing');
+await mkdir(landingAssetsDir, { recursive: true });
+await Promise.all([
+  copyFile(
+    resolve(__dirname, 'src', 'assets', 'landing', 'landing-glue.js'),
+    resolve(landingAssetsDir, 'landing-glue.js'),
+  ),
+  copyFile(
+    resolve(__dirname, 'src', 'assets', 'landing', 'landing-logging.js'),
+    resolve(landingAssetsDir, 'landing-logging.js'),
+  ),
+]);
 console.log('✓ Build completed: dist/worker.js');

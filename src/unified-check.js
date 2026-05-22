@@ -1,4 +1,16 @@
 import { sha256Hash, calculateIPSubnet, applyVerifyHeaders, hasVerifyCredentials } from './utils.js';
+import { logEvent } from './logging.js';
+
+function powdetAlgorithmField(powdetChallenges) {
+  const algorithms = powdetChallenges
+    .map((entry) => (entry && typeof entry.alg === 'string' ? entry.alg.trim() : ''))
+    .filter(Boolean);
+  return algorithms.join(',') || undefined;
+}
+
+function resultLabel(allowed) {
+  return allowed ? 'allowed' : 'blocked';
+}
 
 export const unifiedCheck = async (path, clientIP, altchaTableName, config) => {
   if (!config?.postgrestUrl || !hasVerifyCredentials(config.verifyHeader, config.verifySecret)) {
@@ -34,8 +46,17 @@ export const unifiedCheck = async (path, clientIP, altchaTableName, config) => {
   }
   const ipCheckEnabled = windowSeconds > 0 && limit > 0;
   const fileCheckEnabled = fileWindowSeconds > 0 && fileLimit > 0;
+  const algorithm = powdetAlgorithmField(powdetChallenges);
 
-  console.log('[Unified Check] Starting unified check for path:', path);
+  logEvent('log', 'UnifiedCheck', 'start', {
+    cacheTTL,
+    windowSeconds,
+    limit,
+    fileLimit,
+    tokenBindingEnabled,
+    powdetChallengeCount: powdetChallenges.length,
+    algorithm,
+  });
 
   const pathHash = await sha256Hash(path);
   if (!pathHash) {
@@ -102,7 +123,14 @@ export const unifiedCheck = async (path, clientIP, altchaTableName, config) => {
     p_pow_table_name: powdetTableName,
   };
 
-  console.log('[Unified Check] Calling landing_unified_check with params:', JSON.stringify(rpcBody));
+  logEvent('log', 'UnifiedCheck', 'rpc_start', {
+    rpc: 'landing_unified_check',
+    cacheTTL,
+    windowSeconds,
+    limit,
+    fileLimit,
+    algorithm,
+  });
 
   const headers = { 'Content-Type': 'application/json' };
   applyVerifyHeaders(headers, config.verifyHeader, config.verifySecret);
@@ -115,9 +143,19 @@ export const unifiedCheck = async (path, clientIP, altchaTableName, config) => {
 
   if (!response.ok) {
     const errorText = await response.text();
-    console.error('[Unified Check] RPC error:', response.status, errorText);
+    logEvent('error', 'UnifiedCheck', 'rpc_error', {
+      rpc: 'landing_unified_check',
+      status: response.status,
+      error: errorText,
+      algorithm,
+    });
     throw new Error(`landing_unified_check failed (${response.status}): ${errorText}`);
   }
+  logEvent('log', 'UnifiedCheck', 'rpc_success', {
+    rpc: 'landing_unified_check',
+    status: response.status,
+    algorithm,
+  });
 
   const payload = await response.json();
   if (!Array.isArray(payload) || payload.length === 0) {
@@ -125,7 +163,6 @@ export const unifiedCheck = async (path, clientIP, altchaTableName, config) => {
   }
 
   const row = payload[0];
-  console.log('[Unified Check] RPC result:', JSON.stringify(row));
 
   const cacheSizeRaw = row.cache_size;
   const cacheTimestampRaw = row.cache_timestamp;
@@ -171,7 +208,7 @@ export const unifiedCheck = async (path, clientIP, altchaTableName, config) => {
         powResults = parsed;
       }
     } catch (error) {
-      console.warn('[Unified Check] Failed to parse pow_results:', error instanceof Error ? error.message : String(error));
+      logEvent('warn', 'UnifiedCheck', 'powdet_result', { result: 'parse_failed', error, algorithm });
     }
   }
 
@@ -186,14 +223,10 @@ export const unifiedCheck = async (path, clientIP, altchaTableName, config) => {
     if (Number.isFinite(blockUntil) && blockUntil > now) {
       ipAllowed = false;
       ipRetryAfter = Math.max(1, blockUntil - now);
-      console.log('[Unified Check] IP rate limit BLOCKED until:', new Date(blockUntil * 1000).toISOString());
     } else if (safeAccess >= limit) {
       const elapsed = now - safeLastWindow;
       ipAllowed = false;
       ipRetryAfter = Math.max(1, windowSeconds - elapsed);
-      console.log('[Unified Check] IP rate limit EXCEEDED:', safeAccess, '>=', limit);
-    } else {
-      console.log('[Unified Check] IP rate limit OK:', safeAccess, '/', limit);
     }
   }
 
@@ -203,18 +236,46 @@ export const unifiedCheck = async (path, clientIP, altchaTableName, config) => {
     if (Number.isFinite(fileBlockUntil) && fileBlockUntil > now) {
       fileAllowed = false;
       fileRetryAfter = Math.max(1, fileBlockUntil - now);
-      console.log('[Unified Check] File rate limit BLOCKED until:', new Date(fileBlockUntil * 1000).toISOString());
     } else if (safeFileAccess >= fileLimit) {
       const elapsed = now - safeFileLastWindow;
       fileAllowed = false;
       fileRetryAfter = Math.max(1, fileWindowSeconds - elapsed);
-      console.log('[Unified Check] File rate limit EXCEEDED:', safeFileAccess, '>=', fileLimit);
-    } else {
-      console.log('[Unified Check] File rate limit OK:', safeFileAccess, '/', fileLimit);
     }
   }
 
   const overallAllowed = ipAllowed && fileAllowed;
+  const tokenAllowed = tokenBindingEnabled ? tokenAllowedRaw !== false : true;
+  const altchaAllowed = altchaAllowedRaw !== false;
+
+  logEvent('log', 'UnifiedCheck', 'cache_result', {
+    result: cacheResult.hit ? 'hit' : 'miss',
+    size: cacheResult.size,
+  });
+  logEvent('log', 'UnifiedCheck', 'rate_limit_result', {
+    result: resultLabel(overallAllowed),
+    ipAllowed,
+    ipRetryAfter,
+    fileAllowed,
+    fileRetryAfter,
+  });
+  logEvent('log', 'UnifiedCheck', 'token_result', {
+    result: resultLabel(tokenAllowed),
+    errorCode: Number.isFinite(tokenErrorRaw) ? tokenErrorRaw : 0,
+    accessCount: Number.isFinite(tokenAccessRaw) ? tokenAccessRaw : 0,
+  });
+  logEvent('log', 'UnifiedCheck', 'altcha_result', {
+    result: resultLabel(altchaAllowed),
+    errorCode: Number.isFinite(altchaErrorRaw) ? altchaErrorRaw : 0,
+    accessCount: Number.isFinite(altchaAccessRaw) ? altchaAccessRaw : 0,
+  });
+  logEvent('log', 'UnifiedCheck', 'powdet_result', {
+    result: Object.keys(powResults).length > 0 ? 'present' : 'empty',
+    algorithm,
+  });
+  logEvent('log', 'UnifiedCheck', 'complete', {
+    result: resultLabel(overallAllowed && tokenAllowed && altchaAllowed),
+    algorithm,
+  });
 
   return {
     cache: cacheResult,
@@ -233,7 +294,7 @@ export const unifiedCheck = async (path, clientIP, altchaTableName, config) => {
       fileBlockUntil,
     },
     token: {
-      allowed: tokenBindingEnabled ? tokenAllowedRaw !== false : true,
+      allowed: tokenAllowed,
       errorCode: Number.isFinite(tokenErrorRaw) ? tokenErrorRaw : 0,
       accessCount: Number.isFinite(tokenAccessRaw) ? tokenAccessRaw : 0,
       clientIp: typeof row.token_client_ip === 'string' ? row.token_client_ip : null,
@@ -241,7 +302,7 @@ export const unifiedCheck = async (path, clientIP, altchaTableName, config) => {
       expiresAt: row.token_expires_at !== null ? Number.parseInt(row.token_expires_at, 10) : null,
     },
     altcha: {
-      allowed: altchaAllowedRaw !== false,
+      allowed: altchaAllowed,
       errorCode: Number.isFinite(altchaErrorRaw) ? altchaErrorRaw : 0,
       accessCount: Number.isFinite(altchaAccessRaw) ? altchaAccessRaw : 0,
       expiresAt: row.altcha_expires_at !== null ? Number.parseInt(row.altcha_expires_at, 10) : null,
