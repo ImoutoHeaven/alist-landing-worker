@@ -201,6 +201,7 @@ test('issues ticket URL only after synchronous ticket seed completes', async (t)
   const originalFetch = globalThis.fetch;
   let seedCall = null;
   let releaseSeed = null;
+  const alistGetCalls = [];
 
   globalThis.fetch = async (input, init = {}) => {
     const url = typeof input === 'string' ? input : input.url;
@@ -208,6 +209,10 @@ test('issues ticket URL only after synchronous ticket seed completes', async (t)
       return createJsonResponse(bootstrap);
     }
     if (url === 'https://alist.example.test/api/fs/get') {
+      alistGetCalls.push({
+        headers: init.headers,
+        body: JSON.parse(init.body),
+      });
       return createJsonResponse({
         code: 200,
         data: { size: 1024 },
@@ -237,7 +242,7 @@ test('issues ticket URL only after synchronous ticket seed completes', async (t)
     delete globalThis.bootstrapCache;
   });
 
-  const request = await buildInfoRequest();
+  const request = await buildInfoRequest({ path: '/alias-group/leaf.bin' });
   const responsePromise = worker.fetch(request, buildEnv(), {
     waitUntil() {},
   });
@@ -280,6 +285,11 @@ test('issues ticket URL only after synchronous ticket seed completes', async (t)
   assert.equal(seedCall.body.p_issued_at > 0, true);
   assert.match(seedCall.body.p_ip_hash, /^[a-f0-9]{64}$/);
   assert.match(seedCall.body.p_path_hash, /^[a-f0-9]{64}$/);
+  assert.equal(alistGetCalls.length, 1);
+  assert.equal(alistGetCalls[0].body.path, '/alias-group/leaf.bin');
+  assert.equal(alistGetCalls[0].headers.Authorization, 'bootstrap-token');
+  assert.doesNotMatch(String(alistGetCalls[0].headers.Authorization), /^Bearer\s/i);
+  assert.equal(Object.hasOwn(seedCall.body, 'p_account_name'), false);
 });
 
 test('enabled mode still signs idle_timeout: 0 when landing idleTimeoutSeconds is zero', async (t) => {

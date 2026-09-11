@@ -1926,7 +1926,7 @@ import { landingLogEvent } from './landing-logging.js';
     segmentSizeInput.value = '12';
   }
   if (ttfbTimeoutInput && !ttfbTimeoutInput.value) {
-    ttfbTimeoutInput.value = '20';
+    ttfbTimeoutInput.value = '180';
   }
 
   /**
@@ -2096,9 +2096,10 @@ import { landingLogEvent } from './landing-logging.js';
     const HTTP429_BASE_DELAY_MS = 1000;
     const HTTP429_SILENT_RETRY_LIMIT = 9;
     const HTTP429_MAX_DELAY_MS = 10000;
-    const MIN_TTFB_TIMEOUT_SECONDS = 5;
-    const MAX_TTFB_TIMEOUT_SECONDS = 120;
-    const DEFAULT_TTFB_TIMEOUT_SECONDS = 20;
+    const MAX_NATIVE_TIMER_DELAY_MS = 2_147_483_647;
+    const MIN_TTFB_TIMEOUT_SECONDS = 180;
+    const MAX_TTFB_TIMEOUT_SECONDS = 600;
+    const DEFAULT_TTFB_TIMEOUT_SECONDS = 180;
 
     const clampSegmentSizeMb = (value) =>
       clamp(Number(value), MIN_SEGMENT_SIZE_MB, MAX_SEGMENT_SIZE_MB, DEFAULT_SEGMENT_SIZE_MB);
@@ -2107,6 +2108,27 @@ import { landingLogEvent } from './landing-logging.js';
     const toSegmentSizeBytes = (maybeMb) => Math.round(clampSegmentSizeMb(maybeMb) * BYTES_PER_MB);
     const toTtfbTimeoutMs = (maybeSeconds) =>
       Math.round(clampTtfbTimeoutSeconds(maybeSeconds) * 1000);
+
+    const parseRetryAfterMs = (value, nowMs = Date.now()) => {
+      if (typeof value !== 'string') return null;
+      const raw = value.trim();
+      if (!raw) return null;
+      if (/^[+-]?\d+$/.test(raw) && !/^\d+$/.test(raw)) return null;
+      if (/^\d+$/.test(raw)) {
+        const seconds = Number(raw);
+        return Number.isSafeInteger(seconds) ? seconds * 1000 : null;
+      }
+      if (/^[0-9+-]/.test(raw)) return null;
+      const retryAtMs = Date.parse(raw);
+      if (!Number.isFinite(retryAtMs) || !Number.isFinite(nowMs)) return null;
+      return Math.max(0, retryAtMs - nowMs);
+    };
+
+    const withRetryAfterMinimum = (baseDelayMs, retryAfterMs) => {
+      const base = Number.isFinite(baseDelayMs) && baseDelayMs > 0 ? Math.floor(baseDelayMs) : 0;
+      const retryAfter = Number.isFinite(retryAfterMs) && retryAfterMs > 0 ? Math.floor(retryAfterMs) : 0;
+      return Math.max(base, retryAfter);
+    };
 
     const STORAGE_DB_NAME = 'landing-webdownloader-v2';
     const STORAGE_DB_VERSION = 3;
@@ -3018,16 +3040,25 @@ import { landingLogEvent } from './landing-logging.js';
       if (typeof errorMessage === 'string' && errorMessage.length > 0) {
         segment.error = errorMessage;
       }
-      const timerId = setTimeout(() => {
-        state.retryTimers.delete(segment.index);
-        if (state.cancelling) {
-          notifyPendingSegmentWaiters();
-          return;
-        }
-        segment.status = 'pending';
-        enqueueSegment(segment.index, prioritize);
-      }, normalizedDelay);
-      state.retryTimers.set(segment.index, timerId);
+      const retryDeadline = performance.now() + normalizedDelay;
+      const scheduleWakeup = () => {
+        const remaining = Math.max(0, retryDeadline - performance.now());
+        const timerId = setTimeout(() => {
+          state.retryTimers.delete(segment.index);
+          if (performance.now() < retryDeadline) {
+            scheduleWakeup();
+            return;
+          }
+          if (state.cancelling) {
+            notifyPendingSegmentWaiters();
+            return;
+          }
+          segment.status = 'pending';
+          enqueueSegment(segment.index, prioritize);
+        }, Math.min(remaining, MAX_NATIVE_TIMER_DELAY_MS));
+        state.retryTimers.set(segment.index, timerId);
+      };
+      scheduleWakeup();
     };
 
     const resetUi = () => {
@@ -3474,7 +3505,11 @@ import { landingLogEvent } from './landing-logging.js';
           });
           cancelTtfbTimer();
           if (!(response.ok || response.status === 206)) {
-            throw new Error('分段下载失败，HTTP ' + response.status);
+            const retryAfter = response.headers?.get?.('Retry-After') ?? null;
+            const responseError = new Error('分段下载失败，HTTP ' + response.status);
+            responseError.status = Number(response.status);
+            responseError.retryAfterMs = parseRetryAfterMs(retryAfter);
+            throw responseError;
           }
           const buffer = new Uint8Array(await response.arrayBuffer());
           state.downloadedEncrypted = Math.min(
@@ -3511,16 +3546,25 @@ import { landingLogEvent } from './landing-logging.js';
           if (state.cancelling) {
             throw error instanceof Error ? error : new Error(String(error || 'cancelled'));
           }
+          const rawMessage = error instanceof Error && error.message ? error.message : String(error || '未知错误');
+          const status = Number(error?.status);
+          const isTtfbTimeout = ttfbTimedOut && controller.signal.aborted;
+          const message = isTtfbTimeout ? '等待服务器响应超时' : rawMessage;
           if (state.paused) {
             segment.status = 'pending';
             segment.error = null;
             state.failedSegments.delete(segment.index);
-            enqueueSegment(segment.index, true);
+            if (status === 503 && Number.isFinite(error?.retryAfterMs)) {
+              scheduleSegmentRetry(
+                segment,
+                withRetryAfterMinimum(RETRY_DELAY_MS, error.retryAfterMs),
+                { prioritize: true, errorMessage: message },
+              );
+            } else {
+              enqueueSegment(segment.index, true);
+            }
             return;
           }
-          const rawMessage = error instanceof Error && error.message ? error.message : String(error || '未知错误');
-          const isTtfbTimeout = ttfbTimedOut && controller.signal.aborted;
-          const message = isTtfbTimeout ? '等待服务器响应超时' : rawMessage;
           attempt += 1;
           segment.retries = attempt;
           const retryLimit = state.segmentRetryLimit;
@@ -3541,7 +3585,7 @@ import { landingLogEvent } from './landing-logging.js';
               );
               return;
             }
-            const isHttp429 = typeof message === 'string' && message.includes('HTTP 429');
+            const isHttp429 = status === 429 || (typeof message === 'string' && message.includes('HTTP 429'));
             let retryDelayMs = RETRY_DELAY_MS;
             let shouldLogRetry = true;
             if (isHttp429) {
@@ -3553,6 +3597,9 @@ import { landingLogEvent } from './landing-logging.js';
                 const exponentialDelay = HTTP429_BASE_DELAY_MS * Math.pow(2, Math.max(0, exponent - 1));
                 retryDelayMs = Math.min(HTTP429_MAX_DELAY_MS, exponentialDelay);
               }
+            }
+            if (status === 503) {
+              retryDelayMs = withRetryAfterMinimum(retryDelayMs, error?.retryAfterMs);
             }
             if (shouldLogRetry) {
               log(

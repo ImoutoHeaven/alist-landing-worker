@@ -7,7 +7,7 @@
   "scripts": {
     "build": "node build.mjs",
     "test": "npm run test:node && npm run test:powdet",
-    "test:node": "node --test tests/logging.test.mjs tests/no-direct-console.test.mjs tests/worker-observability.test.mjs tests/cache-logging.test.mjs tests/ratelimit-logging.test.mjs tests/unified-check-logging.test.mjs src/worker.ticket-issuance-contract.test.mjs",
+    "test:node": "node --test tests/logging.test.mjs tests/no-direct-console.test.mjs tests/worker-observability.test.mjs tests/cache-logging.test.mjs tests/ratelimit-logging.test.mjs tests/unified-check-logging.test.mjs tests/landing-downloader-contract.test.mjs src/worker.ticket-issuance-contract.test.mjs",
     "test:postbuild": "node --test tests/landing-asset-wiring.test.mjs",
     "test:powdet": "cd powdet && go test ./...",
     "dev": "wrangler dev",

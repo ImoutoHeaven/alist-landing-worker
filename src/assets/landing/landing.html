@@ -70,9 +70,9 @@
             <input id="connectionLimitInput" class="retry-input" type="number" inputmode="numeric" autocomplete="off" min="1" max="32" value="16">
             <label class="retry-label" for="ttfbTimeoutInput">
               TTFB 超时 (秒)
-              <span class="retry-hint">等待首字节超时，默认 20 秒</span>
+              <span class="retry-hint">等待首字节超时，范围 180-600 秒，默认 180 秒</span>
             </label>
-            <input id="ttfbTimeoutInput" class="retry-input" type="number" inputmode="numeric" autocomplete="off" min="5" max="120" value="20">
+            <input id="ttfbTimeoutInput" class="retry-input" type="number" inputmode="numeric" autocomplete="off" min="180" max="600" value="180">
             <label class="retry-label" for="retryLimitInput">
               分段重试次数
               <span class="retry-hint">支持正整数或 inf（无限重试）</span>
