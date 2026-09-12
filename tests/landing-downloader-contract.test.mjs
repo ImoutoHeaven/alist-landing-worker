@@ -301,6 +301,48 @@ test('actual downloadSegment honors 503 Retry-After before retrying the same Ran
   assert.equal(harness.state.segments[0].retries, 0);
 });
 
+test('actual downloadSegment keeps recovery state pending across authority refusal categories before 206', async () => {
+  const retryHints = [
+    ['CQ queue timeout', '2'],
+    ['FQ queue timeout', '4'],
+    ['file cooldown', '3600'],
+    ['uncertain file backoff', '60'],
+    ['permission unavailable', '7'],
+  ];
+  const harness = createDownloaderHarness([
+    ...retryHints.map(([reason, retryAfter]) => new Response(
+      JSON.stringify({ status: 503, reason }),
+      {
+        status: 503,
+        headers: {
+          'Content-Type': 'application/json',
+          'Retry-After': retryAfter,
+        },
+      },
+    )),
+    new Response(Uint8Array.from(Array(16).fill(7)), { status: 206 }),
+  ]);
+
+  for (const [category, retryAfter] of retryHints) {
+    await harness.downloadSegment(0);
+    assert.equal(harness.state.segments[0].status, 'waiting-retry', category);
+    assert.equal(harness.state.downloadedEncrypted, 0, category);
+    assert.equal(harness.state.segments[0].encrypted, null, category);
+    assert.equal(harness.state.failedSegments.size, 0, category);
+    const retryId = harness.retryTimerId();
+    assert.ok(retryId, category);
+    assert.equal(harness.timers.get(retryId).delay, Math.max(20_000, Number(retryAfter) * 1000), category);
+    harness.advanceTimer(retryId);
+  }
+
+  await harness.downloadSegment(0);
+  assert.equal(harness.state.segments[0].status, 'done');
+  assert.equal(harness.state.downloadedEncrypted, 16);
+  assert.equal(harness.state.segments[0].encrypted.length, 16);
+  assert.equal(harness.state.segments[0].retries, 0);
+  assert.deepEqual(harness.rangeRequests, Array(6).fill('bytes=128-143'));
+});
+
 test('actual retry timer cancellation prevents a delayed 503 attempt from requeueing', async () => {
   const harness = createDownloaderHarness([makeResponse({ status: 503, retryAfter: '90' })]);
   await harness.downloadSegment(0);
